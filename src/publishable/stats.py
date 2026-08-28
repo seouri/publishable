@@ -1152,8 +1152,9 @@ def percentile_over_units(
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
     strata: Sequence[Any] | None = None,
-) -> Interval | None:
-    """A percentile interval over the units, by resampling with replacement.
+) -> PairedResample:
+    """A percentile interval over the units, by resampling with replacement, and
+    the pool it was read from.
 
     This is what gives a *column* metric a resampled `ci95` when `resample` is
     declared (`reference.md` § How a metric becomes a number): the mean is
@@ -1222,18 +1223,20 @@ def percentile_over_units(
     the same way `percentile_over_units_clustered` reports a point rather than
     a zero-width interval at `G < 2`.
 
-    **This returns a bare `Interval`, with no survivor count, and that is a
-    decision rather than an omission — conditional on finite inputs.**
-    `percentile_of_derived` returns a `PairedResample` because a derived metric's
+    **`draws_used` here is always the REQUESTED `n`, never a survivor count, and
+    that is a decision rather than an omission — conditional on finite inputs.**
+    `percentile_of_derived` filters its pool because a derived metric's
     `compute` can fail on a degenerate draw — `nan`, `None`, or a raise — so how
-    many draws survived is a real fact about the interval. A column metric's
-    draw statistic is a mean over a non-empty sample of FINITE values with
-    FINITE weights, which is always defined: the unweighted branch divides by
-    `n >= 2`, the weighted branch's Σw is strictly positive because
-    `checked_weights` refuses a zero, negative, non-finite or non-numeric weight
-    before any draw is taken, and the stratified branch draws `len(pool) >= 1`
-    rows from each non-empty pool. **The condition is load-bearing and does not
-    hold unconditionally**: neither `values` nor a weight vector is checked for
+    many draws survived is a real fact its `draws_used` has to carry separately
+    from the requested count. A column metric's draw statistic is a mean over a
+    non-empty sample of FINITE values with FINITE weights, which is always
+    defined: the unweighted branch divides by `n >= 2`, the weighted branch's
+    Σw is strictly positive because `checked_weights` refuses a zero, negative,
+    non-finite or non-numeric weight before any draw is taken, and the
+    stratified branch draws `len(pool) >= 1` rows from each non-empty pool — so
+    every one of the `draws` replicates below produces a real mean and none is
+    ever skipped. **The condition is load-bearing and does not hold
+    unconditionally**: neither `values` nor a weight vector is checked for
     finiteness anywhere on this path — a `nan` or `inf` among `values`, or a
     weight vector whose checked-finite entries sum past `float`'s range (e.g.
     `[1e308] * 4`), each produce `Interval(nan, nan)` today, reachable by calling
@@ -1246,20 +1249,22 @@ def percentile_over_units(
     not yet resolve the block into a call here, so the recorded-column branch
     there still carried no `resample_draws` key at all — check
     `cli.command_run` directly for whether that has since changed) — can
-    safely be the REQUESTED `n` rather than a survivor count, and
-    `percentile_over_units`'s return type need not change to carry one: a
-    non-finite draw statistic would not be caught by a survivor filter either,
-    since nothing here treats `nan`/`inf` as a failed draw to exclude, so
-    `(Interval, int)` would report `(Interval(nan, nan), n)` — the identical
-    false claim with an extra field. The invariant is pinned, under that
-    condition, by
+    safely be the REQUESTED `n` rather than a survivor count: a non-finite draw
+    statistic would not be caught by a survivor filter either, since nothing
+    here treats `nan`/`inf` as a failed draw to exclude, so `draws_used` would
+    report `n` regardless — the identical false claim `resample_draws` already
+    risks. `pool` travels for the same reason `PairedResample.pool` does on the
+    two derived-metric constructions: a caller building a *corrected* interval
+    at a smaller α needs the same draws, not a re-drawn approximation of them.
+    The invariant that a column resample is never silently degenerate is
+    pinned, under the finiteness condition, by
     `test_a_column_resample_is_never_degenerate_across_adversarial_columns`
     rather than asserted here.
     """
     if len(values) < 2:
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     if draws < min_honest_draws(confidence):
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     # One weight vector for every branch below, so a value and its weight are
     # paired once. `checked_weights` gates before any draw rather than producing
     # `draws` worth of `nan`, and it is the one authority `validate` and
@@ -1295,7 +1300,7 @@ def percentile_over_units(
         # gives: "reporting a point with no interval is honest; a zero-width
         # 95 % interval is not."
         if all(len(set(group)) <= 1 for group in ordered):
-            return None
+            return PairedResample(interval=None, draws_used=0, pool=[])
         means_out: list[float] = []
         for _ in range(draws):
             # Each stratum contributes exactly as many rows as it holds: that
@@ -1329,7 +1334,11 @@ def percentile_over_units(
         n = len(pool)
         means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
     lo, hi = _percentile_ranks(draws, confidence)
-    return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
+    return PairedResample(
+        interval=Interval(low=means[lo], high=means[hi], method="percentile_over_units"),
+        draws_used=len(means),
+        pool=means,
+    )
 
 
 def percentile_over_units_clustered(
@@ -1341,8 +1350,9 @@ def percentile_over_units_clustered(
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
     strata: Sequence[Any] | None = None,
-) -> Interval | None:
-    """A percentile interval that resamples whole CLUSTERS, not rows.
+) -> PairedResample:
+    """A percentile interval that resamples whole CLUSTERS, not rows, and the
+    pool it was read from.
 
     `reference.md` § Clustered units: "`resample` resamples clusters, not rows. A
     bootstrap that draws 300 cells with replacement from 10 animals produces
@@ -1469,12 +1479,12 @@ def percentile_over_units_clustered(
     whether the draw can vary.
     """
     if len(values) < 2:
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     if draws < min_honest_draws(confidence):
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     groups = cluster_count_of(membership, keys)
     if groups < 2:
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     # Unit weights of 1.0 when none were declared, so the pairs have one shape;
     # the unweighted branch below still computes a plain mean, so this cannot move
     # an unweighted interval by a digit.
@@ -1549,7 +1559,7 @@ def percentile_over_units_clustered(
     # answer different questions, and this construction had only asked the
     # first.
     if all(len({tuple(cluster) for cluster in group}) <= 1 for group in stratum_pools):
-        return None
+        return PairedResample(interval=None, draws_used=0, pool=[])
     means: list[float] = []
     for _ in range(draws):
         # Each stratum contributes exactly as many CLUSTERS as it holds — the
@@ -1568,7 +1578,11 @@ def percentile_over_units_clustered(
             means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
     means.sort()
     lo, hi = _percentile_ranks(draws, confidence)
-    return Interval(low=means[lo], high=means[hi], method="percentile_over_units_clustered")
+    return PairedResample(
+        interval=Interval(low=means[lo], high=means[hi], method="percentile_over_units_clustered"),
+        draws_used=len(means),
+        pool=means,
+    )
 
 
 def percentile_of_derived(
@@ -3190,7 +3204,9 @@ def summarize_step(
         # makes the cluster the draw while `n.clusters` (set above) still
         # reports the count. Only the interval's construction moves.
         if resample_columns and seed is not None:
-            interval = (
+            # Task 4 wires the returned pool into a `correction.Member`; this
+            # task only stops discarding it, so only `.interval` is read here.
+            column_resample = (
                 percentile_over_units(
                     values, seed, draws=draws, weights=column_weights, strata=column_strata
                 )
@@ -3205,6 +3221,7 @@ def summarize_step(
                     strata=column_strata,
                 )
             )
+            interval = column_resample.interval
         elif weights is None:
             interval = (
                 t_over_units(values)

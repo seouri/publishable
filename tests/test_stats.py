@@ -2341,12 +2341,12 @@ def test_underscore_prefixed_access_raises_attribute_error_not_contract_error():
 
 def test_the_interval_brackets_the_point_estimate():
     values = [float(i) for i in range(50)]
-    got = percentile_over_units(values, seed=7)
+    got = percentile_over_units(values, seed=7).interval
     assert got.low < sum(values) / len(values) < got.high
 
 
 def test_it_names_its_method():
-    assert percentile_over_units([float(i) for i in range(50)], seed=7).method == (
+    assert percentile_over_units([float(i) for i in range(50)], seed=7).interval.method == (
         "percentile_over_units"
     )
 
@@ -2375,14 +2375,14 @@ def test_it_converges_toward_the_analytic_interval_for_a_mean():
     percentile interval should sit close to Student's t, which is computed by
     entirely different code."""
     values = [float(i % 10) for i in range(400)]
-    boot = percentile_over_units(values, seed=7, draws=4000)
+    boot = percentile_over_units(values, seed=7, draws=4000).interval
     analytic = t_over_units(values)
     assert abs(boot.low - analytic.low) < 0.02
     assert abs(boot.high - analytic.high) < 0.02
 
 
 def test_one_value_has_no_interval():
-    assert percentile_over_units([1.0], seed=7) is None
+    assert percentile_over_units([1.0], seed=7).interval is None
 
 
 def test_percentile_over_units_refuses_a_pool_below_the_honest_floor():
@@ -2391,8 +2391,8 @@ def test_percentile_over_units_refuses_a_pool_below_the_honest_floor():
     interval at two draws. Unreachable today (`statistics.resample` is refused),
     which is exactly why it must be closed before the slice that reaches it."""
     values = [float(i) for i in range(60)]
-    assert percentile_over_units(values, seed=7, draws=10) is None
-    assert percentile_over_units(values, seed=7, draws=2000) is not None
+    assert percentile_over_units(values, seed=7, draws=10).interval is None
+    assert percentile_over_units(values, seed=7, draws=2000).interval is not None
 
 
 def test_an_unweighted_percentile_interval_is_untouched_to_the_last_digit():
@@ -2401,7 +2401,7 @@ def test_an_unweighted_percentile_interval_is_untouched_to_the_last_digit():
     compares one call to another, so a drift that moved both would pass them
     all."""
     values = [float(i) for i in range(50)]
-    assert percentile_over_units(values, seed=7) == Interval(
+    assert percentile_over_units(values, seed=7).interval == Interval(
         low=20.4, high=28.54, method="percentile_over_units"
     )
 
@@ -2422,14 +2422,14 @@ def test_a_percentile_draw_is_unweighted_while_its_statistic_is_not():
     still weighted."""
     values = [1.0] * 20 + [100.0]
     weights = [1.0] * 20 + [500.0]
-    result = percentile_over_units(values, weights=weights, draws=2000, seed=7)
+    result = percentile_over_units(values, weights=weights, draws=2000, seed=7).interval
     assert result is not None
     assert result.low == 1.0  # a draw-weighted implementation cannot reach here
     assert result.high > 50.0  # ...while the statistic is still weighted
     # The control that must report: the same pool drawn the same way with the
     # weights dropped is an ordinary bootstrap of a mean near 5.7, so the high
     # bound above is the weighting and not the data's own spread.
-    unweighted = percentile_over_units(values, draws=2000, seed=7)
+    unweighted = percentile_over_units(values, draws=2000, seed=7).interval
     assert unweighted is not None and unweighted.high < 30.0
 
 
@@ -2451,7 +2451,7 @@ def test_a_weighted_percentile_keeps_each_value_with_its_own_weight():
     of those — no value a re-pairing produces is."""
     values = [0.0] + [100.0] * 20
     weights = [500.0] + [1.0] * 20
-    result = percentile_over_units(values, weights=weights, draws=2000, seed=7)
+    result = percentile_over_units(values, weights=weights, draws=2000, seed=7).interval
     assert result is not None
     achievable = [100 * (21 - k) / ((21 - k) + 500 * k) for k in range(22)]
     assert min(abs(result.low - a) for a in achievable) < 1e-9
@@ -2462,11 +2462,14 @@ def test_a_weighted_percentile_keeps_each_value_with_its_own_weight():
     # And row order still cannot matter: the pairs travel together through the
     # sort, so a shuffled roster gives the identical interval.
     order = [3, 0, 17, 9, 1, 20, 5, 2, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 18, 19]
-    assert result == percentile_over_units(
-        [values[i] for i in order],
-        weights=[weights[i] for i in order],
-        draws=2000,
-        seed=7,
+    assert (
+        result
+        == percentile_over_units(
+            [values[i] for i in order],
+            weights=[weights[i] for i in order],
+            draws=2000,
+            seed=7,
+        ).interval
     )
 
 
@@ -2559,13 +2562,15 @@ def test_the_clustered_percentile_draws_clusters_not_units():
     values: it reports [5.25, 19.0], neither endpoint achievable by any
     whole-cluster replicate, so the numbers above are the clustering and not the
     data's own spread."""
-    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    ).interval
     assert got is not None
     assert got.method == "percentile_over_units_clustered"
     assert got.low == _pooled(("A", "A", "A", "D"))  # 36/5
     assert got.high == _pooled(("B", "C", "C", "C"))  # 157/11
     assert got.low in _achievable() and got.high in _achievable()
-    plain = percentile_over_units(_POOL_VALUES, seed=7)
+    plain = percentile_over_units(_POOL_VALUES, seed=7).interval
     assert plain is not None
     assert plain.low == 5.25 and plain.high == 19.0
     assert plain.low not in _achievable() and plain.high not in _achievable()
@@ -2583,7 +2588,9 @@ def test_a_drawn_cluster_pools_its_units_rather_than_contributing_its_mean():
     absence from the mean one for these particular endpoints; the control that
     must report is that the mean-of-means construction is non-empty and does
     produce an interval-shaped pair of its own (6.0, 14.0 at this seed)."""
-    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    ).interval
     assert got is not None
     of_means = {
         sum(sum(v for v, _ in _POOL_CLUSTERS[c]) / len(_POOL_CLUSTERS[c]) for c in combo) / 4
@@ -2608,7 +2615,9 @@ def test_the_clustered_percentile_keeps_each_value_with_its_cluster():
     The re-paired construction is built here, independently, and must report: it
     produces [2.0, 21.666…], a perfectly interval-shaped answer whose endpoints
     are not achievable by any whole-cluster replicate of the declared roster."""
-    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    ).interval
     assert got is not None
     repaired: dict[str, list[tuple[float, float]]] = {}
     for value, label in zip(sorted(_POOL_VALUES), sorted(_POOL_MEMBERSHIP.values()), strict=True):
@@ -2657,7 +2666,7 @@ def test_one_cluster_of_many_units_has_no_percentile_interval():
     assert (
         percentile_over_units_clustered(
             _POOL_VALUES, _POOL_KEYS, dict.fromkeys(_POOL_KEYS, "only"), seed=7
-        )
+        ).interval
         is None
     )
 
@@ -2671,7 +2680,7 @@ def test_two_clusters_still_report_a_percentile():
     membership = dict.fromkeys(_POOL_KEYS, "left")
     for key in ("c1", "c2", "c3", "d1", "d2"):
         membership[key] = "right"
-    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, membership, seed=7)
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, membership, seed=7).interval
     assert got is not None
     assert got.high > got.low
 
@@ -2690,7 +2699,10 @@ def test_two_content_identical_clusters_refuse_a_zero_width_interval():
     values = [0.5, 0.5, 0.5, 0.5]
     keys = ["a1", "a2", "b1", "b2"]
     membership = {"a1": "A", "a2": "A", "b1": "B", "b2": "B"}
-    assert percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000) is None
+    assert (
+        percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000).interval
+        is None
+    )
     # Positive companion: `test_two_clusters_still_report_a_percentile` above is
     # the same `G == 2` shape with clusters that differ in content, and it must
     # keep reporting — this is a content check, not a second count floor.
@@ -2701,7 +2713,10 @@ def test_the_clustered_percentile_needs_two_values(values):
     """`percentile_over_units`' own floor, kept in front of the cluster one so the
     two constructions refuse the same degenerate inputs."""
     keys = [f"u{i}" for i in range(len(values))]
-    assert percentile_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), seed=7) is None
+    assert (
+        percentile_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), seed=7).interval
+        is None
+    )
 
 
 def test_the_clustered_percentile_refuses_a_draw_count_below_the_honest_floor():
@@ -2710,13 +2725,13 @@ def test_the_clustered_percentile_refuses_a_draw_count_below_the_honest_floor():
     assert (
         percentile_over_units_clustered(
             _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, draws=10
-        )
+        ).interval
         is None
     )
     assert (
         percentile_over_units_clustered(
             _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, draws=2000
-        )
+        ).interval
         is not None
     )
 
@@ -2733,10 +2748,10 @@ def test_one_unit_per_cluster_reproduces_the_unclustered_percentile():
     (rather than by label) is what keeps the two identical."""
     values = [float(i) for i in range(50)]
     keys = [f"u{i}" for i in range(50)]
-    got = percentile_over_units_clustered(values, keys, {k: k for k in keys}, seed=7)
+    got = percentile_over_units_clustered(values, keys, {k: k for k in keys}, seed=7).interval
     assert got is not None
     assert (got.low, got.high) == (20.4, 28.54)
-    plain = percentile_over_units(values, seed=7)
+    plain = percentile_over_units(values, seed=7).interval
     assert plain is not None
     assert (got.low, got.high) == (plain.low, plain.high)
 
@@ -2762,13 +2777,15 @@ def test_a_clustered_percentile_draw_is_by_cluster_while_its_statistic_is_weight
     matter."""
     got = percentile_over_units_clustered(
         _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, weights=_POOL_WEIGHTS
-    )
+    ).interval
     assert got is not None
     assert got.method == "percentile_over_units_clustered"
     assert got.low == _pooled(("A", "A", "A", "D"), weighted=True)
     assert got.high == _pooled(("C", "C", "C", "D"), weighted=True)
     assert got.low in _achievable(True) and got.high in _achievable(True)
-    unweighted = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+    unweighted = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    ).interval
     assert unweighted is not None
     assert unweighted.high == _pooled(("B", "C", "C", "C"))
     assert got.high > unweighted.high * 1.5
@@ -2866,8 +2883,8 @@ def test_a_clustered_stratified_draw_takes_clusters_within_strata():
     values, keys, membership, strata = _clustered_banded()
     stratified = percentile_over_units_clustered(
         values, keys, membership, seed=13, draws=2000, strata=strata
-    )
-    plain = percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000)
+    ).interval
+    plain = percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000).interval
     assert stratified is not None and plain is not None
     assert (stratified.high - stratified.low) < (plain.high - plain.low) / 2.0
     assert stratified.method == "percentile_over_units_clustered"
@@ -2886,10 +2903,10 @@ def test_a_clustered_stratified_draw_weights_the_pooled_units_not_the_pick():
     weights = [9.0 if membership[k] == "c5" else 1.0 for k in keys]
     weighted = percentile_over_units_clustered(
         values, keys, membership, seed=13, draws=2000, strata=strata, weights=weights
-    )
+    ).interval
     unweighted = percentile_over_units_clustered(
         values, keys, membership, seed=13, draws=2000, strata=strata
-    )
+    ).interval
     assert weighted is not None and unweighted is not None
     assert weighted.low == 26.54
     assert weighted.high == 64.2448275862069
@@ -2984,7 +3001,9 @@ def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_clus
     # pass by the construction refusing every stratified clustered draw.
     _, _, _, clean = _clustered_banded()
     assert (
-        percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000, strata=clean)
+        percentile_over_units_clustered(
+            values, keys, membership, seed=13, draws=2000, strata=clean
+        ).interval
         is not None
     )
 
@@ -3014,7 +3033,7 @@ def test_a_clustered_stratified_draws_constancy_check_agrees_with_validates():
     strata = [1, "1", "1", "1", "a", "a", "a", "a"]
     got = percentile_over_units_clustered(
         values, keys, membership, seed=1, draws=2000, strata=strata
-    )
+    ).interval
     assert got is not None
 
 
@@ -3041,7 +3060,7 @@ def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
     assert (
         percentile_over_units_clustered(
             values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
-        )
+        ).interval
         is None
     )
     # Positive companion: the same roster, but `a` now holds two of the three
@@ -3052,7 +3071,7 @@ def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
     assert (
         percentile_over_units_clustered(
             values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
-        )
+        ).interval
         is not None
     )
 
@@ -3083,7 +3102,7 @@ def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
     assert (
         percentile_over_units_clustered(
             values, keys, membership, seed=1, draws=2000, strata=identical_within_stratum
-        )
+        ).interval
         is None
     )
     # Positive companion: giving stratum `y`'s two clusters different content
@@ -3098,7 +3117,7 @@ def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
             seed=1,
             draws=2000,
             strata=identical_within_stratum,
-        )
+        ).interval
         is not None
     )
 
@@ -3137,7 +3156,7 @@ def test_the_rank_indices_are_symmetric_not_off_by_one(monkeypatch):
     past the boundary into the top (1.0) block — a real, detectable difference,
     not a rounding wash."""
     monkeypatch.setattr("publishable.stats.random.Random", _FakeRandom)
-    result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95)
+    result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95).interval
     assert result == Interval(low=0.0, high=0.5, method="percentile_over_units")
 
 
@@ -3696,8 +3715,8 @@ def test_a_stratified_draw_preserves_each_stratum_size():
     two-value stratum contributes exactly 2 rows to every draw, which pins the
     interval near 9.83 and makes it much narrower than the unstratified one."""
     values, strata = _banded_strata()
-    stratified = percentile_over_units(values, seed=7, draws=2000, strata=strata)
-    plain = percentile_over_units(values, seed=7, draws=2000)
+    stratified = percentile_over_units(values, seed=7, draws=2000, strata=strata).interval
+    plain = percentile_over_units(values, seed=7, draws=2000).interval
     assert stratified is not None and plain is not None
     expected = sum(values) / len(values)  # 9.83…
     assert stratified.low < expected < stratified.high
@@ -3758,7 +3777,7 @@ def test_a_stratified_weighted_draw_keeps_each_value_with_its_weight():
     here are as banded as the values."""
     values, strata = _banded_strata()
     weights = [1.0] * 20 + [5.0] * 8 + [50.0] * 2
-    got = percentile_over_units(values, seed=9, draws=2000, weights=weights, strata=strata)
+    got = percentile_over_units(values, seed=9, draws=2000, weights=weights, strata=strata).interval
     assert got is not None
     expected = sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
     assert got.low < expected < got.high
@@ -3786,8 +3805,8 @@ def test_a_size_one_stratum_is_drawn_deterministically_every_time():
     values, strata = _banded_strata()
     # The two-value "high" stratum becomes two singleton strata.
     strata = strata[:-2] + ["high_a", "high_b"]
-    got = percentile_over_units(values, seed=13, draws=2000, strata=strata)
-    plain = percentile_over_units(values, seed=13, draws=2000)
+    got = percentile_over_units(values, seed=13, draws=2000, strata=strata).interval
+    plain = percentile_over_units(values, seed=13, draws=2000).interval
     assert got is not None and plain is not None
     expected = sum(values) / len(values)
     assert got.low < expected < got.high
@@ -3807,8 +3826,8 @@ def test_a_stratum_of_identical_values_contributes_no_variance_of_its_own():
     values = list(values)
     for i in range(20, 28):
         values[i] = 50.0
-    got = percentile_over_units(values, seed=17, draws=2000, strata=strata)
-    plain = percentile_over_units(values, seed=17, draws=2000)
+    got = percentile_over_units(values, seed=17, draws=2000, strata=strata).interval
+    plain = percentile_over_units(values, seed=17, draws=2000).interval
     assert got is not None and plain is not None
     expected = sum(values) / len(values)
     assert got.low < expected < got.high
@@ -3827,7 +3846,7 @@ def test_all_strata_internally_constant_gives_no_interval_at_all():
     interval is not.")."""
     values = [1.0] * 10 + [5.0] * 4
     strata = ["a"] * 10 + ["b"] * 4
-    assert percentile_over_units(values, seed=23, draws=2000, strata=strata) is None
+    assert percentile_over_units(values, seed=23, draws=2000, strata=strata).interval is None
 
 
 def test_every_unit_its_own_stratum_gives_no_interval_at_all():
@@ -3837,7 +3856,7 @@ def test_every_unit_its_own_stratum_gives_no_interval_at_all():
     zero-width point to report."""
     values = [1.0, 2.0, 3.0, 4.0]
     strata = ["a", "b", "c", "d"]
-    got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
+    got = percentile_over_units(values, seed=19, draws=2000, strata=strata).interval
     assert got is None
 
 
@@ -3873,7 +3892,9 @@ def test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_fin
         ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"], "weights": [1.0, 2.0, 3.0, 4.0]}),
     ]
     for values, kwargs in cases:
-        got = percentile_over_units(values, seed=2, draws=100, **kwargs)
+        resampled = percentile_over_units(values, seed=2, draws=100, **kwargs)
+        assert resampled.draws_used == 100, (values, kwargs)
+        got = resampled.interval
         assert got is not None, (values, kwargs)
         assert got.method == "percentile_over_units"
         assert got.low <= got.high
@@ -3890,8 +3911,8 @@ def test_a_column_resample_refuses_the_constant_one_stratum_case_the_unstratifie
     values = [5.0, 5.0, 5.0, 5.0]
     unstratified = percentile_over_units(values, seed=5, draws=2000)
     stratified = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * 4)
-    assert unstratified == Interval(low=5.0, high=5.0, method="percentile_over_units")
-    assert stratified is None
+    assert unstratified.interval == Interval(low=5.0, high=5.0, method="percentile_over_units")
+    assert stratified.interval is None
 
 
 def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
@@ -3911,7 +3932,7 @@ def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
     `test_a_permutation_over_units_with_a_nan_value_reports_no_p_value_rather_than_a_false_one`)
     — H4d is the last slice whose surface is the `statistics` block, so this
     gap now has no owner to inherit it."""
-    got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)
+    got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100).interval
     assert got is not None
     assert math.isnan(got.low) and math.isnan(got.high)
 
@@ -3930,23 +3951,55 @@ def test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap
     resample half did not."""
     got = percentile_over_units(
         [1.0, 2.0, 3.0, 4.0], seed=1, draws=100, weights=[1e308, 1e308, 1e308, 1e308]
-    )
+    ).interval
     assert got is not None
     assert math.isnan(got.low) and math.isnan(got.high)
 
 
-def test_percentile_over_units_still_returns_a_bare_interval():
-    """Pinned deliberately: ~20 tests read this return, and decision 2 is that
-    it does NOT become `(Interval, int)`. A slice that changed it would have to
-    change this test, which is where the decision gets re-argued rather than
-    drifted past. Confirmed separately (see the two "known unfixed gap" tests
-    above) that `(Interval, int)` would not even be the right remedy for the
-    non-finite gap: nothing on this path treats a `nan`/`inf` draw statistic as
-    a failed draw to exclude, so a survivor filter would count it as a survivor
-    and report `(Interval(nan, nan), n)` — the same false claim with an extra
-    field."""
+def test_percentile_over_units_now_returns_a_pairedresample():
+    """Superseded decision, recorded rather than silently dropped: this used to
+    pin that the return stayed a bare `Interval` because `percentile_of_derived`
+    alone needed a survivor count to carry. `correction.Member` needs the pool
+    a *column* metric's percentile interval was read off too — a condition's own
+    metric can be the target of a `compare: {to: constant}` hypothesis, and its
+    corrected bound has to be rebuilt from the same draws, not a re-drawn
+    approximation of them — so this now returns `PairedResample` like its three
+    siblings. `draws_used` is not the same fact here it is for a derived metric,
+    though: this path never filters a draw (decision 2, unchanged), so
+    `draws_used` is always the REQUESTED `n`, pinned separately by
+    `test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_finite_values`
+    above, not a survivor count."""
     got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
-    assert isinstance(got, Interval)
+    assert isinstance(got, PairedResample)
+    assert isinstance(got.interval, Interval)
+
+
+def test_percentile_over_units_carries_the_pool_it_read_its_interval_from():
+    """The same pin `percentile_of_derived`'s own pool test makes, one
+    construction over: reading the same ranks back off the returned pool with
+    `interval_at` must reproduce the interval exactly — satisfied only by the
+    ACTUAL pool `interval` was read off, not by a re-drawn or re-sorted
+    stand-in that merely looks like one (non-empty, sorted, right length)."""
+    values = [float(i) for i in range(60)]
+    got = percentile_over_units(values, seed=7, draws=500)
+    assert got.interval is not None
+    assert len(got.pool) == got.draws_used == 500
+    assert got.pool == sorted(got.pool)
+    assert interval_at(got.pool, 0.95) == (got.interval.low, got.interval.high)
+
+
+def test_percentile_over_units_clustered_carries_the_pool_it_read_its_interval_from():
+    """The clustered sibling's own version of the same pin: the pool
+    `percentile_over_units_clustered` returns must be the sequence of drawn
+    cluster-pool means `interval_at` actually indexed, not an equivalent-
+    looking stand-in."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, draws=500
+    )
+    assert got.interval is not None
+    assert len(got.pool) == got.draws_used == 500
+    assert got.pool == sorted(got.pool)
+    assert interval_at(got.pool, 0.95) == (got.interval.low, got.interval.high)
 
 
 def _ragged_collapsed(n: int = 40) -> dict[str, dict[str, float]]:
@@ -4015,7 +4068,7 @@ def test_a_clustered_and_weighted_column_pins_both_together_under_resample():
     column_weights = [weights[k] for k in keys]
     expected = percentile_over_units_clustered(
         values, keys, clusters, seed=5, draws=2000, weights=column_weights
-    )
+    ).interval
     assert expected is not None
     assert drawn["pred"]["ci95"] == [expected.low, expected.high]
 
@@ -4046,7 +4099,7 @@ def test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample
     # standard `test_percentile_over_units_...` pins elsewhere in this file.
     column_weights = [weights[f"u{i}"] for i in range(40)]
     values = [float(i) for i in range(40)]
-    expected = percentile_over_units(values, seed=5, draws=2000, weights=column_weights)
+    expected = percentile_over_units(values, seed=5, draws=2000, weights=column_weights).interval
     assert expected is not None
     assert drawn["pred"]["ci95"] == [expected.low, expected.high]
     unweighted = summarize_step(collapsed, counts, seed=5, draws=2000)
