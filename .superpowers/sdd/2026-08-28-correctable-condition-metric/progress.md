@@ -221,3 +221,9 @@ it to test `fields` directly is a change to a hot path for a case this slice did
 Task 7 is the close rather than the place to start one. Costs if wrong: a future cli change that
 builds a member where this slice builds none would make the branch silently wrong, and only the
 coupling comment warns.
+Task 6: fix round 1/5 (4 addressed, 0 open; commits 355451b..cc3d2fc). The sweep found FOUR homes of
+the sole-exception claim where I had named three. The re-reviewer ran its own independent sweep with
+patterns built from the claim's meaning, found no fifth home and no hedging, re-ran the conjunct
+mutation and confirmed the new test fails for the right reason, and verified the third no-Member
+path (`metric_key == "by"`) is real at `cli.py:4466`.
+Task 6: complete (commits a108433..cc3d2fc, 1 fix round, review clean; suite 3544 passed, 1 skipped, 2 xfailed; ruff, format and mypy clean)
