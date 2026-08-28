@@ -2690,3 +2690,8 @@ the command printed rather than a claim of its own. `reference.md` says only *no
 build* and promises nothing. The document changes first, so this is recorded in
 `docs/superpowers/spec-defects.md` and left for a reader to decide, not edited into `validate.py` from
 here.
+
+Full local gates at this commit, run rather than assumed: `3485 passed, 1 skipped, 2 xfailed in
+418.90s`, `ruff check .` *All checks passed!*, `mypy` *no issues found in 56 source files*. Nothing this
+measurement did touches them — every run above happened in a scratch project outside this repository —
+and they are recorded so a reader can tell a docs-only change from one that moved code.
