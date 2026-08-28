@@ -412,6 +412,115 @@ def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path
     assert "E-IO-FAILED" in err
 
 
+def _param_path_project_through_console_script(tmp_path: Path, broken_source: str) -> Path:
+    """Scaffold a real project, generate a `generic` config through it, THEN
+    drop a project-local template whose `parameter_spec` path is malformed —
+    in that order, because `generate_experiment` also runs `_claims`
+    (`discover_local` under it), so a broken `templates/broken.py` written
+    before that call would raise while resolving `generic` itself rather
+    than leaving a committed, otherwise-valid project for `validate` to
+    load through a real subprocess. Returns the config path.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    (root / "templates" / "broken.py").write_text(broken_source)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "broken"],
+        cwd=root,
+        check=True,
+    )
+    return cfg
+
+
+def _run_validate_in_subprocess(cfg: Path) -> subprocess.CompletedProcess[str]:
+    """`validate` through the REAL console script — a fresh Python process
+    running exactly what `publishable.cli:main` (`[project.scripts]`) wires
+    up — not `main([...])` called in-process. `test_h9b_...`'s own precedent
+    for this idiom: an unhandled raise reaching the top of a real process is
+    what a traceback-vs-diagnostic guarantee is actually about, and an
+    in-process `main()` call can't tell a caught, rendered diagnostic apart
+    from an exception pytest's own runner happened to swallow.
+    """
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from publishable.cli import main as m\n"
+            "sys.exit(m(['validate', sys.argv[1]]))",
+            str(cfg),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(cfg.parent),
+    )
+
+
+def test_a_one_segment_parameter_spec_path_through_the_console_script_is_a_diagnostic(
+    tmp_path: Path,
+):
+    """Arm 1 of gap 1's pin: a ONE-segment path (`count(".") == 0`), the
+    realistic mistake the analysis this task retires actually made
+    (`"reference_frame"`, later renamed to `"frame.reference"`). Run through
+    a real subprocess rather than `discover_local` called directly — the
+    reviewer's finding on the first pass of this fault.
+
+    Distinguishes `count(".") < 1` (catches this arm) from `count(".") > 1`
+    (misses it) — paired with the three-segment arm below, which distinguishes
+    the opposite way, the two arms together rule out `< 1`, `> 1`, and pin
+    only `!= 1` as the surviving implementation.
+    """
+    from tests.test_templates import ONE_SEGMENT_PARAM_PATH
+
+    cfg = _param_path_project_through_console_script(tmp_path, ONE_SEGMENT_PARAM_PATH)
+    completed = _run_validate_in_subprocess(cfg)
+
+    assert completed.returncode == EXIT_WRONG, (
+        completed.returncode,
+        completed.stdout,
+        completed.stderr,
+    )
+    assert "E-TEMPLATE-PARAM-PATH" in completed.stdout, completed.stdout
+    # The trap this task exists to avoid: a substring check loose enough to
+    # pass on neighbouring output. `Traceback (most recent call last):` is
+    # the exact line CPython's default excepthook opens with, printed to
+    # stderr and nowhere else — no rendered diagnostic produces it.
+    assert "Traceback (most recent call last):" not in completed.stderr, completed.stderr
+    assert "Traceback (most recent call last):" not in completed.stdout, completed.stdout
+
+
+def test_a_three_segment_parameter_spec_path_through_the_console_script_is_a_diagnostic(
+    tmp_path: Path,
+):
+    """Arm 2: a THREE-segment path (`count(".") == 2`). See the one-segment
+    test's docstring above for why the two arms together are what pins
+    `!= 1` rather than either one-sided comparison."""
+    from tests.test_templates import THREE_SEGMENT_PARAM_PATH
+
+    cfg = _param_path_project_through_console_script(tmp_path, THREE_SEGMENT_PARAM_PATH)
+    completed = _run_validate_in_subprocess(cfg)
+
+    assert completed.returncode == EXIT_WRONG, (
+        completed.returncode,
+        completed.stdout,
+        completed.stderr,
+    )
+    assert "E-TEMPLATE-PARAM-PATH" in completed.stdout, completed.stdout
+    assert "Traceback (most recent call last):" not in completed.stderr, completed.stderr
+    assert "Traceback (most recent call last):" not in completed.stdout, completed.stdout
+
+
 def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
     """`generate_experiment` draws its template through `get_template`, same as
     `validate`. A project holding `templates/my_assay.py` must let
