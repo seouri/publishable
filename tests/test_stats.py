@@ -2358,7 +2358,10 @@ def test_the_same_seed_reproduces_the_interval():
 
 def test_a_different_seed_gives_a_different_interval():
     values = [float(i) for i in range(50)]
-    assert percentile_over_units(values, seed=7) != percentile_over_units(values, seed=99)
+    assert (
+        percentile_over_units(values, seed=7).interval
+        != percentile_over_units(values, seed=99).interval
+    )
 
 
 def test_it_is_invariant_to_row_order():
@@ -2838,9 +2841,10 @@ def test_the_same_seed_reproduces_the_clustered_percentile():
     values = [float(i) for i in range(50)]
     keys = [f"u{i}" for i in range(50)]
     membership = {key: f"c{i // 2}" for i, key in enumerate(keys)}
-    assert percentile_over_units_clustered(
-        values, keys, membership, seed=7
-    ) != percentile_over_units_clustered(values, keys, membership, seed=99)
+    assert (
+        percentile_over_units_clustered(values, keys, membership, seed=7).interval
+        != percentile_over_units_clustered(values, keys, membership, seed=99).interval
+    )
 
 
 def _clustered_banded() -> tuple[list[float], list[str], dict[str, str], list[str]]:

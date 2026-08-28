@@ -50,3 +50,40 @@ premise is now expiring — a survivor count is available for the first time via
 `PairedResample.draws_used` — but `resample_draws` itself was left unchanged
 (still records requested `draws`) per binding #5; owning the re-owner/closure
 is Task 6's, not touched here.
+
+## Fix round 1
+
+Two findings from review, both fixed.
+
+**Finding 1**: `test_a_different_seed_gives_a_different_interval` (unclustered)
+and the `!=` half of `test_the_same_seed_reproduces_the_clustered_percentile`
+compared two `PairedResample`s directly, so a wider `__eq__` (which also
+compares the 2000-element `pool`) weakened rather than strengthened the `!=`
+assertion — the pools alone differing would have satisfied it even if the
+intervals coincided. Added `.interval` to both sides of both comparisons.
+My report's blanket "object-to-object equality... stayed valid unchanged"
+was true only for the `==` cases, not the `!=` ones — corrected here rather
+than repeated.
+
+Mutation: hard-coded `random.Random(seed)` to `random.Random(7)` inside both
+`percentile_over_units` (`stats.py:1276`) and `percentile_over_units_clustered`
+(`stats.py:1537`), forcing every seed to draw identically. Both amended tests
+went red:
+- `test_a_different_seed_gives_a_different_interval`: `Interval(low=20.4,
+  high=28.54, ...) != Interval(low=20.4, high=28.54, ...)` failed (seeds 7
+  and 99 now agree).
+- `test_the_same_seed_reproduces_the_clustered_percentile`: `Interval(low=18.98,
+  high=29.94, ...) != Interval(low=18.98, high=29.94, ...)` failed likewise.
+
+Reverted both lines by hand; `diff` against a pre-mutation copy of `stats.py`
+confirmed byte-identical restoration; both tests green again.
+
+**Finding 2**: `percentile_over_units`'s docstring claimed `draws_used` "is
+always the REQUESTED `n`", false on its three structural-refusal returns
+(too few values, too few draws, all-strata-constant), which give 0. Reworded
+to state both facts: the requested `n` when a draw is actually taken, 0 on
+each named refusal.
+
+Verification: amended tests plus the full `test_stats.py` (338 passed), the
+Task 1 oracle (passed), `ruff check .` and `ruff format --check .` (clean
+after one reformat), `mypy` (clean). Full suite not run, per instructions.

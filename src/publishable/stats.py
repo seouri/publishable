@@ -1223,8 +1223,11 @@ def percentile_over_units(
     the same way `percentile_over_units_clustered` reports a point rather than
     a zero-width interval at `G < 2`.
 
-    **`draws_used` here is always the REQUESTED `n`, never a survivor count, and
-    that is a decision rather than an omission — conditional on finite inputs.**
+    **`draws_used` here is the REQUESTED `n` on every draw that is actually
+    taken, and 0 on each of the structural refusals below (too few values, too
+    few draws for the confidence level, or every stratum's own pairs identical)
+    — never a survivor count in between, and that is a decision rather than an
+    omission, conditional on finite inputs.**
     `percentile_of_derived` filters its pool because a derived metric's
     `compute` can fail on a degenerate draw — `nan`, `None`, or a raise — so how
     many draws survived is a real fact its `draws_used` has to carry separately
