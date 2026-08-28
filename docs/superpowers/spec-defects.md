@@ -11536,3 +11536,106 @@ five types, the defaulted line unchanged, **no trailing whitespace** on any requ
 wherever nothing supplied a comment — and the nullable case. Mutations: dropping the prefix fails five;
 prefixing every parameter fails seven, two of them pre-existing tests; writing `""` instead of no value
 fails one.
+
+---
+
+## OPEN — the unit table has no importable name, so a plugin annotating `aggregate` invents one and the distribution stops importing — **Owner: unassigned, and no slice follows**
+
+**Found 2026-08-27 by the fresh feasibility re-measurement in
+[`../feasibility-llm-growth-studies.md`](../feasibility-llm-growth-studies.md) § Executability on this
+build, measured against `dc03ec4`.**
+
+`BaseTemplate.aggregate` is annotated `units: "UnitTable"` in core's own source; the class lives in
+`publishable.stats`; `publishable.__all__` does not carry it; and `grep -c UnitTable docs/reference.md`
+returns **0**. § The importable surface is the enumerated list of what a user writes against, and the
+type of `aggregate`'s first argument is not on it — the four operations the table supports are specified,
+the name is not.
+
+A real plugin did the obvious thing. `publishable-llm-screening 0.1.0` writes
+`from publishable import BaseTemplate, Param, UnitTable, register_template` in all three of its
+templates, and on the shipped build **nothing it registers loads**:
+
+```
+error   E-PLUGIN-LOAD        data.units
+        the entry point `dspy_examples` in `publishable.resolvers`, from publishable-llm-screening
+        0.1.0, raised while importing and registers nothing usable: ImportError("cannot import name
+        'UnitTable' from 'publishable'")
+```
+
+The resolver does not import `UnitTable` itself — the package's template modules do, one import in a
+shared chain, and the resolver's entry point dies with them.
+
+**Two resolutions, and this filing prefers neither.** Export `UnitTable` from the import root, which
+widens the public surface by a name whose *methods* the project deliberately keeps closed; or state in
+§ The importable surface that the table is deliberately unnamed and `aggregate` is to be left
+unannotated, which is a documentation change and costs nothing. What is not available is silence: the
+surface is annotated in core's own signature, and that is where a plugin author copies from.
+
+**Severity:** Major for anyone writing a plugin with a typed `aggregate`, which the specification's own
+example encourages by showing the signature. Zero for core: no shipped code imports it, and
+`mypy` is clean at this commit.
+
+---
+
+## OPEN — `unit-executions` does not count what a step does through `io.units.train`, while the sentence around it claims proportionality to the bill — **Owner: unassigned, and no slice follows**
+
+**Found 2026-08-27 by the same re-measurement, measured against `dc03ec4`.**
+
+§ Before you spend it defines the figure exactly as the code computes it — the sum of `len(io.units)`
+over every planned execution — and then claims: *"where a step makes one request, one assay, or one
+simulation per unit, this is the count the bill is proportional to."* Under a declared `holdout`,
+`_handed_counts` hands **every** scope the test partition and `execute_plan` attaches `.train` beside it,
+which changes no length. So a condition-scoped step that fits over `io.units.train` does one pass per
+**training** unit and contributes the **test** count.
+
+Measured on a 240-row roster at `frac: 0.2`, by a condition-scope step returning both numbers, from
+`executions.jsonl`:
+
+```
+{"step": "step02_fit_model", "scope": "condition", ..., "returned": {"n_units": 48, "n_train": 192}}
+```
+
+against the same config's `dry-run` print of `scale:  912 unit-executions (19 executions × 48 units
+handed to each)`. Four times the work, on the executions that are expensive by design: a condition-scoped
+fit is where the specification itself tells an author to put anything costly that depends on the swept
+parameter and not on the repeat.
+
+**Why this is a claim defect and not an arithmetic one.** The number is faithful to its stated
+definition, and `.train` genuinely is a second accessor rather than a second roster. What fails is the
+proportionality sentence, which a reader checks *instead of* doing the arithmetic — that being the whole
+purpose of the line. The cheapest honest closure is a sentence in § Before you spend it saying the figure
+counts `io.units` and not `io.units.train`, and that a fitting step under a holdout costs the training
+half on top. A closure that changed the number instead would have to decide whether a step that never
+touches `.train` should be billed for it, which core cannot know without inspecting user Python — which
+it never does.
+
+**Severity:** Minor mechanically, Major for the one thing the line exists for: E1 and E2 of the LLM
+growth-studies analysis are exactly this shape, and the un-counted half is $380 of E1's $548 at that
+analysis' own anchors.
+
+---
+
+## OPEN — `E-TEMPLATE-INSTALLED-UNSUPPORTED` promises a later slice, and there is no later slice — **Owner: unassigned, and no slice follows**
+
+**Found 2026-08-27 by the same re-measurement, measured against `dc03ec4`.**
+
+The message ends *"installed templates will be honored in a later slice. Use a project-local
+`templates/` file or a core template for now"*. This file's own header states the charter is complete and
+that nothing is chartered after H3c-3, so the sentence promises work nobody holds, in **shipped
+user-facing text** — the first thing a plugin author sees when they point a config at the template their
+own distribution registers.
+
+Grepped at this commit, the promise has two homes and only one is a claim: `src/publishable/validate.py`,
+and `docs/tutorial-writing-a-plugin.md`'s transcript quoting the command's output, where it is a dated
+record of what printed. `reference.md` says only that an installed template's spec is *not readable in
+this build* and promises nothing, so it needs no change.
+
+**What a closure is.** Not building installed-template loading — that is a slice, and re-opening this
+file's work means chartering one. It is re-wording one message so it states the limit without dating
+itself against a roadmap that ended: the refusal is permanent as this project ships, and the route it
+already names — keep the template project-local, ship the machinery in the plugin — is the whole answer.
+The tutorial's transcript then needs re-measuring, because it quotes the old text.
+
+**Severity:** Minor in behaviour, and the reason to file it anyway is that it is the single message
+standing between a written plugin and a run: measured on 2026-08-27, installing a real plugin beside core
+`0.1.3` refuses every config in the feasibility analysis on this code alone.

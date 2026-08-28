@@ -2676,6 +2676,9 @@ dependency is `E-TEMPLATE-INSTALLED-UNSUPPORTED`.
 
 **One shipped sentence is stale and is filed rather than patched here.** That refusal's message ends
 *"installed templates will be honored in a later slice"*, and `CLAUDE.md` states there is no later
-slice — the charter is complete. `reference.md` and the plugin tutorial carry the same promise in
-their own words. The document changes first, so this is recorded in `docs/superpowers/spec-defects.md`
-and left for a reader to decide, not edited into `validate.py` from here.
+slice — the charter is complete. Grepped at this commit, the promise has exactly two homes: the message
+in `validate.py`, and the plugin tutorial's transcript quoting it, where it is a dated record of what
+the command printed rather than a claim of its own. `reference.md` says only *not readable in this
+build* and promises nothing. The document changes first, so this is recorded in
+`docs/superpowers/spec-defects.md` and left for a reader to decide, not edited into `validate.py` from
+here.
