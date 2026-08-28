@@ -2305,6 +2305,34 @@ every cost figure below is still arithmetic rather than an anchor. What blocks t
 is not code: **OI-7's cohort definition** and **OI-8's model roster and prompt specification**, both
 `[author decision]` in the source plan. The pipeline is ready for them; they are not ready for it.
 
+### Re-checked on 2026-08-28 against commit `ae9677e` — the fifteen configs, re-validated after the slice closed
+
+The `correctable-condition-metric` slice ([design](superpowers/specs/2026-08-28-correctable-condition-metric-design.md),
+[ledger](../.superpowers/sdd/2026-08-28-correctable-condition-metric/progress.md)) landed in full at this commit,
+and this entry is the closing task's re-check against `2026-08-28-gcl-measurement`'s fifteen configs,
+re-run from fresh fixtures (`tools/make_fixtures.py`). All fifteen validate exactly as [the last
+measurement](#measured-on-2026-08-28-against-v020--the-pipeline-is-written-and-this-is-what-writing-it-found)
+found: thirteen clean, `e05c-fixed-n` and `e08-ordering` each carrying the one `W-DATA-CLUSTER-UNDECLARED`
+[gap 4's retraction](#gaps-this-analysis-found-in-the-specification) already explains. Nothing about
+the fourteen configs other than E2 changed, because nothing about them touches a constant-referenced
+hypothesis.
+
+**E2 itself did not change, and that is worth stating rather than assuming.** `e02-utilization-baseline/config.yaml`'s
+`h1` is unchanged from finding 2 above: it names `metric: step03_compare.auroc_count_only` with no
+`compare` block at all, because that metric is the `summary`-step `Estimate` `step03_compare.py`
+computes — its own docstring still narrates the *pre-slice* reason for routing around the
+condition-scoped `auroc`. `verdict_rests_on: reported` for that hypothesis before this slice and
+after it, unaffected by [Decision 1](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)
+in either direction, because a reported `Estimate` was never the metric shape Decision 1 governs. Finding
+2 already said what changed: not the config as written, but what the config **could** now be rewritten
+to do — `compare: {to: constant, value: 0.5}` directly on the condition-scoped `auroc` the template's
+`aggregate` already derives. That metric is derived under E2's declared `statistics.resample`, which is
+[Decision 1](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)'s third row —
+"Derived (`aggregate`), declared `resample`" — the row this slice's `correction.Member` construction
+now answers with a real corrected bound rather than `supported: null`. That rewrite was not made here:
+this task reads and reasons, per its own charter, rather than editing the downstream project or running
+its pipeline, which needs a deployment this analysis has never had.
+
 ---
 
 ## Cost and execution summary
