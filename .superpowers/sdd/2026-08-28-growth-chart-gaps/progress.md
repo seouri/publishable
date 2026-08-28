@@ -76,3 +76,26 @@ Ruling: `.superpowers/sdd/<plan>/` reports and `progress.md` are TRACKED here �
 untracked and the ledger was untracked too. Both are committed now with `git add -f`, and every later
 dispatch says to commit its own report. Costs if wrong: a record CLAUDE.md calls part of the
 development record exists only on this machine.
+
+Task 4: review found 2 Important, 4 Minor (commits e40b9e2..a2074be)
+
+Ruling: **Minor 3 is upgraded into the fix loop.** The review classes "raises at class-definition
+time, before `@register_template` is ever reached" as imprecision rather than a false guarantee,
+and on the guarantee it is right. It enters anyway because the claim is WRONG IN FOUR HOMES and this
+repo's most expensive recurring defect is a sentence that describes a mechanism the code does not
+have — "sweep for the claim, not for the file the claim was first noticed in". A correct sentence
+already exists at `reference.md` § Templates; normalising to it is cheaper than leaving four copies
+of a wrong one. Costs if wrong: one extra fix round for a wording change.
+
+Task 4: minor (deferred): the message embeds its own `E-` code while the CLI also prefixes
+`exc.code`, so the direct-raise path prints it twice — justified and earned by a real red, but the
+consequence is undocumented.
+Task 4: minor (deferred): the `isinstance(..., dict)` skip is pinned only incidentally by
+`test_cli.py`'s non-dict `parameter_spec` assertion; nothing names the guard.
+Task 4: minor (deferred): `..._is_a_diagnostic_not_a_traceback` is proven at `discover_local` level,
+not through the CLI — a name that overclaims its own body.
+Task 4: carried to T11: `feasibility-growth-chart-literacy.md` gap 1 still asserts the traceback and
+"no `E-` code covers the refusal", stale as of a2074be.
+Task 4: freeze.py `claim.cls()` — reviewer judged it out of scope and needing nothing now, AND
+judged the implementer's reasoning about it wrong. Not carried; the exposure is pre-existing and
+unrelated to this code.

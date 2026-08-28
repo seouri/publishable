@@ -27,7 +27,8 @@ class BaseTemplate:
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Check a subclass's own `parameter_spec` keys the moment the class body
-        that declared them finishes — before `@register_template` ever runs.
+        that declared them finishes — before `@register_template` or anything else
+        ever sees the class.
 
         Every path in `parameter_spec` nests one level — `head.leaf`, exactly
         two dotted segments — because `materialize._parameters_block` renders
@@ -50,10 +51,12 @@ class BaseTemplate:
         `freeze`, `report`, `reproduce`, `demo` — imports the module that
         defines the class before it does anything else with it, so checking
         here is checking at every one of those, from one site. For a
-        project-local `templates/*.py`, this raise happens before that file's
-        own `@register_template` call is ever reached, the same place a raise
-        from anywhere else in the class body already leaves no class behind to
-        register — `discover_local` folds it into `E-TEMPLATE-LOAD`'s "raises
+        project-local `templates/*.py`, this raise happens before `@register_template`
+        or anything else ever sees the class: the factory call
+        `register_template("name")` is evaluated before the class body runs, but the
+        decorator it returns is not applied to the class until after — so a raise here
+        is the same as a raise from anywhere else in the class body, and already leaves
+        no class behind to register — `discover_local` folds it into `E-TEMPLATE-LOAD`'s "raises
         while importing" shape exactly as it already does for `Param`'s own
         `default=None`/`requires_env` raises, and the code minted here still
         travels inside `{exc!r}`, unlike theirs. `docs/reference.md` §

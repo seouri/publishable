@@ -1037,8 +1037,8 @@ class ThreeSegment(BaseTemplate):
 def test_a_one_segment_parameter_spec_path_is_a_diagnostic_not_a_traceback(tmp_path: Path):
     """`BaseTemplate.__init_subclass__` rejects a `parameter_spec` path that is
     not exactly `head.leaf` the moment the class body defining it finishes —
-    before `@register_template` is ever reached, the same place any other
-    class-body raise already leaves no class behind to register. For a
+    before `@register_template` or anything else ever sees the class, the same
+    place any other class-body raise already leaves no class behind to register. For a
     project-local template this happens inside `discover_local`'s own import,
     so it folds into `E-TEMPLATE-LOAD`'s "raises while importing" shape
     exactly as a `Param` declaring `default=None` without `nullable=True`
@@ -1082,6 +1082,20 @@ def test_a_three_segment_parameter_spec_path_is_also_refused(tmp_path: Path):
     message = str(excinfo.value)
     assert "E-TEMPLATE-PARAM-PATH" in message
     assert "a.b.c" in message
+
+
+def test_the_minted_code_is_e_template_param_path_directly():
+    """`discover_local`'s own wrap always relabels a load-time raise to
+    `E-TEMPLATE-LOAD` (`.code`), so neither test above pins the identifier
+    THIS check actually mints — only that its text survives nested inside
+    the wrapping code's message. Defining the bad subclass directly, outside
+    `discover_local` entirely, is what lets `.code` itself be asserted."""
+    with pytest.raises(ContractError) as excinfo:
+
+        class Bad(BaseTemplate):
+            parameter_spec = {"threshold": Param(int, default=1)}
+
+    assert excinfo.value.code == "E-TEMPLATE-PARAM-PATH"
 
 
 CLAIMS_MY_ASSAY = """\

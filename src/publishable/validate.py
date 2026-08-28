@@ -553,8 +553,8 @@ def validate_config(
         # over `choices` — is the first of them, "raises while importing". Adding
         # such a fault adds no code and does not move this count. A malformed
         # `parameter_spec` path (`E-TEMPLATE-PARAM-PATH`, `BaseTemplate.__init_subclass__`)
-        # raises at the same moment — class-definition time, before this file's own
-        # `@register_template` line is ever reached — and folds into the same shape
+        # raises at the same moment — class-definition time, before `@register_template`
+        # or anything else ever sees the class — and folds into the same shape
         # too, but it DOES carry its own code, still readable inside `exc`'s message
         # even though `exc.code` itself reads `E-TEMPLATE-LOAD` here. Reported under
         # the code the raise carries rather than a code chosen here, so the two
