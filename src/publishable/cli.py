@@ -1742,6 +1742,33 @@ def _comparison_step_blocks(
                         else ""
                     ),
                 )
+            # **A derived metric's unpaired contrast computes nothing, and until
+            # this warning the record said so only by omission.** The branch
+            # above is guarded on `is_paired` for a stated reason — recomputing
+            # a derived metric on each side independently would need `aggregate`
+            # evaluated on two separately drawn tables, a construction this build
+            # does not have — so a contrast crossing a group axis on a metric the
+            # template derives lands here with `delta: null`, `method: null` and
+            # both side counts filled in. That is the honest shape, but a reader
+            # meets a null next to two healthy `n`s and has nothing to attribute
+            # it to.
+            #
+            # `validate` cannot report this instead, and that is why it is a
+            # run-time warning rather than a row in § Validation: whether
+            # `step02_score.kappa` names a derived key or a recorded column is a
+            # fact about what a template's `aggregate` RETURNS, which core never
+            # reads — the greenfield line. At this point in the run it is known.
+            if is_derived and not is_paired:
+                findings.warn(
+                    "W-STATS-CONTRAST-UNPAIRED-DERIVED",
+                    where_id,
+                    f"{where}, step {step_name!r} metric {metric_key!r}: the two conditions "
+                    "share no units and this metric is derived by the template's "
+                    "`aggregate`, which core cannot recompute on each side's own "
+                    "resampled table — delta and ci95 are null. Record the quantity as a "
+                    "column so the unpaired construction applies, or carry the comparison "
+                    "as a `summary`-step `Estimate`",
+                )
             # ONE finding per metric entry, naming every denominator below the floor.
             # The warning is about this entry's disclosure, and two findings for one
             # entry would double-count in any consumer that counts them.

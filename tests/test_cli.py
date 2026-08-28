@@ -29655,3 +29655,74 @@ def test_a_comparison_and_a_condition_metric_in_one_family_rank_by_declaration_o
     assert tuple(verdicts["baseline_positive"]["observed"]["ci95_corrected"]) == pytest.approx(
         (raw.low, raw.high)
     )
+
+
+def test_an_unpaired_derived_contrast_reports_why_its_delta_is_null():
+    """`W-STATS-CONTRAST-UNPAIRED-DERIVED`, and the reason it is a warning rather
+    than a `validate` row.
+
+    A contrast crossing a group axis on a metric the template DERIVES computes no
+    delta: the unpaired constructions close over a recorded column's own values,
+    and recomputing a derived metric per side would need `aggregate` evaluated on
+    two independently drawn tables. The record's honest shape is `delta: null`
+    beside two healthy side counts — which is indistinguishable, to a reader, from
+    a metric that simply produced nothing. This is the sentence that attributes it.
+
+    `validate` cannot report it: whether `m` names a derived key or a recorded
+    column is a fact about what an `aggregate` RETURNS, and core never reads a
+    step body.
+    """
+    from publishable.diagnostics import Collector
+
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        findings=findings,
+    )
+    entry = block["s"]["m"]
+    assert entry["delta"] is None
+    assert entry["ci95"] is None
+    # The two side counts are what make the null ambiguous without the warning.
+    assert entry["n_of"] == 5
+    assert entry["n_against"] == 25
+
+    warned = [f for f in findings.findings if f.code == "W-STATS-CONTRAST-UNPAIRED-DERIVED"]
+    assert len(warned) == 1, [f.code for f in findings.findings]
+    assert warned[0].level == "warning"
+    # The message has to name the two routes, since the warning's whole job is to
+    # tell a reader what to do instead.
+    assert "summary" in warned[0].message and "column" in warned[0].message
+
+
+def test_a_paired_derived_contrast_does_not_draw_the_unpaired_warning():
+    """The control that separates this warning from `delta is None`.
+
+    A PAIRED derived contrast over a disjoint intersection produces the identical
+    nulls — `delta: None`, `ci95: None` — and must stay silent, because that is a
+    different fault with a different remedy (`n_paired: 0` means pairing failed;
+    this warning means pairing never applied). A warning keyed on the null rather
+    than on `is_paired` would fire here, so this is the fixture that rules that
+    reading out.
+    """
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+
+    findings = Collector()
+    block, _ = _unpaired_contrast_call(
+        conditions_by_index={
+            0: Condition(index=0, label="m=pearson", values={"analysis.method": "pearson"}),
+            1: Condition(index=1, label="m=spearman", values={"analysis.method": "spearman"}),
+        },
+        derived_by_key={(1, "s"): {"m": 20.0}, (0, "s"): {"m": 10.0}},
+        resample_fns_by_key={
+            (1, "s"): {"m": lambda table: 20.0},
+            (0, "s"): {"m": lambda table: 10.0},
+        },
+        findings=findings,
+    )
+    entry = block["s"]["m"]
+    # Same nulls as the warned case, and the pairing answer is the difference.
+    assert entry["paired"] is True
+    assert entry["n_paired"] == 0
+    assert entry["delta"] is None
+    assert not [f for f in findings.findings if f.code == "W-STATS-CONTRAST-UNPAIRED-DERIVED"]
