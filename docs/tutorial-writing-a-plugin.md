@@ -440,9 +440,7 @@ Core resolves an installed template's name from package metadata and does not lo
 ```
 ### `plate_assay`
 
-Installed, provided by `publishable-plate-assay 0.1.0` — its parameter spec is **not readable**
-(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed template's name from package
-metadata without importing the package, so there is no class here to read a `parameter_spec` off.
+Installed, provided by `publishable-plate-assay 0.1.0` — its parameter spec is **not readable** (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed template's name from package metadata without importing the package, so there is no class here to read a `parameter_spec` off.
 ```
 
 So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway: it is testable without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does, and a local template that imports it is three lines. **Do not keep it waiting for the refusal to lift** — `reference.md` § Errors' row for the code states the refusal as permanent, and the price it names is the one to plan around: a template inside `code_hash` is pinned by each repository that runs it, so two repositories sharing an experiment type keep two copies and share no template identity.
