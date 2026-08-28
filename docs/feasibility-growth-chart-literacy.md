@@ -1987,7 +1987,7 @@ bound these measurements depend on is **released in `v0.2.1`**: the `compare: {t
 form itself shipped in 0.2.0, but the correctable `Member` that gives it a real corrected bound under
 `holm` or `bonferroni` landed after it, so an install of `publishable==0.2.0` still evaluates such a
 hypothesis on a bound as `supported: null`. Read every claim here against the commit rather than the
-version number, and take `0.2.1` as the floor for the corrected bound and **`0.2.2`** for anything this section measures — [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), which [gap 9](#gaps-this-analysis-found-in-the-specification) closed and E1's run reports, ships in 0.2.2.
+version number, and take `0.2.1` as the floor for the corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), and **`0.2.3`** for anything this section measures — [`unevaluable`](reference.md#pre-registration) and its warning, which [gap 10](#gaps-this-analysis-found-in-the-specification) closed, ship in 0.2.3.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
