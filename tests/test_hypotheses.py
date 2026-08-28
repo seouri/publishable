@@ -175,12 +175,18 @@ def test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value()
         method="none",
         parameters_hash="sha256:1a2b",
     )[0]
+    # `supported` is the assertion this test is named for: a wrongly-shifted
+    # contrast delta (0.04 - 0.5 = -0.46, against `threshold: 0.0` in the
+    # `greater` direction) flips this to `False`, so it is checked first and
+    # fails as a plain assertion rather than letting a later `KeyError` on
+    # `observed` stand in for it.
+    assert got["supported"] is True  # 0.62 - 0.5 = 0.12 > 0.0
     # The number `observed` shows must be the SAME number the verdict was
     # decided on (minus the declared constant) -- never a different block's
     # number entirely, which is what a self-contradictory record would show.
-    assert got["observed"]["value"] == 0.62
-    assert "delta" not in got["observed"]  # the contrast's block, never read
-    assert got["supported"] is True  # 0.62 - 0.5 = 0.12 > 0.0
+    observed = got["observed"] or {}
+    assert observed.get("value") == 0.62
+    assert "delta" not in observed  # the contrast's block, never read
 
 
 def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():

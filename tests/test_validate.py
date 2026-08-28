@@ -6509,7 +6509,10 @@ def test_a_constant_and_contrast_together_is_refused(write_config_two_scopes):
     verdict decided on that delta minus the constant). `condition` beside
     `to: constant` is a different, legitimate combination — this refusal must
     not fire for it, which
-    `test_a_compare_to_constant_with_a_numeric_value_is_not_flagged` covers."""
+    `test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged`
+    pins (it declares both `condition` and `to: constant`, no `contrast`, and
+    now asserts `E-HYPOTHESIS-COMPARE-TO` absent alongside its own two
+    codes)."""
     found = codes(
         write_config_two_scopes(
             {
@@ -6725,6 +6728,7 @@ def test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagge
     )
     assert "E-HYPOTHESIS-CONDITION" not in found
     assert "E-HYPOTHESIS-BASELINE" not in found
+    assert "E-HYPOTHESIS-COMPARE-TO" not in found  # condition beside to: constant, no contrast
 
 
 def test_a_hypothesis_naming_a_declared_condition_is_not_flagged(write_config_two_scopes):

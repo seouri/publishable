@@ -5762,12 +5762,13 @@ def _check_hypotheses(
     fix tried "contrast wins" (the same precedence `resolve` already gives it
     over bare `condition`) and only moved the silent discard from the
     contrast to `value` — `verdict_for` has no way to tell, from an
-    `Observation` alone, which branch produced it. Refusing the combination
-    is the smaller change and the only one that keeps `verdict_for`'s
-    unconditional subtraction correct. `E-HYPOTHESIS-COMPARE-TO`, reused
-    rather than a new code: its own message already names exactly this shape
-    — "a comparison that will never be made and is silently evaluated ...
-    instead."
+    `Observation` alone, which branch produced it. What keeps `verdict_for`'s
+    unconditional subtraction correct is `resolve` checking the same
+    `to: constant` predicate first; the refusal prevents a declared
+    `contrast` from being silently discarded, which is a different fault.
+    `E-HYPOTHESIS-COMPARE-TO`, reused rather than a new code: its own message
+    already names exactly this shape — "a comparison that will never be made
+    and is silently evaluated ... instead."
 
     **`compare.value` is required, and numeric, exactly when `to: constant`.**
     `hypotheses.verdict_for` reads it as the fixed reference and subtracts it

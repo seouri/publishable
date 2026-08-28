@@ -300,3 +300,59 @@ line-length fix); `uv run ruff format --check .` (101 files formatted); `uv run 
 56 files).
 
 **Concerns:** none new.
+
+---
+
+## Fix wave 3 — three one-liners
+
+**Status:** done.
+
+**Item 1 (false claim, fourth attempt).** `validate.py`'s `_check_hypotheses` docstring claimed
+refusing the combination "is the smaller change and the only one that keeps `verdict_for`'s
+unconditional subtraction correct" — false: `resolve` (line 115, `compare.get("to") == "constant"`)
+and `verdict_for` (line 310, `compare.get("to") == "constant"`) test the identical predicate, and
+`resolve` checks it first, unconditionally — that ordering, not the refusal, is what keeps the
+subtraction correct. Replaced with the coordinator's exact sentence: *"What keeps `verdict_for`'s
+unconditional subtraction correct is `resolve` checking the same `to: constant` predicate first; the
+refusal prevents a declared `contrast` from being silently discarded."* Verified against both call
+sites before committing.
+
+**Item 2 (unpinned carve-out).** `test_a_constant_and_contrast_together_is_refused`'s docstring cited
+`test_a_compare_to_constant_with_a_numeric_value_is_not_flagged`, which declares no `condition` key
+at all. Corrected the citation to
+`test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged` (the test that
+actually declares `condition` beside `to: constant`), and added the missing
+`assert "E-HYPOTHESIS-COMPARE-TO" not in found` to that test so the carve-out is pinned rather than
+merely asserted in prose.
+
+**Item 3 (test fails for the wrong reason).**
+`test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value` previously asserted
+`got["observed"]["value"] == 0.62` first, which raises `KeyError` under the regression (the mutated
+record has no `value` key, only `delta`) rather than failing on the property the test is named for.
+Reordered so `assert got["supported"] is True` runs first — the direct consequence of "never shifted
+by the other's value" — and switched the `observed` check to `.get("value")` so it fails as a clean
+`AssertionError` if ever reached first.
+
+**Mutation evidence, re-run (backup → mutate → red → restore → re-run to confirm green, never `git
+status`):**
+- Neutered the validate refusal (`if False and compare_to == "constant" and "contrast" in compare:`)
+  → `test_a_constant_and_contrast_together_is_refused` failed
+  (`AssertionError: assert 'E-HYPOTHESIS-COMPARE-TO' in {'W-HYPOTHESIS-INFERENCE-BASE'}`) → restored
+  → 13/13 `constant`-tagged tests green.
+- Reintroduced the "contrast wins" reorder in `resolve()` → both
+  `test_a_constant_and_contrast_together_resolves_through_the_constant` and
+  `..._is_never_shifted_by_the_others_value` failed, the latter now on a plain
+  `AssertionError: assert False is True` at the `supported` line — the reason it names, not a
+  `KeyError` — → restored → 50/50 green.
+- Widened the refusal to fire on `to: constant` alone (dropping the `"contrast" in compare`
+  conjunct) → both `test_a_compare_to_constant_with_a_numeric_value_is_not_flagged` and
+  `test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged` failed on the new
+  `E-HYPOTHESIS-COMPARE-TO` assertion (`condition` beside `to: constant`, no `contrast`, wrongly
+  refused) → restored → 13/13 green.
+
+**Verification:** `uv run pytest tests/test_hypotheses.py tests/test_validate.py` (862 passed),
+`tests/test_cli.py -k hypothes` (8 passed); `uv run ruff check .` (all checks passed);
+`uv run ruff format --check .` (101 files formatted); `uv run mypy` (no issues, 56 files).
+
+**Concerns:** none new. No code outside `validate.py`'s one docstring paragraph and the two test
+files was touched.

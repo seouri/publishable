@@ -235,3 +235,13 @@ not the same shape and refusing one leaves no identical fault legal under the ot
 the smaller change: keeping "contrast wins" additionally requires gating the subtraction, and then
 re-justifying a code that demands a number nobody reads, which is this repo's *parameter wired to a
 constant* row. Costs if wrong: a combination someone wanted is refused rather than resolved.
+Whole-branch fix wave 2 (1fbfd32..debb5e2): the blocking regression is ADDRESSED — verdict inversion
+gone, `hypotheses.py` byte-identical in code to `6d99a88` under AST normalization, `validate.py`
+differing by exactly the one refusal. Two Important residuals, both one-line prose/test.
+
+Ruling: **the two residuals are FIXED rather than parked.** The skill routes residuals to
+adjudication, and parking is the default — but one of these is a false sentence in the same
+paragraph that has now been false four times, with the corrected text already written by the
+reviewer, and the other is a ruled carve-out whose docstring cites a test that does not cover it.
+Shipping a knowingly false claim to save a one-line round is the trade this repo's whole misreadings
+list argues against. Costs if wrong: one more small round on prose.
