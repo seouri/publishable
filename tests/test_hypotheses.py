@@ -1068,13 +1068,13 @@ def test_a_constant_hypothesis_on_ci95_lower_is_superiority():
     """`evaluate_on: ci95_lower` against a constant is the superiority form:
     the whole interval must clear the reference, not just the point estimate.
 
-    Fixture chosen so `observed`, `ci95_lower` and `ci95_upper` give THREE
-    DIFFERENT verdicts on the same block and the same threshold/direction —
-    0.62 - 0.5 = 0.12 > 0.05 (observed: True), 0.53 - 0.5 = 0.03 > 0.05
-    (ci95_lower: False), 0.71 - 0.5 = 0.21 > 0.05 (ci95_upper: True) — so no
-    single-bug implementation (ignoring `value`, ignoring `evaluate_on`,
-    shifting only the point estimate) can pass this test and its
-    `ci95_upper` sibling below by coincidence. A mutant that subtracts
+    Fixture chosen so `observed` and `ci95_upper` agree (`True`) while
+    `ci95_lower` disagrees (`False`) on the same block and the same
+    threshold/direction — 0.62 - 0.5 = 0.12 > 0.05 (observed), 0.53 - 0.5 =
+    0.03 > 0.05 is false (ci95_lower), 0.71 - 0.5 = 0.21 > 0.05 (ci95_upper)
+    — so no single-bug implementation (ignoring `value`, ignoring
+    `evaluate_on`, shifting only the point estimate) can pass this test and
+    its `ci95_upper` sibling below by coincidence. A mutant that subtracts
     `value` only when `evaluate_on == "observed"` compares the RAW lower
     bound (0.53) against `threshold` (0.05) instead — 0.53 > 0.05 is True,
     disagreeing with the correct `False` this test asserts."""
@@ -1100,10 +1100,10 @@ def test_a_constant_hypothesis_on_ci95_lower_is_superiority():
 
 def test_a_constant_hypothesis_on_observed_disagrees_with_its_own_bounds():
     """The `observed` sibling of the fixture above: 0.62 - 0.5 = 0.12 > 0.05
-    is `True`, disagreeing with `ci95_lower`'s `False` and `ci95_upper`'s
-    `True` on the very same block — the three-way disagreement is what makes
-    `evaluate_on` legible rather than a rename of one already-correct
-    number."""
+    is `True`, agreeing with `ci95_upper`'s `True` but disagreeing with
+    `ci95_lower`'s `False` on the very same block — `ci95_lower` being the
+    odd one out among the three readings is what makes `evaluate_on` legible
+    rather than a rename of one already-correct number."""
     obs = Observation(
         where="const:0",
         step="step03_screen",
@@ -1285,4 +1285,86 @@ def test_a_constant_hypothesis_under_no_correction_gets_the_ordinary_absent_fiel
     assert got["family_size"] == 1
     assert "ci95_corrected" not in (got["observed"] or {})
     # ci95_lower: 0.55 - 0.5 = 0.05 > 0.0, raw bound, no correction claimed
+    assert got["supported"] is True
+
+
+def test_an_exploratory_constant_hypothesis_is_unaffected_by_corrected_unavailable():
+    """The `elif` guard added for Finding 1 must stay gated on `_is_counted`,
+    not just `method != "none" and key not in by_key`: an exploratory
+    hypothesis is never in the correction family (`_is_counted` requires
+    `kind == "confirmatory"`) and has no `Member` either, so a mutant that
+    drops the `_is_counted` conjunct fires the same `corrected_unavailable`
+    path for it as for a counted one — flipping a real, uncorrected bound
+    verdict to `supported: null` and injecting a `ci95_corrected: null` key
+    into an entry that was never a member of any family."""
+    hyp = {
+        "id": "expl",
+        "kind": "exploratory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert "family_size" not in got  # exploratory: never counted
+    assert "ci95_corrected" not in (got["observed"] or {})
+    # ci95_lower: 0.55 - 0.5 = 0.05 > 0.0, raw bound — never corrected, but not null either
+    assert got["supported"] is True
+
+
+def test_a_reported_summary_hypothesis_is_unaffected_by_corrected_unavailable():
+    """The same guard, pinned from the other side: a `verdict_rests_on:
+    reported` summary-metric hypothesis has `obs.where is None` (so `key` is
+    `None`, trivially `not in by_key`) and `obs.rests_on == "reported"` (so
+    `_is_counted` is `False` regardless of `kind`) — core has no standing to
+    correct a number it did not derive. Dropping `_is_counted` from the guard
+    would flip its real bound verdict to `supported: null` and stamp a
+    `ci95_corrected: null` onto an `Estimate` outside the correction family
+    entirely, contradicting `reference.md`'s own worked example for this
+    form, which shows no such key."""
+    hyp = {
+        "id": "h2",
+        "kind": "confirmatory",
+        "metric": "step04_agreement.s_within",
+        "direction": "greater",
+        "threshold": 0.99,
+        "evaluate_on": "ci95_lower",
+        # no `compare`: a summary metric
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={
+            "step04_agreement": {
+                "s_within": {
+                    "value": 0.9931,
+                    "reported": True,
+                    "ci95": [0.9931, 1.0],
+                    "n": None,
+                    "method": "one-sided BCa",
+                }
+            }
+        },
+        aggregated=None,
+        members=[],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert "family_size" not in got
+    assert "ci95_corrected" not in (got["observed"] or {})
+    assert got["verdict_rests_on"] == "reported"
+    # ci95_lower: 0.9931 > 0.99, raw bound — never corrected, but not null either
     assert got["supported"] is True

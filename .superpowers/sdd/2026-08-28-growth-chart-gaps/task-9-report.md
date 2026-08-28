@@ -121,3 +121,62 @@ correctable today (not just occasionally) — every such hypothesis under a real
 a bound `evaluate_on` reads `null`. That is honest but means `evaluate_on: observed` is, in practice,
 the only usable form under `correction: holm`/`bonferroni`/`fdr_bh`; a future slice building a real
 resample-backed `Member` for the constant form would be the way to lift this.
+
+---
+
+## Fix round 2 of 5
+
+**Status:** done, all four remaining items addressed.
+
+**Finding 2, still open.** Fixed both residual homes: (a) reference.md ~3628, "two unrelated reasons"
+→ "three", adding the constant form as the third alongside thin-resample and `fdr_bh`; (b) ~3742,
+"follows the family rules unchanged" now scoped to "a baseline comparison or a declared contrast",
+with a new sentence naming the constant form as the standing exception. Swept README,
+design-principles.md, experimental-designs.md, both feasibility files and CLAUDE.md for `corrected
+one|corrected bound|family rules` myself after editing — no further homes found; the one other hit
+(feasibility-llm-growth-studies.md's "a corrected bound built from the same weighted...") is an
+unrelated weighted-contrasts passage, not this promise.
+
+**New finding — `_is_counted` conjunct.** Confirmed the surviving mutant (dropping `_is_counted`
+from the `elif` guard) and added two tests that pin it from both directions:
+`test_an_exploratory_constant_hypothesis_is_unaffected_by_corrected_unavailable` (an exploratory
+constant hypothesis, never in the family) and
+`test_a_reported_summary_hypothesis_is_unaffected_by_corrected_unavailable` (a `verdict_rests_on:
+reported` summary metric, `obs.where is None` so trivially `key not in by_key`). Both assert
+`"ci95_corrected" not in observed` and a real (non-null) `supported`.
+
+**Sibling mutant (dropping `key not in by_key`, leaving `_is_counted(hyp, obs) and method != "none"`):
+judged not worth a dedicated test, per the reviewer's own finding.** When `key` *is* in `by_key` for a
+counted hypothesis, that key is necessarily among `counted_keys` and thus in `family_members_`, so
+`corrected_for` builds a real entry for it and `corrected is not None` — the `elif` branch is never
+reached for that case under correct behaviour. Constructing an input where `corrected_for` omits an
+entry for a member that's genuinely in `family_members_` would mean reaching into `corrected_for`'s
+own internal filtering rather than exercising anything specific to this guard, so I left it unpinned
+rather than write a test that doesn't actually discriminate the stated mutant from correct code.
+
+**Required filing.** Added `## OPEN` to `docs/superpowers/spec-defects.md`, owner *unassigned*,
+matching the shape of the two neighbouring entries read first ("a `sweep.baseline`..." and "a
+correction family cannot span runs..."): states in those words that a constant-referenced
+hypothesis's bound test is never answerable under a declared correction method and comes back
+`supported: null`, notes `evaluate_on: observed` stays usable, states the `correction: none`
+qualifier, and cites `_level_for`'s existing `fdr_bh` precedent. Pinned to commit `6e96655` (the fix
+round 1 commit, where the behaviour being described currently lives).
+
+**Minor — "THREE DIFFERENT verdicts."** Fixed: the fixture gives `observed: True`, `ci95_lower:
+False`, `ci95_upper: True` — two distinct verdicts across three readings, not three. Reworded both
+docstrings (`test_a_constant_hypothesis_on_ci95_lower_is_superiority` and
+`test_a_constant_hypothesis_on_observed_disagrees_with_its_own_bounds`) to say what is actually true
+— `ci95_lower` is the odd one out, `observed` and `ci95_upper` agree.
+
+**Mutation evidence for the `_is_counted` pin (backup → mutate → red → restore → green, confirmed by
+re-running, never by `git status`):** dropped `_is_counted(hyp, obs) and ` from the `elif` guard in
+`hypotheses.evaluate` → `test_an_exploratory_constant_hypothesis_is_unaffected_by_corrected_unavailable`
+and `test_a_reported_summary_hypothesis_is_unaffected_by_corrected_unavailable` both failed (46/48
+passed — each caught the injected `ci95_corrected: null` key) → restored → 48/48 green.
+
+**Verification:** `uv run pytest tests/test_hypotheses.py tests/test_validate.py` (859 passed),
+`tests/test_cli.py -k hypothes` (8 passed); `uv run ruff check .` (all checks passed);
+`uv run ruff format --check .` (101 files formatted); `uv run mypy` (no issues, 56 files).
+
+**Concerns:** none new. The spec-defects entry restates fix round 1's own concern in the file's
+permanent-record form, so future readers see it without depending on this SDD report surviving.

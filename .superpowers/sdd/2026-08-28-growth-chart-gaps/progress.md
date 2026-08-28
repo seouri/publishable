@@ -181,3 +181,14 @@ names a `by_key` collision pin but never calls `evaluate` or builds a member, an
 assertion is implied by `== "const:1"` in the same test.
 Task 9: minor (deferred): `test_a_compare_to_constant_with_a_numeric_value_is_not_flagged` asserts
 only absences — it can fail, but it should be paired with something that must report.
+Task 9: fix round 1/5 (4 addressed, 1 open + 1 new — two residual doc homes for the corrected-bound
+promise, and a surviving mutant on the new guard's `_is_counted` conjunct; commits 80a4c37..6e96655)
+
+Ruling: **the `corrected_unavailable=True` fallback is accepted over building a `Member`.** The
+feature is now honest — counted, and openly uncorrectable under a declared method — rather than
+counted-and-silently-uncorrected. The reviewer confirmed the direction of error is conservative
+(tighter, never over-support) and that `_level_for` already returns `None` under `fdr_bh` for every
+member of every family, so the honest-null state is precedented rather than minted here. Building a
+`Member` from the condition's own resample pool is real statistical work and the charter was to
+close a gap, not to add statistics. Costs if wrong: a bound test on a constant reference is
+unusable under `holm`, and the motivating E2/E6 claims stay on the `Estimate` route.

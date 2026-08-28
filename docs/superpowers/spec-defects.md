@@ -6570,3 +6570,46 @@ records applies against it.
 
 **Why open.** The charter is complete and no slice follows, so this is what the project ships with:
 a multiplicity family that crosses runs is a prose commitment, exactly as it was before the tool.
+
+## OPEN — a `compare: {to: constant}` hypothesis's bound test is never answerable under a declared correction method — **Owner: unassigned, and no slice follows**
+
+**Found by:** review of Task 9 (`compare: {to: constant, value: N}`, the third `compare` form),
+2026-08-28. **Measured against commit `6e96655`** by calling `hypotheses.evaluate` directly under
+`holm`, `bonferroni` and `none`, not inferred from the code.
+
+Every other counted hypothesis — a `vs_baseline` comparison or a declared contrast — gets a
+correctable `correction.Member` built for it in `cli.py`, so a real correction method can rebuild its
+bound at the family's own level. A `compare: {to: constant}` observation gets none: `hypotheses.py`
+reads the metric's own value straight out of `results.conditions[i].aggregated`, and no `Member` is
+ever constructed from that per-condition value at all. Under `correction: none` this is invisible —
+nothing is corrected for anyone in the family, constant-referenced or not, and every entry's
+`observed` carries no `ci95_corrected` key. Under a real method, `hypotheses.evaluate` routes a
+counted constant hypothesis through the same `corrected_unavailable` path a too-thin family uses:
+`ci95_corrected: null` and `supported: null` for any `evaluate_on: ci95_lower`/`ci95_upper` verdict,
+regardless of how wide or narrow the raw interval actually is. `evaluate_on: observed` is unaffected
+— correction only ever tightens a bound, never the point estimate — so it stays the one usable form
+for a constant-referenced hypothesis under a declared correction method.
+
+**The honest precedent.** This is not a novel failure mode: `correction.py`'s `_level_for` already
+returns `None` under `correction: fdr_bh` for every member of every family, by construction —
+Benjamini-Hochberg implies no per-comparison level at all — and `_tested_number` already refuses to
+paper over that with the raw bound. The constant form's gap is the same honest refusal applied to a
+case where the reason is "no evidence to rebuild from" rather than "no per-comparison level exists,"
+and it was the sanctioned fallback (`docs/superpowers/sdd/2026-08-28-growth-chart-gaps/task-9-report.md`,
+fix round 1) against the alternative — silently deciding on the raw, uncorrected bound while still
+claiming family membership, which inflates every other member's Holm level for free and is strictly
+worse.
+
+**Proposed resolution, and its cost.** Build a real `Member` for the constant form, from the same
+resample pool a condition's own `t_over_units`/`percentile_of_derived` bound is built from. That pool
+does not survive past `stats.summarize_step` today — only the resulting `ci95` reaches `aggregated`
+— so the fix is not local to `hypotheses.py`: it means plumbing raw per-unit values or resample draws
+through to `cli.py`'s hypothesis-evaluation phase for a per-condition metric, the same shape of
+change `E-DATA-WEIGHT-CONTRAST`'s weighted-Welch gap and the cross-run correction-family entry above
+both describe as real but not free.
+
+**Why open.** The charter is complete and no slice follows, so this is what the project ships with:
+under a declared correction method, a `compare: {to: constant}` hypothesis's bound test is never
+answerable and comes back `supported: null`; only `evaluate_on: observed` is usable there. Under
+`correction: none` the bound test works fine on the raw interval, exactly as it does for every other
+form.

@@ -3626,11 +3626,13 @@ appears by exactly two routes: the observation does not resolve — the step tha
 the metric failed, or every unit on one side of a comparison was ineligible — or the verdict asks
 for a bound (`evaluate_on: ci95_lower` or `ci95_upper`) against a bound that isn't there: the raw
 `ci95`, or — for a hypothesis whose family is corrected — the corrected bound at the level this
-family implies, which can be `null` for two unrelated reasons: a family too large for the resample's
+family implies, which can be `null` for three unrelated reasons: a family too large for the resample's
 draws to support ([`W-STATS-CORRECTED-THIN`](#warnings-core-reports)) leaves it unmet beside a raw
-interval that is perfectly fine, and `correction: fdr_bh` leaves it unmet by construction — Benjamini-
+interval that is perfectly fine, `correction: fdr_bh` leaves it unmet by construction — Benjamini-
 Hochberg implies no per-comparison level at all, so there is no bound to build regardless of sample
-size. The shape of `observed` is how a reader tells the two routes apart: the first writes `observed:
+size — and a [`compare: {to: constant}`](#what-a-hypothesis-is-tested-against) observation leaves it
+unmet because core builds no correctable `Member` for a condition's own value at all, whatever the
+sample size. The shape of `observed` is how a reader tells the two routes apart: the first writes `observed:
 null` — there
 is no block, because nothing was found to report — and the second writes a real `observed` block
 whose `ci95` (or `ci95_corrected`) is the `null` field.
@@ -3737,7 +3739,7 @@ Two rules core enforces. A hypothesis evaluating on a bound needs a metric that 
 
 **A hypothesis is one quantity against one threshold**, which is what makes it evaluable at all. A claim about the *shape* of a series — monotonic across doses, trending across ordered strata, flattening over a curve — has no single quantity to threshold, so it is a summary-step estimator returning an `Estimate` rather than a hypothesis. Declaring the shape claim as several adjacent hypotheses is available and rarely what you want: it tests each step of the series separately and corrects for all of them, which is a different claim from the one about the series.
 
-Which corrected interval a bound test uses follows the family rules unchanged — `report` shows both, and a confirmatory gate reads the corrected one when a correction is declared.
+Which corrected interval a bound test uses follows the family rules unchanged for a baseline comparison or a declared contrast — `report` shows both, and a confirmatory gate reads the corrected one when a correction is declared. A [`compare: {to: constant}`](#what-a-hypothesis-is-tested-against) observation is the standing exception to "unchanged": core builds no correctable `Member` for it, so under a real correction method there is no corrected interval to read at all, and a bound-evaluated gate comes back `supported: null` rather than a decision on either interval.
 
 ### A hypothesis may name a summary metric
 
