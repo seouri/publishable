@@ -213,3 +213,25 @@ both parked findings triaged as STANDS; one was already fixed at HEAD.
 Whole-branch: minor (deferred): `_group_axes_already_erred`'s three defensive skips
 (`validate.py` ~4245-4275) have no test — direction of error is safe (more warnings, not fewer), and
 `expand` raises first on a malformed `sweep`, verified by probe, so the branch is unreachable.
+
+Whole-branch fix wave 1 (6d99a88..1fbfd32): NOT ADDRESSED, and it introduced a blocking regression.
+
+Ruling: **a second fix wave is authorized, against the skill's "there is no second fix wave"
+guidance.** That guidance governs RESIDUAL findings — things the wave failed to fix. This wave
+introduced a new correctness bug: `verdict_for` subtracts `compare.value` gated only on
+`compare["to"] == "constant"`, never on which branch `resolve` took, so a contrast-resolved
+observation now has the constant subtracted from it. Measured through `evaluate()`: a contrast delta
+of 0.04 against `threshold: 0.0, direction: greater` emits `observed: {delta: 0.04, ci95: [0.01,
+0.07]}` and `supported: false` — every number in the record clears the threshold and the verdict
+says otherwise, decided on a −0.46 that appears nowhere. Pre-fix the record was
+coherent-but-incomplete; post-fix it is self-contradictory, and since
+`E-HYPOTHESIS-COMPARE-VALUE` requires a numeric `value`, every writable instance of the pairing is
+corrupted. Shipping that is not a residual-finding call. Costs if wrong: one more round.
+
+Ruling: **the refusal is taken over "contrast wins".** The implementer's symmetry argument is
+falsified: `to: baseline` has no consumer outside `resolve` and is a validate gate only, while
+`to: constant` carries a payload with a SECOND consumer in `verdict_for` — so the two pairings are
+not the same shape and refusing one leaves no identical fault legal under the other. Refusal is also
+the smaller change: keeping "contrast wins" additionally requires gating the subtraction, and then
+re-justifying a code that demands a number nobody reads, which is this repo's *parameter wired to a
+constant* row. Costs if wrong: a combination someone wanted is refused rather than resolved.

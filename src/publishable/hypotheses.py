@@ -75,14 +75,18 @@ def resolve(
     constant-referenced hypothesis on its own value, and the two must never
     collide in `by_key`.
 
-    **`contrast` wins over everything else `compare` also names.** Checked
-    first, ahead of both `to: constant` and the baseline/condition fallback:
-    `{contrast: x, to: constant, value: 0.5}` and `{contrast: x, condition: y}`
-    both resolve through the contrast, and every other key `compare` carries is
-    read no further. One precedence rule for the whole field rather than one
-    per pair of forms, and it is why the constant branch sits below this one
-    rather than above it — the reverse order silently discarded a declared
-    `contrast` and computed the verdict against the constant instead.
+    **`to: constant` and `contrast` never coexist in a valid config.**
+    `validate` refuses the combination (`E-HYPOTHESIS-COMPARE-TO`), because
+    `to: constant` carries a second consumer beyond this resolver —
+    `verdict_for` subtracts `compare.value` from the tested number whenever
+    `compare["to"] == "constant"`, with no way to know from the entry alone
+    whether the observation it is decided on came from the constant branch or
+    from a contrast. Gating that subtraction on `"contrast" not in compare`
+    was considered and rejected: it would keep a code that demands a numeric
+    `value` nobody ever reads once a `contrast` is also declared. `condition`
+    beside `to: constant` is unaffected and stays legitimate — it names which
+    condition's own value is meant, and is not a second comparison target the
+    way `contrast` is.
     """
     step, _, metric = str(hyp.get("metric", "")).partition(".")
     compare = hyp.get("compare")
@@ -97,33 +101,17 @@ def resolve(
             rests_on="reported",
         )
 
-    # `contrast` wins whenever it is declared, over `to: constant` exactly as
-    # it already did over `to: baseline`/bare `condition` (the precedent
-    # `validate.py`'s own comment above the baseline-need exclusion states):
-    # `{contrast: x, to: constant, value: 0.5, condition: y}` resolves through
-    # the contrast, and `condition`/`value` are read no further, the same way
-    # `{contrast: x, condition: y}` already resolves through the contrast and
-    # needs no baseline at all. Checked FIRST, ahead of `to: constant`, is
-    # what makes this true — the reverse order (constant-branch first) is a
-    # real fault review caught: a declared contrast was silently discarded
-    # and the verdict computed against the constant instead, with nothing in
-    # `run.yaml` to say the contrast was never read.
-    if "contrast" in compare:
-        cid = str(compare["contrast"])
-        found = None
-        for entry in contrasts or []:
-            if entry.get("id") == cid:
-                step_block = entry.get(step)
-                found = step_block.get(metric) if isinstance(step_block, dict) else None
-                break
-        return Observation(
-            where=f"contrast:{cid}",
-            step=step,
-            metric=metric,
-            block=found if isinstance(found, dict) else None,
-            rests_on="computed",
-        )
-
+    # `to: constant` is checked before `contrast`: `validate` refuses the two
+    # declared together (`E-HYPOTHESIS-COMPARE-TO`), so which of these two
+    # branches runs first is only ever observable on a config `validate`
+    # already rejects — but `verdict_for` reads `compare["to"] == "constant"`
+    # on its own, with no way to tell from an `Observation` alone which
+    # branch produced it, so this order and that refusal have to agree, and
+    # this is the one that does: making `contrast` win here (an earlier
+    # version of this fix) left `verdict_for` still subtracting `value` from
+    # a contrast-resolved delta, producing a self-contradictory record —
+    # every raw number clearing the threshold while `supported` read `false`,
+    # decided on a shifted number nowhere in `run.yaml`.
     if compare.get("to") == "constant":
         if "condition" in compare:
             index = label_to_index.get(str(compare.get("condition")))
@@ -137,6 +125,22 @@ def resolve(
         found = (aggregated or {}).get(index, {}).get(step, {}).get(metric)
         return Observation(
             where=f"const:{index}",
+            step=step,
+            metric=metric,
+            block=found if isinstance(found, dict) else None,
+            rests_on="computed",
+        )
+
+    if "contrast" in compare:
+        cid = str(compare["contrast"])
+        found = None
+        for entry in contrasts or []:
+            if entry.get("id") == cid:
+                step_block = entry.get(step)
+                found = step_block.get(metric) if isinstance(step_block, dict) else None
+                break
+        return Observation(
+            where=f"contrast:{cid}",
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
@@ -408,13 +412,14 @@ def evaluate(
                 corrected_unavailable = True
             p_value_corrected = corrected.get("p_value_corrected")
         elif _is_counted(hyp, obs) and method != "none" and key not in by_key:
-            # A counted hypothesis with no matching `Member` — today, only a
-            # `compare: {to: constant}` observation, since core builds one for
-            # every `vs_baseline`/contrast comparison but none for a constant
-            # reference. Under a real correction method this hypothesis is
-            # still IN the family (`family_size` counts it, per Decision 2's
-            # whole point) but there is no evidence here to rebuild a bound
-            # from at this family's level — the same honest gap
+            # A counted hypothesis with no matching `Member` — a
+            # `compare: {to: constant}` observation without a declared
+            # `contrast` (`validate` refuses declaring both), since core
+            # builds one for every `vs_baseline`/contrast comparison but none
+            # for a constant reference. Under a real correction method this
+            # hypothesis is still IN the family (`family_size` counts it, per
+            # Decision 2's whole point) but there is no evidence here to
+            # rebuild a bound from at this family's level — the same honest gap
             # `W-STATS-CORRECTED-THIN` reports for a family too large for its
             # resample's draws, read through the same `corrected_unavailable`
             # path rather than a silent fall-back to the raw, uncorrected

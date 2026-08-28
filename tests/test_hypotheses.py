@@ -100,20 +100,25 @@ def test_a_contrast_hypothesis_reads_the_entry_it_names_not_the_first():
     assert got.block == {"delta": -0.11, "ci95": [-0.19, -0.03]}
 
 
-def test_a_contrast_wins_over_a_declared_constant_and_condition():
-    """The whole-branch review's finding: `resolve` used to test `to ==
-    "constant"` before it tested `"contrast" in compare`, so a hypothesis
-    declaring all three — `{to: constant, value: 0.5, contrast: "sensitivity",
-    condition: "method=spearman"}` — silently resolved against the named
-    condition's own value and the declared contrast was never read. `contrast`
-    must win here exactly as it already does over a bare `{condition: X}` or
-    `to: baseline` (`test_a_contrast_hypothesis_reads_that_contrast_entry`'s
-    own precedent) — one precedence rule for the whole field, not a special
-    case for one pairing of forms."""
+def test_a_constant_and_contrast_together_resolves_through_the_constant():
+    """`validate` refuses `{to: constant, contrast: x}` together
+    (`E-HYPOTHESIS-COMPARE-TO`) precisely because `resolve` cannot honour both
+    faithfully — `verdict_for` subtracts `compare.value` from the tested
+    number whenever `compare["to"] == "constant"`, with no way to tell from
+    the resulting `Observation` which branch produced it. So `resolve`, on a
+    config `validate` would already have refused, checks `to: constant`
+    first — an earlier fix made `contrast` win instead, which left
+    `verdict_for` still subtracting `value` from the contrast's own delta and
+    produced a self-contradictory record. This test exists to keep `resolve`
+    and `verdict_for` in agreement about which branch decided the verdict;
+    see `test_a_constant_and_contrast_together_is_refused` (validate.py) for
+    the config-level half, and
+    `test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value`
+    below for the verdict-level half."""
     got = _resolve(
         {
             "id": "h",
-            "metric": "step03_screen.auroc",
+            "metric": "step03_analyze.r",
             "compare": {
                 "to": "constant",
                 "value": 0.5,
@@ -122,9 +127,60 @@ def test_a_contrast_wins_over_a_declared_constant_and_condition():
             },
         }
     )
-    assert got.where == "contrast:sensitivity"
-    assert got.block == {"delta": 0.04, "ci95": [0.01, 0.07]}
+    assert got.where == "const:1"
+    assert got.block == {"value": 0.44, "ci95": [0.35, 0.53]}
     assert got.rests_on == "computed"
+
+
+def test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value():
+    """The verdict-level half of the whole-branch review's finding, run
+    through `evaluate` end to end rather than `resolve` alone — the shape
+    that actually surfaced the bug, since `resolve` and `verdict_for` are
+    two different functions that have to agree about which branch decided
+    the verdict.
+
+    `validate` refuses `{to: constant, contrast: x}` together, so this
+    config never reaches a real run — but a unit test calling `evaluate`
+    directly bypasses that gate, which is exactly how the earlier "contrast
+    wins" fix passed every test that used only `resolve`: `verdict_for`
+    subtracts `compare.value` from the tested number whenever
+    `compare["to"] == "constant"`, with no branch information at all, so if
+    `resolve` had returned the CONTRAST's delta (0.04) here, the verdict
+    would be decided on `0.04 - 0.5 = -0.46` — `supported: false` — while
+    `observed` still showed the contrast's real delta of `0.04`, which on its
+    own face clears a `threshold: 0.0` in the `greater` direction. That
+    self-contradictory record (every written number says "supported", the
+    verdict says otherwise, and the number it actually rested on appears
+    nowhere) is what this test exists to catch. With `resolve` correctly
+    checking `to: constant` first, the verdict is decided on the SAME number
+    `observed` shows (the condition's own AUROC, 0.62 — not the contrast's
+    0.04), and 0.62 - 0.5 = 0.12 is consistently `> 0.0`."""
+    hyp = {
+        "id": "h",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5, "contrast": "sensitivity"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[{"id": "sensitivity", "step03_screen": {"auroc": {"delta": 0.04}}}],
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[],
+        method="none",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    # The number `observed` shows must be the SAME number the verdict was
+    # decided on (minus the declared constant) -- never a different block's
+    # number entirely, which is what a self-contradictory record would show.
+    assert got["observed"]["value"] == 0.62
+    assert "delta" not in got["observed"]  # the contrast's block, never read
+    assert got["supported"] is True  # 0.62 - 0.5 = 0.12 > 0.0
 
 
 def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():

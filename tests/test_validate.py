@@ -6497,6 +6497,42 @@ def test_a_compare_to_constant_with_a_non_numeric_value_is_refused(write_config_
     assert "E-HYPOTHESIS-COMPARE-VALUE" in found
 
 
+def test_a_constant_and_contrast_together_is_refused(write_config_two_scopes):
+    """The whole-branch review's finding: `to: constant` carries a second
+    consumer beyond `resolve` — `hypotheses.verdict_for` subtracts
+    `compare.value` from the tested number whenever `compare["to"] ==
+    "constant"`, regardless of which branch actually produced the
+    observation. Declaring `contrast` alongside it names two comparison
+    targets where only one is ever made, and whichever branch `resolve`
+    takes, the record ends up either missing the contrast entirely or
+    self-contradictory (the contrast's own delta shown as `observed`, the
+    verdict decided on that delta minus the constant). `condition` beside
+    `to: constant` is a different, legitimate combination — this refusal must
+    not fire for it, which
+    `test_a_compare_to_constant_with_a_numeric_value_is_not_flagged` covers."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "x", "of": "method=spearman", "against": "baseline"}]
+                },
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"to": "constant", "value": 0.5, "contrast": "x"},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-COMPARE-TO" in found
+
+
 def test_a_summary_metric_compared_to_a_constant_is_still_form_refused(write_config_two_scopes):
     """`to: constant` does not exempt a `scope: summary` metric from
     `E-HYPOTHESIS-FORM`: a summary metric is one value per run and takes no

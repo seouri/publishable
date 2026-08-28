@@ -232,3 +232,71 @@ symptom (`AssertionError: assert 'const:1' == 'contrast:sensitivity'`) → resto
 files).
 
 **Concerns:** none new.
+
+---
+
+## Fix wave 2 — round 3's fix was itself wrong, corrected
+
+**Status:** done.
+
+**What was wrong.** Round 3's "contrast wins" reorder moved the silent discard from `contrast` to
+`compare.value`: `verdict_for` subtracts `compare.value` from the tested number gated only on
+`compare["to"] == "constant"`, with no awareness of which branch `resolve` took. So a
+contrast-resolved observation under `{to: constant, value, contrast}` got the constant subtracted
+from its delta anyway, producing a self-contradictory record (confirmed at HEAD: `observed:
+{delta: 0.04}`, which clears `threshold: 0.0` in the `greater` direction, alongside `supported:
+false`, decided on the invisible `0.04 - 0.5 = -0.46`). Round 3's one new test never called
+`verdict_for`, so it never saw this.
+
+**Code reused: `E-HYPOTHESIS-COMPARE-TO`, no new code minted.** Per Ruling 1: `to: baseline` has no
+consumer outside `resolve`, so `{contrast, condition}` staying legal with contrast winning is clean —
+nothing downstream reads the discarded side. `to: constant` is different: it has a second consumer
+(`verdict_for`), so the two pairings are not the same shape and refusing one does not leave an
+identical fault legal under the other. Reused the existing code because its own message already names
+exactly this shape — "a comparison that will never be made and is silently evaluated ... instead" —
+so no new identifier was needed, only a new firing condition (`compare_to == "constant" and
+"contrast" in compare`) and a tailored message.
+
+**Work done:**
+1. Reverted `resolve()` to the pre-round-3 ordering (`to: constant` checked before `contrast`),
+   confirmed by running the reverted file and observing `where='const:1'` for the reviewer's fixture
+   before the refusal existed to stop it.
+2. Added the refusal at `validate.py` (`E-HYPOTHESIS-COMPARE-TO`, new branch alongside the existing
+   value-enum check). `condition` beside `to: constant` is untouched and stays legal, per Ruling 1's
+   explicit carve-out.
+3. Removed the three false claims, by deletion rather than rewrite where the sentence was purely
+   false, and rewrote where deletion would have left a dangling non-sequitur: `reference.md`'s
+   "both resolve through the contrast, with the other keys read no further" sentence (deleted
+   outright); `resolve`'s docstring paragraph "every other key `compare` carries is read no further"
+   (replaced — the surrounding docstring needed to state the new invariant, not just remove the old
+   one, so a bare deletion would have left `resolve` undocumented on this point); `_check_hypotheses`'s
+   docstring "so `value` and `condition` are read no further" (replaced, same reason); the
+   `implies_baseline` inline comment's claim about both forms resolving through the contrast (fixed);
+   `evaluate()`'s "today, only a `compare: {to: constant}` observation" comment (tightened to name the
+   refusal explicitly). Swept `docs/reference.md`, `design-principles.md`, `experimental-designs.md`,
+   `README.md`, `CLAUDE.md`, the feasibility file, and both `.py` files for `read no further|resolve
+   through the contrast|contrast.*wins|wins over` (normalized newlines with `tr` first) — no further
+   homes found.
+4. Pinned both levels: `test_a_constant_and_contrast_together_is_refused` (validate.py, the config-level
+   refusal) and `test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value`
+   (hypotheses.py, run through `evaluate()` end to end — the level round 3's test missed). Also
+   rewrote round 3's now-obsolete `resolve`-only test as
+   `test_a_constant_and_contrast_together_resolves_through_the_constant`, asserting the restored
+   ordering directly.
+
+**Mutation evidence (backup → mutate → red → restore → re-run to confirm green, never `git status`):**
+- Neutered the new validate check (`if False and compare_to == "constant" ...`) →
+  `test_a_constant_and_contrast_together_is_refused` failed (`E-HYPOTHESIS-COMPARE-TO` absent, only
+  `W-HYPOTHESIS-INFERENCE-BASE` reported) → restored → 13/13 `constant`-tagged tests green.
+- Reintroduced the "contrast wins" reorder in `resolve()` → both
+  `test_a_constant_and_contrast_together_resolves_through_the_constant` and
+  `test_a_constant_and_contrast_together_is_never_shifted_by_the_others_value` failed — the second
+  reproducing the exact self-contradiction verbatim (`{'observed': {'delta': 0.04}, ...,
+  'supported': False}`, printed directly from the mutated code) → restored → 50/50 green.
+
+**Verification:** `uv run pytest tests/test_hypotheses.py tests/test_validate.py` (862 passed),
+`tests/test_cli.py -k hypothes` (8 passed); `uv run ruff check .` (all checks passed, after one
+line-length fix); `uv run ruff format --check .` (101 files formatted); `uv run mypy` (no issues,
+56 files).
+
+**Concerns:** none new.

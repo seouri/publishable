@@ -5748,18 +5748,26 @@ def _check_hypotheses(
     ask and nothing in the record reveals the substitution.
     `E-HYPOTHESIS-COMPARE-TO`.
 
-    **`contrast` wins over `to: constant`, the same precedence `resolve` already
-    gives it over `to: baseline`/bare `condition`.** `{contrast: x, to:
-    constant, value: 0.5}` resolves through the contrast — `hypotheses.resolve`
-    checks `"contrast" in compare` before it checks `to` at all — so `value`
-    and `condition` are read no further. This is a real fault review caught,
-    the reverse order having silently discarded a declared contrast and
-    computed the verdict against the constant instead, with nothing in
-    `run.yaml` to say so — the same shape `E-HYPOTHESIS-COMPARE-TO`'s own
-    message names ("a comparison that will never be made and is silently
-    evaluated ... instead"). Left legal rather than refused, on the same
-    grounds `{contrast: x, condition: y}` already is: one precedence rule for
-    the whole field, not a special refusal for one pairing of forms.
+    **`to: constant` and `contrast` are refused together, unlike `condition`
+    beside either.** `{contrast: x, condition: y}` stays legal — `condition`
+    carries no second consumer, `hypotheses.resolve` reads it only to pick a
+    baseline comparison the contrast branch pre-empts, so nothing is silently
+    miscomputed. `to: constant` is different: `verdict_for` subtracts
+    `compare.value` from the tested number whenever `compare["to"] ==
+    "constant"`, regardless of which branch `resolve` took to get there — so
+    a contrast-resolved delta declared alongside `to: constant` would have
+    the constant silently subtracted from it, producing a record where every
+    raw number clears the declared threshold and `supported` reads the
+    opposite, decided on a shifted number `run.yaml` never shows. An earlier
+    fix tried "contrast wins" (the same precedence `resolve` already gives it
+    over bare `condition`) and only moved the silent discard from the
+    contrast to `value` — `verdict_for` has no way to tell, from an
+    `Observation` alone, which branch produced it. Refusing the combination
+    is the smaller change and the only one that keeps `verdict_for`'s
+    unconditional subtraction correct. `E-HYPOTHESIS-COMPARE-TO`, reused
+    rather than a new code: its own message already names exactly this shape
+    — "a comparison that will never be made and is silently evaluated ...
+    instead."
 
     **`compare.value` is required, and numeric, exactly when `to: constant`.**
     `hypotheses.verdict_for` reads it as the fixed reference and subtracts it
@@ -5993,6 +6001,21 @@ def _check_hypotheses(
                         "against the metric's raw value instead of the declared reference, "
                         "with nothing in the record saying the constant was never applied",
                     )
+            if compare_to == "constant" and "contrast" in compare:
+                c.error(
+                    "E-HYPOTHESIS-COMPARE-TO",
+                    f"hypotheses[{i}].compare",
+                    "declares `to: constant` and `contrast` together — two comparison "
+                    "targets for one hypothesis, and only one is ever made: "
+                    "`hypotheses.resolve` reads `to: constant` first, so the declared "
+                    "contrast is never read, and `hypotheses.verdict_for` subtracts "
+                    "`value` from the tested number regardless of which branch produced "
+                    "it — a comparison that will never be made and is silently evaluated "
+                    "against the constant instead. `condition` may still be given "
+                    "alongside `to: constant`, which is a different combination and "
+                    "stays legal; delete `to`/`value` for a contrast comparison, or "
+                    "delete `contrast` for a constant one",
+                )
             # `to: baseline` is the ordinary spelling, but `hypotheses.resolve`
             # reads `compare.condition` as a baseline comparison whether or not
             # `to` says so — so a bare `{condition: X}` implies the same
@@ -6003,13 +6026,13 @@ def _check_hypotheses(
             # condition and nothing to compare it against.
             #
             # Excludes `contrast in compare`: `resolve` checks `"contrast" in
-            # compare` first — ahead of `to: constant` too, not only the
-            # baseline/condition fallback — and returns from that branch
-            # without ever reading `condition`, `to` or `value` again. So
-            # `{contrast: x, condition: y}` and `{contrast: x, to: constant,
-            # value: 0.5}` both resolve through the contrast, neither needs a
-            # baseline, and neither is refused for a comparison it was never
-            # going to make.
+            # compare` first and returns from that branch without ever reading
+            # `condition` — so `{contrast: x, condition: y}` resolves through the
+            # contrast, not the baseline, and needs no baseline at all. Without
+            # this exclusion, a hypothesis that names both would be refused for a
+            # comparison it was never going to make. `to: constant` alongside
+            # `contrast` is a different case, refused outright above rather
+            # than given a precedence — see `E-HYPOTHESIS-COMPARE-TO`.
             implies_baseline = compare.get("to") == "baseline" or (
                 "condition" in compare and "to" not in compare and "contrast" not in compare
             )
