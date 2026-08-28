@@ -2,7 +2,7 @@
 
 **Status:** Complete.
 
-**Commit:** (this task's commit — see below; branch tip before it was `6bac09a`)
+**Commit:** `0553056` (branch tip before it was `6bac09a`)
 
 **Whole-branch re-run.** `uv run pytest -q`: 3524 passed, 1 skipped, 2 xfailed (up 39 passed from the
 3485-baseline before the slice; no failures). `uv run ruff check .`: all checks passed. `uv run ruff
