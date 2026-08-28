@@ -245,3 +245,8 @@ paragraph that has now been false four times, with the corrected text already wr
 reviewer, and the other is a ruled carve-out whose docstring cites a test that does not cover it.
 Shipping a knowingly false claim to save a one-line round is the trade this repo's whole misreadings
 list argues against. Costs if wrong: one more small round on prose.
+Whole-branch fix wave 3 (debb5e2..d189f7f): all three addressed, each mutation-proven, including a
+widen-the-refusal mutant that reddens the newly-added carve-out assertion.
+
+SLICE COMPLETE. Final verification at d189f7f: 3527 passed, 1 skipped, 2 xfailed (baseline 3485);
+ruff, ruff format and mypy clean; all fifteen measurement configs validate 13 clean / 2 warning.
