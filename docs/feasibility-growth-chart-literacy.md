@@ -11,6 +11,7 @@ This document is non-normative and carries its own examples. It is **not** part 
 - [What the plan hand-rolls, and what core already owns](#what-the-plan-hand-rolls-and-what-core-already-owns)
 - [One repository, fifteen configs](#one-repository-fifteen-configs)
 - [Where the shared machinery lives](#where-the-shared-machinery-lives)
+- [The stimulus arm has to be constructed somewhere](#the-stimulus-arm-has-to-be-constructed-somewhere)
 - [LLM API access](#llm-api-access)
 - [Prompt templates, and why they are code](#prompt-templates-and-why-they-are-code)
 - [Two templates, because there are two experiment types](#two-templates-because-there-are-two-experiment-types)
@@ -59,9 +60,11 @@ growth-chart-literacy/                    # the experiment repository
 │   └── growth_chart/                     # ONE package, two pipelines
 │       ├── experiment.py                 # ScreenExperiment, LabelExperiment
 │       ├── prompts/                      # screen_v1.md, screen_v1_cot.md, arith_probe_v1.md
+│       ├── construct.py                   # the stimulus arm, applied to a trajectory
 │       ├── serialize.py                  # the nine E3 serializations
 │       └── steps/
 │           ├── step01_summarize_units.py     scope = "run"
+│           ├── step02_construct.py           scope = "condition"   ← the swept stimulus
 │           ├── step02_serialize.py           scope = "condition"
 │           ├── step03_screen.py              scope = "repeat"      ← the metered step
 │           ├── step04_compare.py             scope = "summary"
@@ -127,6 +130,35 @@ publishable-growth-chart/
 **The line between the plugin and `src/` is where a number comes from.** The plugin holds transport and observation: how a request is issued, retried and timed, and what the deployment says its own revision is. `src/growth_chart/` holds everything that decides an answer: the serializer, the prompts, the parser that turns a response into `growth_issues`, and the scoring. That line is not aesthetic — `code_hash` covers `src/**` and `templates/**` and does not cover an installed dependency, which `uv.lock` pins instead. A serializer inside the plugin would be a piece of code producing the numbers that no `code_hash` covered; a retry policy inside `src/` would move the run identity every time a backoff was tuned.
 
 **`.transcript.jsonl` is a writer claim, not a core suffix.** `io.write` dispatches on the [longest suffix](reference.md#the-importable-surface) a writer registers or an installed distribution claims, and winning requires being strictly longer — so `.transcript.jsonl` beats core's `.jsonl` while nothing can take `.jsonl` itself away from core. That is how the per-request transcript lands beside `units.parquet` in each step directory without any step importing the plugin for a side effect.
+
+---
+
+## The stimulus arm has to be constructed somewhere
+
+`growth_screen` declares four parameters that describe **what trajectory the model is shown** rather than how it is rendered — `stimulus.source`, `stimulus.physiology`, `stimulus.schedule` and `stimulus.crossing_channels` — and six of the fifteen configs sweep one or both of the middle two as *the axis under test*: [E4b](#e4b--the-physiology-preserving-counterfactual), [E5a](#e5a--the-schedule-density-ladder), [E5b](#e5b--the-flat-curve-negative-control), [E7](#e7--the-2--2-synthesis), [E9](#e9--age-dependent-norm-application) and [E10](#e10--cross-model-generalization).
+
+**Declaring them is not enough, and the failure mode if nothing reads them is silent.** A parameter that no step reads still validates, still expands the sweep, still labels the condition directories and still appears in `parameters_hash` — and every condition renders the identical trajectory. The run completes, the metrics compute, and the measured effect of the manipulation is approximately zero because the manipulation never happened. That is the shape `CLAUDE.md` names *an unread parameter is an unbuilt reader of a shipped surface*, and it produces a confident null rather than an error.
+
+So the construction is its own **`condition`-scoped step**, `step02_construct`, sitting between the roster summary and the serializer:
+
+```
+step01_summarize_units (run)  →  step02_construct (condition)  →  step02_serialize (condition)
+     visits.json                     visits.json                      prompts.json
+     truth.json                      truth.json
+     features.json
+```
+
+Three decisions in that shape, each with a reason:
+
+- **`condition` scope, because the stimulus *is* the condition.** The arm is what the sweep varies, so the trajectory differs across conditions and is identical across the repeats within one — a repeat is the deployment's nondeterminism, not the stimulus's. Constructing at `repeat` scope would rebuild the same trajectory five times and invite it to differ between them.
+- **It publishes truth as well as visits**, which is the reason it is a step and not a helper inside the serializer. E4b sweeps physiology across two conditions on **one** real visit scaffold, so a unit is negative in the healthy arm and positive in the concerning one; `step01`'s `run`-scoped `truth.json` can hold only one answer per unit. A per-condition label has to come from something that executes per condition.
+- **`source: observed` is a pass-through, not a skip.** Every downstream step reads `step02_construct` under every config, rather than branching on whether an arm was declared. A branch there would be a second reading of the same parameter, and two readings of one parameter eventually disagree.
+
+**The two knobs apply independently, and `source` gates neither.** E7 and E10 sweep `physiology` while also fixing `schedule`, so a design where `source` selected which single knob applied would leave the other unread again — the original defect, one layer down. `schedule` decides *when* the visits happen (`as_recorded` keeps the real ages; a density resamples the same observation window), `physiology` decides *what the curve does* over them, and `source` says only whether construction happens at all and that the label is now by construction.
+
+**Determinism comes from the unit key, never from `self.rng`.** A synthetic trajectory must be identical across a condition's repeats and across a `reproduce` of the whole study, so the per-unit offset is a SHA-256 of the key rather than a draw — Python salts `hash()` per process, which would make a trajectory differ between a run and its reproduction, the one thing a fixed stimulus may never do.
+
+**What the arms are not.** The z-scores and percentiles the constructor emits are exact — a percentile is the normal CDF of the z it chose — but the kilograms and centimetres are back-derived through a coarse piecewise-linear mean so the rendered table reads like a chart. They are internally consistent across the arms of a comparison, which is all any of these designs rests on. They are **not** a growth standard, and a design that needs real anthropometry needs LMS tables behind `serialize.reference_frame`, which is also why [`who2006` is declarable and refused](#gaps-this-analysis-found-in-the-specification) rather than silently served from CDC columns.
 
 ---
 
@@ -427,8 +459,8 @@ hypotheses:
 |---|---|
 | Units | 200 matched patients from the E1-validated pool |
 | Conditions × repeats | 9 × 5 |
-| Executions | 56 (`dry-run`) — `validate` checks 9 × 5 = 45 against `limits.max_executions: 500` |
-| `dry-run` unit-executions | 11,200 |
+| Executions | 65 (`dry-run`) — `validate` checks 9 × 5 = 45 against `limits.max_executions: 500` |
+| `dry-run` unit-executions | 13,000 |
 | Metered LLM requests | **9,000** = 9 × 5 × 200, matching the plan's own figure |
 | Correction family | 8 baseline comparisons + 2 declared contrasts, × 5 derived metrics |
 
@@ -539,8 +571,8 @@ hypotheses:
 |---|---|
 | Units | 150 patients, three scored calculations each |
 | Conditions × repeats | 2 × 5 |
-| Executions | 14 (`dry-run`) |
-| `dry-run` unit-executions | 2,100 |
+| Executions | 16 (`dry-run`) |
+| `dry-run` unit-executions | 2,400 |
 | Metered LLM requests | **1,500** = 2 × 5 × 150 |
 
 
@@ -647,8 +679,8 @@ hypotheses:
 |---|---|
 | Units | 600 — 300 matched case/control pairs |
 | Conditions × repeats | 2 × 5 |
-| Executions | 14 (`dry-run`) |
-| `dry-run` unit-executions | 4,800 |
+| Executions | 16 (`dry-run`) |
+| `dry-run` unit-executions | 5,400 |
 | Metered LLM requests | **3,000** = 2 × 5 × 300 units per arm |
 
 
@@ -759,8 +791,8 @@ hypotheses:
 |---|---|
 | Units | 250 real visit scaffolds |
 | Conditions × repeats | 2 × 5 |
-| Executions | 14 (`dry-run`) |
-| `dry-run` unit-executions | 3,500 |
+| Executions | 16 (`dry-run`) |
+| `dry-run` unit-executions | 4,000 |
 | Metered LLM requests | **2,500** = 2 × 5 × 250, the plan's 500 trials × k = 5 |
 
 
@@ -866,8 +898,8 @@ hypotheses:
 |---|---|
 | Units | 200 trajectories |
 | Conditions × repeats | 3 × 5 |
-| Executions | 20 (`dry-run`) |
-| `dry-run` unit-executions | 4,000 |
+| Executions | 23 (`dry-run`) |
+| `dry-run` unit-executions | 4,600 |
 | Metered LLM requests | **3,000** = 3 × 5 × 200, the plan's 600 trials × k = 5 |
 
 
@@ -973,8 +1005,8 @@ hypotheses:
 |---|---|
 | Units | 200 synthetic flat trajectories |
 | Conditions × repeats | 2 × 5 |
-| Executions | 14 (`dry-run`) |
-| `dry-run` unit-executions | 2,800 |
+| Executions | 16 (`dry-run`) |
+| `dry-run` unit-executions | 3,200 |
 | Metered LLM requests | **2,000** = 2 × 5 × 200 |
 
 
@@ -1081,8 +1113,8 @@ A contrast is genuinely unavailable here, and it is worth being plain about why:
 |---|---|
 | Units | 300 patients with at least 5 visits |
 | Conditions × repeats | 1 × 5 |
-| Executions | 8 (`dry-run`) |
-| `dry-run` unit-executions | 2,400 |
+| Executions | 9 (`dry-run`) |
+| `dry-run` unit-executions | 2,700 |
 | Metered LLM requests | **1,500** = 1 × 5 × 300 |
 | Warning at `validate` | `W-DATA-CLUSTER-UNDECLARED` on `true_count_band` — see [the gaps](#gaps-this-analysis-found-in-the-specification) |
 
@@ -1181,8 +1213,8 @@ hypotheses:
 |---|---|
 | Units | 300 patients |
 | Conditions × repeats | 2 × 5 |
-| Executions | 14 (`dry-run`) |
-| `dry-run` unit-executions | 4,200 |
+| Executions | 16 (`dry-run`) |
+| `dry-run` unit-executions | 4,800 |
 | Metered LLM requests | **3,000** = 2 × 5 × 300 |
 
 
@@ -1382,8 +1414,8 @@ hypotheses:
 |---|---|
 | Units | 200 of E4b's 250 scaffolds, restricted to those where both density arms are constructible |
 | Conditions × repeats | 4 × 5 |
-| Executions | 26 (`dry-run`) |
-| `dry-run` unit-executions | 5,200 |
+| Executions | 30 (`dry-run`) |
+| `dry-run` unit-executions | 6,000 |
 | Metered LLM requests | **4,000** = 4 × 5 × 200, the plan's own figure |
 | Correction family | 2 baseline comparisons + 3 declared contrasts, × 5 derived metrics |
 
@@ -1516,8 +1548,8 @@ hypotheses:
 |---|---|
 | Units | 300 patients, stratified by visit-count band |
 | Conditions × repeats | 7 × 5 |
-| Executions | 44 (`dry-run`) |
-| `dry-run` unit-executions | 13,200 |
+| Executions | 51 (`dry-run`) |
+| `dry-run` unit-executions | 15,300 |
 | Metered LLM requests | **10,500** = 7 × 5 × 300, the plan's own figure |
 | Warning at `validate` | `W-DATA-CLUSTER-UNDECLARED` on `visit_band` |
 
@@ -1634,8 +1666,8 @@ hypotheses:
 |---|---|
 | Units | 400 synthetic trajectories — 200 infant, 200 child, magnitude matched |
 | Conditions × repeats | 6 × 5 |
-| Executions | 38 (`dry-run`) |
-| `dry-run` unit-executions | 8,000 |
+| Executions | 44 (`dry-run`) |
+| `dry-run` unit-executions | 9,200 |
 | Metered LLM requests | **6,000** = 6 × 5 × 200 units per band |
 
 
@@ -1753,8 +1785,8 @@ hypotheses:
 |---|---|
 | Units | 200 shared scaffolds |
 | Conditions × repeats | 16 × 5 |
-| Executions | 98 (`dry-run`) — `validate` checks 16 × 5 = 80 against `limits.max_executions: 500` |
-| `dry-run` unit-executions | 19,600 |
+| Executions | 114 (`dry-run`) — `validate` checks 16 × 5 = 80 against `limits.max_executions: 500` |
+| `dry-run` unit-executions | 22,800 |
 | Metered LLM requests | **16,000** = 16 × 5 × 200 |
 
 
@@ -1905,6 +1937,10 @@ These are the deliverable's second output: places where a real plan pressed on t
 shipped in `v0.2.0`; the corrected bound described below landed in `v0.2.1` — see
 [§ Executability](#executability-on-this-build).) A claim against a fixed reference — chance for an AUROC, zero for a difference already computed elsewhere, a regulatory floor — no longer has to route through a `summary`-step `Estimate` outside the correction family. The new form is core-computed from the metric's own per-condition value, `verdict_rests_on: computed`, and joins the [hypothesis family](reference.md#pre-registration) like a baseline comparison or a declared contrast, and gets a real corrected bound (`evaluate_on: ci95_lower`/`ci95_upper`) under `holm` or `bonferroni` too, wherever the metric's own raw interval exists. Two standing exceptions are recorded rather than hidden: a metric with no raw interval at all has nothing to correct, and a recorded column carried under both `weight_by` and `cluster_by` gets no correctable `Member` even though its raw interval exists — either way a bound test on it comes back `supported: null`, and `evaluate_on: observed` is the form to use there. **`fdr_bh` is not a third exception**, and the distinction matters for reading a null bound: Benjamini-Hochberg implies no per-comparison level, so no member of any kind carries a corrected bound under it — a `vs_baseline` delta and a declared contrast included. A bound-evaluated gate reads `supported: null` there whatever it compares, which is a prior condition on the promise rather than something a constant reference earns. The weighted-clustered residual is filed as its own `spec-defects.md` entry rather than left silent; the no-raw-interval case was never a gap, since a metric with no interval had nothing for `evaluate_on: ci95_lower` to answer either way.
 
+**8. Open — a resolver-yielded attribute the config does not declare is dropped, and a step reading it sees nothing.** `Unit.attributes` carries only the declared `data.units.attributes`; `units.py` says so directly — "an attribute a resolver yields and the config does not declare is dropped, exactly as an undeclared CSV column is." [§ Errors `validate` reports](reference.md#errors-validate-reports) documents the **opposite** direction in two rows — declaring an attribute the source cannot supply is refused — and nothing documents this one. Found by running: every config declared only its stratifying columns, so `growth_dx_flag` and `clinician_concern` never reached a step, `step01_summarize_units` resolved an empty truth map, `step02_score` routed all 200 units to `io.skip`, and **the run still reported `status: completed`** with `n.ineligible` equal to the roster. There is no diagnostic for it and arguably cannot be a general one — core never reads a step body, so it cannot know which attribute a step will ask for. What is missing is the *documentation*: the projection rule belongs in [§ Where units come from](reference.md#where-units-come-from) beside the rule it is the mirror of, because a reader who has declared `attributes: [site]` for `report_by` has no way to learn that their label column stopped existing.
+
+**9. Open — a derived metric gets no unpaired contrast, and the documented promise is wider than the code.** [§ Errors `validate` reports](reference.md#errors-validate-reports)' *Contrast has units in common* row says a comparison crossing a [group axis](reference.md#expansion-modes) "is unpaired instead, computed by `welch_t_over_units`/`unpaired_percentile_over_units` and their `_clustered` forms", with no carve-out for how the metric was produced. `cli.py` suppresses that branch for a **derived** metric on a stated ground — a recomputed metric would need `aggregate` evaluated on each side's independently drawn table, "a construction this build does not have" — so the contrast records `delta: null`, `method: null`, `paired: false` and both side counts, and the hypothesis reading it comes back `supported: null`. [E1](#e1--the-reference-standard-gate) is exactly this shape and its confirmatory hypothesis is unanswerable as written: `visit_tertile` is a group axis and `kappa` is derived by `growth_label.aggregate`. The code's reasoning is sound and the refusal is probably right; the gap is that a reader is told the construction exists. Either the row names the exception, or `validate` reports the combination at declaration time — it can see that a contrast crosses a group axis and that the named metric is not a recorded column.
+
 **One gap belongs to the source rather than to the specification, and it bounds this whole analysis.** OI-7 leaves the cohort, the variable derivations and the source cohort size undefined; OI-8 leaves the model roster and the prompt specification undefined. Every unit count in this document is therefore the plan's own stated sample size rather than something checked as drawable, and **no cost or runtime figure is given at all**, because there is no anchor the source itself observed — no roster, no prompt, and so no token count. The request counts below are exact; multiplying them by a price is not something this document can honestly do.
 
 
@@ -1919,9 +1955,9 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-28 against `publishable` commit `081efc0`
+### Measured on 2026-08-28 against `publishable` commit `a3dabd5`
 
-Also pinned: `2026-08-28-gcl-measurement@e245d24` and `publishable-growth-chart@64bde4d`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@233cda7` and `publishable-growth-chart@64bde4d`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
@@ -1932,13 +1968,20 @@ version number, and take `0.2.1` as the floor for anything this section measures
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
-one `src/growth_chart/` package (2,406 lines over seven modules, six step bodies and three prompt
-files) with 2,091 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
+one `src/growth_chart/` package (2,830 lines over eight modules, seven step bodies and three prompt
+files) with 2,338 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
 `publishable plugin new` (390 lines, 526 of tests) installed as an editable dependency — registering
-one resolver, one probe, and one writer/reader pair, and **no** template. Each config's `input_dir`
-holds a synthetic `index.csv`, regenerated by `tools/make_fixtures.py`, at the plan's stated unit
-count with the attributes the config declares. `uv run pytest` in the measurement repository:
-**179 passed**. Every command below was run through the project's own console script.
+one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **202 passed**
+in the measurement repository, **30** in the plugin. Every command below was run through the project's
+own console script.
+
+**The inputs are two files per config**, both generated by `tools/make_fixtures.py`: `index.csv`, the
+roster the `growth_trajectory` resolver reads, and `visits.csv`, the per-visit extract
+`step01_summarize_units` opens. Until 2026-08-28 the generator wrote only the first, and the omission
+had survived every measurement in this document's history — `validate` resolves a roster and never
+executes a step, so fifteen configs validated clean against a directory in which **every run would have
+failed at the first step**. That is the distinction between *the configs validate* and *the configs
+compute what they declare*, in its cheapest possible form.
 
 **The fifteen configs, by running `publishable validate` on each.**
 
@@ -1962,22 +2005,35 @@ count with the attributes the config declares. `uv run pytest` in the measuremen
 
 Thirteen clean, two carrying one warning each, no errors. **Zero of the fifteen are refused.** Both
 warnings are the false positive [gap 4's retraction](#gaps-this-analysis-found-in-the-specification)
-explains: `true_count_band` and `visit_band` are reporting strata rather than cluster identities, and
-`report_by` is deliberately not among the four exclusions `_warn_undeclared_cluster` documents.
+explains. Every config's `data.units.attributes` now also names the label columns its own pipeline
+reads — see [gap 8](#gaps-this-analysis-found-in-the-specification), which is why they have to.
+
+**One config has executed.** [E1](#e1--the-reference-standard-gate) contains no LLM, so it is the one
+arm that can run without a deployment, and it does: `status: completed`, three conditions, and a
+`kappa` of **0.614** with a percentile `ci95` of [0.393, 0.801] over 2,000 draws, `basis: units`,
+`method: percentile_over_units`. That is the first end-to-end execution of this pipeline and it is
+where [gaps 8 and 9](#gaps-this-analysis-found-in-the-specification) came from — neither was visible to
+`validate`, to `dry-run`, or to 202 unit tests.
+
+**E1's own hypothesis is unanswerable as configured**, and the run says so honestly rather than
+guessing: the `kappa_gap` contrast records `delta: null`, `method: null`, `paired: false`,
+`n_of: 66`, `n_against: 67`, and the verdict is `supported: null` with `verdict_rests_on: computed`.
+[Gap 9](#gaps-this-analysis-found-in-the-specification) is why. The route is the one every other
+refusal in this analysis takes — a `summary`-step `Estimate` computing the between-stratum kappa
+difference over a bootstrap — and it is a change to E1's design, not to core.
 
 **`publishable dry-run` on each is where every execution count in this document comes from.** It
 expands the sweep, builds the input manifest, probes the apparatus, and prints the step directories,
-the ten fixed files a run would write, and the unit-execution count. The counts are quoted per
-experiment above and totalled below; each is the number the command printed, not one derived from it.
-It also states what it cannot list, which is the honest half: artifact file names are `io.write`
-arguments in step code, declared nowhere in the config.
+the ten fixed files a run would write, and the unit-execution count. All were re-measured at this
+commit: the total is **455**, up from 399, and the difference is exactly the 56 conditions across the
+twelve screening configs — one `step02_construct` execution each.
 
 **The plugin's three registries dispatch.** `data.units.from: {resolver: growth_trajectory}` resolves
 every roster at `validate`; `apparatus_probe = "growth_llm_deployment"` is called at `dry-run` and its
 facts recorded per condition. The `.transcript.jsonl` writer/reader pair is registered and its entry
-points resolve at install, and **it is not exercised by a write**, because nothing here executes a
-step — the suffix-dispatch rule it relies on is [measured in the tutorial](tutorial-writing-a-plugin.md)
-rather than here.
+points resolve at install, and **it is still not exercised by a write**, because the one run that has
+executed is the non-LLM arm — the suffix-dispatch rule it relies on is
+[measured in the tutorial](tutorial-writing-a-plugin.md) rather than here.
 
 **The credential check, measured on E10 with `.env` moved aside.** `validate` reports, per condition
 and by name, and exits `3 problems (3 errors, 0 warnings)`:
@@ -1992,8 +2048,7 @@ error   E-CRED-PARAM-MISSING parameters.llm.provider
 ```
 
 Three variables demanded across the four deployments, and **nothing demanded for the `ollama` arm**,
-whose `requires_env` entry is `[]`. With `.env` in place all four conditions pass, which is the state
-the fifteen-config table above was measured in.
+whose `requires_env` entry is `[]`.
 
 **The apparatus probe's unanswered facts, measured on E10 at `dry-run`.** The local arm's probe returns
 `None` for both declared facts, in each of the four `ollama` conditions, and core reports it rather
@@ -2016,10 +2071,10 @@ condition `03_schedule=sparse__provider=ollama__deployment=llama-4-70b__baseline
 **Two things that are *not* refused, both checked by running.** A second config naming the first's
 `entrypoint` validates, which is what makes one `src/` package across fifteen configs the recommended
 layout rather than a hope. And a `sweep.baseline` duplicating a `grid` cell validates — with
-`W-SWEEP-CONDITION-DUPLICATE` now reporting the pair, which is [gap 3](#gaps-this-analysis-found-in-the-specification),
-found by running and not by reading.
+`W-SWEEP-CONDITION-DUPLICATE` now reporting the pair, which is
+[gap 3](#gaps-this-analysis-found-in-the-specification), found by running and not by reading.
 
-**What writing the pipeline found.** Four things the configs alone could not surface, because a config
+**What writing the pipeline found.** Five things the configs alone could not surface, because a config
 exercises declarations and a step body exercises the runtime:
 
 **1. A metric a config declares and a template never derives is invisible to `validate`.** This is the
@@ -2033,58 +2088,55 @@ effects rather than reading the body — but it means **the fifteen configs vali
 same claim as the fifteen configs computing what they declare**, and every other measurement in this
 section should be read against that distinction.
 
-**2. E2's above-chance claim has two live routes, and the config picks one.** `e02-utilization-baseline`'s
+**2. Four declared parameters were read by nothing, and the failure would have been silent.**
+`stimulus.source`, `.physiology`, `.schedule` and `.crossing_channels` are swept as the axis under test
+by six configs and reached no step: [§ The stimulus arm](#the-stimulus-arm-has-to-be-constructed-somewhere)
+is the design that closes it. Worth stating as a measurement rather than a design note, because of what
+it would have cost — the runs complete, the metrics compute, and the effect of the manipulation is
+approximately zero because the manipulation never happened.
+
+**3. E2's above-chance claim has two live routes, and the config picks one.** `e02-utilization-baseline`'s
 `h1` names `step03_compare.auroc_count_only`, which **is** a `summary`-step `Estimate`: it carries no
 `compare` block, so its verdict records `verdict_rests_on: reported`, and core stores that interval
 without ever recomputing or correcting it. The alternative is `compare: {to: constant, value: 0.5}` on
 the condition-scoped `auroc` that `growth_label.aggregate` derives, which under `holm` or `bonferroni`
-returns a real corrected bound inside the hypothesis family — `auroc` is derived under E2's declared
-`statistics.resample`, so core builds it a correctable `Member`. The two differ in what they measure,
-not only in their paperwork: the `Estimate`'s bootstrap pools every fold's out-of-fold score into one
+returns a real corrected bound inside the hypothesis family. The two differ in what they measure, not
+only in their paperwork: the `Estimate`'s bootstrap pools every fold's out-of-fold score into one
 AUROC over patients, which is the quantity E2 claims, where the template's is per condition. The config
 as written takes the first route. See [gap 7](#gaps-this-analysis-found-in-the-specification) for what
 still comes back `supported: null` on a bound, and why `fdr_bh` is not an instance of it.
 
-**3. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
+**4. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
 quantities the configs declare are ratios of means over a paired table and the third is a rank
 correlation; none needs a likelihood optimiser. `statsmodels` stays declined until an arm genuinely
 needs a random-intercept fit — E3's format × derivation interaction is the first — because a plugin's
 dependency lands in the lockfile `reproduce` restores.
 
-**4. The shortcut reliance index is undefined where the plan most needs it, and says so.** OI-17
+**5. The shortcut reliance index is undefined where the plan most needs it, and says so.** OI-17
 records this and the implementation honours it: when the physiology main effect is zero — which is
 E4's H0 holding, a model that cannot see the curve at all — the index returns nothing rather than a
-ratio with no meaning. A cohort that flags on schedule alone produces a real numerator over a zero
-denominator, and reporting infinity there would read as "total shortcut reliance" from a division that
-has none.
+ratio with no meaning.
 
 **Writing the steps is also what surfaced a gap in core itself.** `W-STEP-RETURN-DISCARDED` fires when
 a `run`- or `condition`-scoped step returns a non-empty mapping core then discards, and it exists
-because two wide steps here were doing exactly that: `step01_summarize_units` returned `n_units`,
-`n_visits`, `n_labelled`, and `step02_serialize` returned `n_prompts`, `n_without_visits`. Every one was
-being dropped. Both now write their counts to an artifact (`join_counts.json`, `serialize_counts.json`)
-and return `{}`, which is the route the warning's own message names — and the numbers were worth
-keeping, since how many visits joined and how many units carry a label are the first questions asked of
-a run reporting a surprising `n`. That is this document's own argument turned back on itself:
-[§ Where every statistical procedure lands](#where-every-statistical-procedure-lands) routes a wide
-step's product to `io.write`, and the pipeline proposed here returned five counts from two wide steps
-anyway. The rule was written down here and not followed here, which is what a diagnostic is for.
+because two wide steps here were doing exactly that. Both now write their counts to an artifact and
+return `{}`, which is the route the warning's own message names. That is this document's own argument
+turned back on itself: [§ Where every statistical procedure lands](#where-every-statistical-procedure-lands)
+routes a wide step's product to `io.write`, and the pipeline proposed here returned five counts from
+two wide steps anyway.
 
 **One observation not filed as a gap.** `publishable validate configs/e01-reference-gate` — the
 experiment *directory* rather than its `config.yaml` — reports `E-IO-FAILED  Is a directory`.
 [§ CLI reference](reference.md#cli-reference) documents the argument as a config file path and every
-example writes one, so this is a thin diagnostic rather than a contradiction, and it is recorded here
-instead of filed because it is a property of core's argument handling rather than anything this
-analysis's configs pressed on.
+example writes one, so this is a thin diagnostic rather than a contradiction.
 
-**What is not measured, and is therefore written as specification rather than as fact.** Nothing here
-has executed a step against a deployment, so no `run`, `draft`, `resume`, `report`, `freeze`, `diff`,
-`study` or `reproduce` claim in this document is a build claim: the statistics routing table, the
-`Estimate` shape, `io.reuse_from`, the apparatus gate's *failure* on a moved fact, and every interval
-this analysis attributes to core are read from the specification. Every cost figure below is
-arithmetic rather than an anchor. What blocks execution is not code: **OI-7's cohort definition** and
+**What is still not measured.** Fourteen of the fifteen have not executed, because they need a
+deployment: `draft`, `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised,
+the `.transcript.jsonl` writer has never been driven by a write, and every cost figure below is
+arithmetic rather than an anchor. What blocks that is not code: **OI-7's cohort definition** and
 **OI-8's model roster and prompt specification**, both `[author decision]` in the source plan. The
-pipeline is ready for them; they are not ready for it.
+three prompt files under `src/growth_chart/prompts/` are this analysis's own invention standing in for
+OI-8, not the plan's specification. The pipeline is ready for them; they are not ready for it.
 
 ### The two templates, as loaded
 
@@ -2325,24 +2377,24 @@ class GrowthLabelTemplate(BaseTemplate):
 |---|---|---|---|---|---|
 | E1 `e01-reference-gate` | 200 | 3 | 1 | 5 | 0 |
 | E2 `e02-utilization-baseline` | 1,000 | 2 | 5 folds | 12 | 0 |
-| E3 `e03-serialization` | 200 | 9 | 5 | 56 | 9,000 |
-| E3b `e03b-tokenization` | 150 | 2 | 5 | 14 | 1,500 |
-| E4a `e04a-matched-pairs` | 600 | 2 | 5 | 14 | 3,000 |
-| E4b `e04b-physiology-swap` | 250 | 2 | 5 | 14 | 2,500 |
-| E5a `e05a-schedule-density` | 200 | 3 | 5 | 20 | 3,000 |
-| E5b `e05b-flat-negative` | 200 | 2 | 5 | 14 | 2,000 |
-| E5c `e05c-fixed-n` | 300 | 1 | 5 | 8 | 1,500 |
-| E5d `e05d-framing` | 300 | 2 | 5 | 14 | 3,000 |
+| E3 `e03-serialization` | 200 | 9 | 5 | 65 | 9,000 |
+| E3b `e03b-tokenization` | 150 | 2 | 5 | 16 | 1,500 |
+| E4a `e04a-matched-pairs` | 600 | 2 | 5 | 16 | 3,000 |
+| E4b `e04b-physiology-swap` | 250 | 2 | 5 | 16 | 2,500 |
+| E5a `e05a-schedule-density` | 200 | 3 | 5 | 23 | 3,000 |
+| E5b `e05b-flat-negative` | 200 | 2 | 5 | 16 | 2,000 |
+| E5c `e05c-fixed-n` | 300 | 1 | 5 | 9 | 1,500 |
+| E5d `e05d-framing` | 300 | 2 | 5 | 16 | 3,000 |
 | E6 `e06-comparator` | 600 | 4 | 5 folds | 22 | 0 |
-| E7 `e07-two-by-two` | 200 | 4 | 5 | 26 | 4,000 |
-| E8 `e08-ordering` | 300 | 7 | 5 | 44 | 10,500 |
-| E9 `e09-age-norm` | 400 | 6 | 5 | 38 | 6,000 |
-| E10 `e10-cross-model-2x2` | 200 | 16 | 5 | 98 | 16,000 |
-| **Total** | | **65** | | **399** | **62,000** |
+| E7 `e07-two-by-two` | 200 | 4 | 5 | 30 | 4,000 |
+| E8 `e08-ordering` | 300 | 7 | 5 | 51 | 10,500 |
+| E9 `e09-age-norm` | 400 | 6 | 5 | 44 | 6,000 |
+| E10 `e10-cross-model-2x2` | 200 | 16 | 5 | 114 | 16,000 |
+| **Total** | | **65** | | **455** | **62,000** |
 
-**Executions** are what `dry-run` printed, counting every step's executions including the `run`-scoped roster summary and the `summary`-scoped comparison. **Metered requests** are conditions × repeats × units at the one `scope = "repeat"` step that issues a request — 62,000 across the fifteen, against a plan whose own evaluation counts for the arms it costs (9,000 for E3, 4,000 for E7, 10,500 for E8) this reproduces exactly.
+**Executions** are what `dry-run` printed, counting every step's executions including the `run`-scoped roster summary and the `summary`-scoped comparison. The total rose from 399 to **455** when [`step02_construct`](#the-stimulus-arm-has-to-be-constructed-somewhere) joined the screening pipeline, and the difference is exactly the 56 conditions across the twelve screening configs — one construction per condition, which is the arithmetic check that the step is `condition`-scoped and not `repeat`-scoped. **Metered requests** are conditions × repeats × units at the one `scope = "repeat"` step that issues a request — 62,000 across the fifteen, against a plan whose own evaluation counts for the arms it costs (9,000 for E3, 4,000 for E7, 10,500 for E8) this reproduces exactly.
 
-**No condition set comes near `limits.max_executions: 500`.** The largest is E10 at 16 × 5 = 80, and `validate` warned on none of the fifteen. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
+**No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 16 × 5 = 80 repeat-scoped executions come to 114 once every scope is counted, and `validate` warned on none of the fifteen. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
 
 **The full E10 is four times what the table shows.** Replicating E4b, E5b, E8 and E9 across the same four-deployment axis adds 10,000 + 8,000 + 42,000 + 24,000 = 84,000 requests, for **146,000** in total. The plan's own budget rule — prioritize E7 and E5b — is therefore a choice between 62,000 and 146,000, which is the number that decision should be made against.
 
