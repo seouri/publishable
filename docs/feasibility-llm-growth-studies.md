@@ -2481,9 +2481,11 @@ its measurement was sound on its date, and a later measurement is appended rathe
 into it.
 
 **What moved in `src/` since `7ef6846`.** 16 files, +602/−51 — the release work, the plugin
-tutorial's six fix slices (W1–W5), and a whole-project review round. Four of the five modules every
-figure in the table below depends on are **byte-identical** at both commits, by `md5`:
-`validate.py` (`da7b805016671939ae9b67f53d97d5e3`), `stats.py`, `runner.py` and `units.py`. Exactly
+tutorial's six fix slices (W1–W5), and a whole-project review round. The four modules rows 1 through 3 rest on are **byte-identical** at both
+commits, by `md5`: `validate.py` (`da7b805016671939ae9b67f53d97d5e3`), `stats.py`, `runner.py` and
+`units.py`. `cli.py` did move (+76/−6) — an environment manager measured rather than asserted, and a
+run whose every execution raised now saying so on stderr — and row 1 rests on none of it, having been
+**measured by running** rather than inferred from byte-identity. Exactly
 **one diagnostic code is minted** in that window — `E-CONFIG-IMMUTABLE`, 136 codes in total, by a
 `git grep` of `code="..."` at each commit differenced against the other — and it is raised by
 `Node.__setattr__`/`__delattr__`, so it is a step-time contract error that no config declaration can
