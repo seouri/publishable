@@ -29010,12 +29010,20 @@ def test_task1_bit_stability_oracle_over_the_correction_machinery(tmp_path: Path
     it path- or timing-sensitive it would have differed between the two
     captures and it did not.
 
-    Mutation (proves the oracle can fail): perturbing a stored
-    `ci95_corrected` bound in the golden list (or, symmetrically, in a fresh
-    record) must turn this test red; restoring it must turn it green again.
-    Both directions were run by hand before this test was finalized (see the
-    task 1 report for the exact before/after `pytest` output) rather than
-    trusted on the strength of the assertion alone.
+    Mutation (proves the oracle can fail against PRODUCTION code, not just
+    against its own golden literal): `src/publishable/correction.py`'s
+    `corrected_for` call site, `level = _level_for(method, family_size,
+    rank)` -> `_level_for(method, family_size, rank + 1)` -- the actual code
+    that COMPUTES a corrected bound, mirroring `_level_for`'s own docstring
+    (`holm` is alpha/(m-i+1), so shifting the rank by one is exactly the
+    off-by-one a real regression would introduce). Run by hand before this
+    test was finalized (task 1 report has the full before/after `pytest`
+    output): red under the mutation, restored from a pre-mutation copy
+    (checked by `diff`, not by `git status`) and green again after. A second,
+    earlier mutation against the golden literal itself
+    (`results.contrasts.0...ci95_corrected.0`) was also run and is reported,
+    but that one only proves the comparison reads that element -- it is the
+    production-code mutation above that proves the pin.
     """
     import publishable.generators.experiment as experiment_gen
 
