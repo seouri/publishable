@@ -11742,3 +11742,23 @@ feature whatever the schedule. The tutorial's transcripts were **re-measured rat
 `plugin new publishable-plate-assay`, installed, named in a config, and the printed output pasted back,
 which also corrected a pre-existing abridgement — the block had dropped the `experiment_type` field and the
 `1 problem (1 error, 0 warnings)` line that every sibling transcript in that file shows.
+
+**Two documents were reached on 2026-08-27 after the closure, and a third was deliberately left.**
+`README.md` § Extending it and `reference.md` § Plugins each showed a **runnable** `generate experiment`
+pairing `--plugin someuser/publishable-llm` with `--template llm_diagnostic` — a plugin's own template
+name, which is the command this code refuses. Both now name a project-local template and say why in a
+sentence. README also claimed `plugin new` scaffolds a package *"whose docs generate from its parameter
+spec"*, which is false and false for this same reason: measured, the scaffolded plugin's README carries no
+parameter table and `publishable docs` inside it refuses with `E-DOCS-NO-REGIONS`.
+
+**`design-principles.md` was edited and the edit was reverted, by a guard pin doing its job.** Its hashing
+rationale says a template's `aggregate` *"may be core's or a plugin's, which `uv.lock` pins instead"*, and
+a clause naming the refusal was added there. `test_h9d_arm_c_two_of_the_four_documents_are_byte_identical
+_at_merge[docs/design-principles.md]` went red — an arm with **no authorized editor**, whose recorded
+ground is that this file carries the shared worked example and nothing remaining in the project should
+touch it. The investigation the arm forced came out on the arm's side rather than the edit's: the sentence
+is **design rationale about what `code_hash` covers**, not a recommendation to install a template, and the
+design does permit the home that the build refuses — which is the distinction `reference.md` § Templates
+now carries in its own voice. So the arm is **not** retired and its hash is **not** refreshed; the edit is
+reverted, verified by the arm passing again rather than by `git status`, and the refusal stays stated in
+the five places that describe the home as available.

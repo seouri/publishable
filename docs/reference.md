@@ -4136,7 +4136,7 @@ Trivial, but it means `publishable run` succeeds immediately after scaffolding. 
 ```bash
 uv run publishable generate experiment triage-pilot \
   --plugin someuser/publishable-llm \
-  --template llm_diagnostic \
+  --template my_diagnostic \
   --input-dir /secure/phi-data/xray-2026 --output-dir /secure/results/triage-pilot
 ```
 
@@ -4144,7 +4144,7 @@ uv run publishable generate experiment triage-pilot \
 
 A flag here rather than a field in the file is not the exception it looks like: [operation commands](#operation-commands) take paths and nothing else, and `generate` is a **creation** command — the file it would read does not exist yet, which is the whole distinction that rule draws.
 
-This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses, [unit resolvers](#where-units-come-from), and [apparatus probes](#the-apparatus-core-can-only-observe), not just templates, so shared machinery is importable rather than copy-pasted.
+This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses, [unit resolvers](#where-units-come-from), and [apparatus probes](#the-apparatus-core-can-only-observe), so shared machinery is importable rather than copy-pasted. **`--template` names a core template or one of your own**, never one the plugin registers: core resolves an installed template's name from package metadata and never loads the class behind it, so a config naming one is refused under [`E-TEMPLATE-INSTALLED-UNSUPPORTED`](#errors-validate-reports) — permanently, as [§ Templates](#templates-where-parameters-are-defined) states with the price it charges. The machinery is what a plugin is worth installing for; what your parameters *mean* stays in `templates/`, inside your own [`code_hash`](#three-hashes).
 
 ### Creating a plugin: `publishable plugin new`
 

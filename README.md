@@ -341,11 +341,13 @@ Core knows nothing about LLMs, cohorts, instruments, or solvers. Domain knowledg
 ```bash
 publishable generate experiment triage-pilot \
   --plugin someuser/publishable-llm \
-  --template llm_diagnostic \
+  --template my_diagnostic \
   --input-dir ~/data/xray-2026 --output-dir ~/results/triage-pilot
 ```
 
-`--plugin owner/repo` is `uv add git+…` and nothing more — so the plugin lands in your lockfile and gets captured in provenance like any other dependency. Write your own with `publishable plugin new`, which scaffolds an installable package whose docs generate from its parameter spec.
+`--plugin owner/repo` is `uv add git+…` and nothing more — so the plugin lands in your lockfile and gets captured in provenance like any other dependency. Write your own with `publishable plugin new`, which scaffolds an installable package with its entry points already wired.
+
+**A plugin ships machinery; the experiment type stays yours.** Its unit resolvers, apparatus probes, writers and readers all dispatch straight from an install. A *template* it registers does not: core resolves an installed template's name from package metadata and never loads the class behind it, so a config naming one is refused ([`E-TEMPLATE-INSTALLED-UNSUPPORTED`](https://github.com/seouri/publishable/blob/main/docs/reference.md#errors-validate-reports)). That is what this project ships rather than a stage it passes through. So `--template` names a core template or one of your own — `publishable generate template my_diagnostic` writes it into `templates/`, where `code_hash` covers it, which is where the meaning of your parameters belongs anyway.
 
 The reference LLM plugin is [`publishable-llm`](https://github.com/someuser/publishable-llm).
 
@@ -356,13 +358,13 @@ The reference LLM plugin is [`publishable-llm`](https://github.com/someuser/publ
 - **[Experimental designs](https://github.com/seouri/publishable/blob/main/docs/experimental-designs.md)** — how to express each design, and the mistakes core prevents
 - **[Reference](https://github.com/seouri/publishable/blob/main/docs/reference.md)** — config schema, CLI, `io` API, templates, sweeps, artifact layout
 - **[Design principles](https://github.com/seouri/publishable/blob/main/docs/design-principles.md)** — why the rules are what they are; read before proposing a change
-- **[Plugin guide](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives)** — building and sharing templates
+- **[Plugin guide](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives)** — building and sharing domain machinery
 - **[Writing a plugin](https://github.com/seouri/publishable/blob/main/docs/tutorial-writing-a-plugin.md)** — non-normative: the tutorial, from why you need one to a run that used it
 - **[The development record](https://github.com/seouri/publishable/blob/main/docs/superpowers/README.md)** — non-normative: how each slice was designed, measured and reviewed, kept because a tool arguing the record should be publishable owes its own
 
 ## Contributing
 
-Most new templates should be a [plugin](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives), not a PR here — that's what `--plugin owner/repo` is for. Upstream contributions are for core mechanisms: the config envelope, provenance capture, the artifact model, the validation engine, the CLI.
+Most new experiment types should be a template in your own `templates/`, and most new domain machinery a [plugin](https://github.com/seouri/publishable/blob/main/docs/reference.md#plugins-where-domain-knowledge-lives) — neither is a PR here, which is what `generate template` and `--plugin owner/repo` are for. Upstream contributions are for core mechanisms: the config envelope, provenance capture, the artifact model, the validation engine, the CLI.
 
 A good test of whether something belongs in core: **would it be identical for a wet-lab assay, a simulation sweep, and an LLM benchmark?** If not, it's a plugin.
 
