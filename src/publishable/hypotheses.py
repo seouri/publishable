@@ -412,21 +412,35 @@ def evaluate(
                 corrected_unavailable = True
             p_value_corrected = corrected.get("p_value_corrected")
         elif _is_counted(hyp, obs) and method != "none" and key not in by_key:
-            # A counted hypothesis with no matching `Member` — a
-            # `compare: {to: constant}` observation without a declared
-            # `contrast` (`validate` refuses declaring both), since core
-            # builds one for every `vs_baseline`/contrast comparison but none
-            # for a constant reference. Under a real correction method this
-            # hypothesis is still IN the family (`family_size` counts it, per
-            # Decision 2's whole point) but there is no evidence here to
-            # rebuild a bound from at this family's level — the same honest gap
-            # `W-STATS-CORRECTED-THIN` reports for a family too large for its
-            # resample's draws, read through the same `corrected_unavailable`
-            # path rather than a silent fall-back to the raw, uncorrected
-            # bound. `method == "none"` is excluded: there no correction was
-            # attempted for *anyone* in the family, which is the ordinary
-            # absent-`ci95_corrected` case every other member gets too, not a
-            # gap specific to this one.
+            # A counted hypothesis with no matching `Member`, and no evidence
+            # for `cli` to have built one from. `cli` builds a `const:<index>`
+            # member for every reachable `compare: {to: constant}` observation
+            # (G2 task 5), so this is narrower than it once was: it used to
+            # fire for EVERY constant-referenced hypothesis, since no such
+            # member was ever built. Now it fires only where there is
+            # genuinely nothing to correct:
+            #
+            # - the metric's own raw interval is `null` — a derived metric
+            #   that was never resampled, or a step that returned no numeric
+            #   value for it — so there is no evidence at all to rebuild a
+            #   bound from, the same honest gap `W-STATS-CORRECTED-THIN`
+            #   reports for a family too large for its resample's draws.
+            # - a recorded column under BOTH `weight_by` and `cluster_by`:
+            #   its raw interval is `weighted_t_over_units_clustered`, and
+            #   this build has no paired construction of that shape and no
+            #   `Member` field for carrying both modifiers at once
+            #   (`Member.__post_init__` refuses one that does). This
+            #   combination is reachable here specifically because
+            #   `E-DATA-WEIGHT-CLUSTER-CONTRAST` only fires on a contrast, and
+            #   a `{to: constant}` hypothesis declares none.
+            #
+            # Either way this hypothesis is still IN the family (`family_size`
+            # counts it, per Decision 2's whole point), read through the same
+            # `corrected_unavailable` path rather than a silent fall-back to
+            # the raw, uncorrected bound. `method == "none"` is excluded:
+            # there no correction was attempted for *anyone* in the family,
+            # which is the ordinary absent-`ci95_corrected` case every other
+            # member gets too, not a gap specific to this one.
             corrected_unavailable = True
         entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable, p_value_corrected))
         if _is_counted(hyp, obs):

@@ -6489,7 +6489,7 @@ is not built, and nothing in the code changed. A reader who wants the mechanism 
 should not go looking for it — the gap is closed by naming the limit in prose, exactly the route
 the entry's own "What a study can and cannot say today" section already named as available.
 
-## OPEN — a `compare: {to: constant}` hypothesis's bound test is never answerable under a declared correction method — **Owner: unassigned, and no slice follows**
+## OPEN — a `compare: {to: constant}` hypothesis's bound test is never answerable under a declared correction method, for a metric recorded under BOTH `weight_by` and `cluster_by` — **Owner: unassigned, and no slice follows**
 
 **Found by:** review of Task 9 (`compare: {to: constant, value: N}`, the third `compare` form),
 2026-08-28. **Measured against commit `6e96655`** by calling `hypotheses.evaluate` directly under
@@ -6531,4 +6531,26 @@ under a declared correction method, a `compare: {to: constant}` hypothesis's bou
 answerable and comes back `supported: null`; only `evaluate_on: observed` is usable there. Under
 `correction: none` the bound test works fine on the raw interval, exactly as it does for every other
 form.
+
+**AMENDED 2026-08-28 (Task 6, `correctable-condition-metric` slice): narrowed, not closed.** The
+slice's Task 5 built exactly the `Member` this entry's "Proposed resolution" called for, for three
+of the four rows in the design's Decision 1 table: a recorded column with no declared `resample`
+(carries its per-unit values, a `t`-construction bound), a recorded column with a declared
+`resample` (carries the pool), and a derived metric with a declared `resample` (carries the pool).
+For all three, `hypotheses.evaluate` now rebuilds a real corrected bound at the family's own level,
+and `evaluate_on: ci95_lower`/`ci95_upper` is answerable exactly as it is for a `vs_baseline`
+comparison or a declared contrast. The fourth row — a derived metric with no declared `resample` —
+was never this gap: it has no raw interval either, so there was nothing to correct before this slice
+and nothing to correct after it.
+
+**The residual case, and why it stays open.** A recorded column under BOTH `weight_by` and
+`cluster_by` still gets no `Member`, and still comes back `corrected_unavailable`. Its raw interval
+is `weighted_t_over_units_clustered`, and no paired construction of that shape exists in this build,
+nor a `Member` field shape for carrying both modifiers at once (`Member.__post_init__` refuses one
+that does) — Task 5 deliberately builds nothing there rather than loosening that refusal. This
+combination is reachable specifically because `E-DATA-WEIGHT-CLUSTER-CONTRAST` only fires on a
+contrast, and a `{to: constant}` hypothesis names no contrast, so `validate` never sees the
+combination it would otherwise refuse. Closing it needs the same shape of change the "Proposed
+resolution" above described — a new construction and a new `Member` field — so it is still real but
+not free, and no slice follows to do it.
 

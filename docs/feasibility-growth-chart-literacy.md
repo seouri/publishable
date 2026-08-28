@@ -1901,7 +1901,7 @@ These are the deliverable's second output: places where a real plan pressed on t
 
 **6. Partially closed — the documentation half is fixed; the resolver incompatibility is untouched and was never itself the gap.** `{by: calc_id, collapse: mean}` over a resolver roster still earns `E-RESOLVER-MEASUREMENT-FIELD` — the resolver must yield one `Unit` per measurement — and the same declaration still applies `mean` to the string-valued attributes, earning two `E-DATA-MEASUREMENTS-COLLAPSE-TYPE`; both diagnostics were correct behavior then and now, not a gap in themselves. What this entry actually found — that the config schema's one-line comment did not say `collapse` applies to **every** carried column rather than to the numeric ones — is fixed: [§ The one config file](reference.md#the-one-config-file) now states it directly, which is what makes the per-column map the documented ordinary case rather than something a reader discovers from the second error.
 
-**7. Closed — `compare: {to: constant, value: N}` is now the absolute-threshold hypothesis form.** A claim against a fixed reference — chance for an AUROC, zero for a difference already computed elsewhere, a regulatory floor — no longer has to route through a `summary`-step `Estimate` outside the correction family. The new form is core-computed from the metric's own per-condition value, `verdict_rests_on: computed`, and joins the [hypothesis family](reference.md#pre-registration) like a baseline comparison or a declared contrast — with one standing exception recorded rather than hidden: core builds no correctable `Member` for it, so a bound test (`evaluate_on: ci95_lower`/`ci95_upper`) under a real correction method comes back `supported: null`, and `evaluate_on: observed` is the form to use under a declared correction method. That residual is filed as its own `spec-defects.md` entry rather than left silent.
+**7. Closed — `compare: {to: constant, value: N}` is now the absolute-threshold hypothesis form.** A claim against a fixed reference — chance for an AUROC, zero for a difference already computed elsewhere, a regulatory floor — no longer has to route through a `summary`-step `Estimate` outside the correction family. The new form is core-computed from the metric's own per-condition value, `verdict_rests_on: computed`, and joins the [hypothesis family](reference.md#pre-registration) like a baseline comparison or a declared contrast, and — as of a later slice than the one that added the form — gets a real corrected bound (`evaluate_on: ci95_lower`/`ci95_upper`) under a declared correction method too, the same as a baseline comparison or a declared contrast. One standing exception is recorded rather than hidden: a recorded column carried under both `weight_by` and `cluster_by` still gets no correctable `Member`, so a bound test on that combination still comes back `supported: null`, and `evaluate_on: observed` is still the form to use there. That residual is filed as its own `spec-defects.md` entry rather than left silent.
 
 **One gap belongs to the source rather than to the specification, and it bounds this whole analysis.** OI-7 leaves the cohort, the variable derivations and the source cohort size undefined; OI-8 leaves the model roster and the prompt specification undefined. Every unit count in this document is therefore the plan's own stated sample size rather than something checked as drawable, and **no cost or runtime figure is given at all**, because there is no anchor the source itself observed — no roster, no prompt, and so no token count. The request counts below are exact; multiplying them by a price is not something this document can honestly do.
 
@@ -2267,14 +2267,18 @@ verifies effects rather than reading the body. But it means *the fifteen configs
 never the same claim as *the fifteen configs computing what they declare*, and this document's
 earlier entries should be read with that distinction in mind.
 
-**2. The `{to: constant}` limitation bites in practice, exactly as filed.** E2's claim is "a
-visit-count-only model discriminates above chance". The template already derives `auroc` per
-condition *with a core-computed interval* — the better number — but `compare: {to: constant, value:
-0.5}` on a condition-scoped metric returns `supported: null` under a declared correction method,
-because core builds no correctable `Member` for a condition's own value. So the claim routes through
-a `summary`-step `Estimate` instead, which is `reported: true` and outside the correction family.
-That is [the filed limitation](superpowers/spec-defects.md) costing a real claim its place in
-the family, and it is the study's decision rather than this code's.
+**2. The `{to: constant}` limitation no longer bites for E2 — a later slice narrowed it to a
+combination this config does not use.** E2's claim is "a visit-count-only model discriminates above
+chance". The template already derives `auroc` per condition *with a core-computed interval* — the
+better number — and `compare: {to: constant, value: 0.5}` on that condition-scoped metric now returns
+a real corrected bound under a declared correction method, because core builds a correctable `Member`
+for it: `auroc` is derived under E2's declared `statistics.resample`, which is exactly the row of
+[the design's Decision 1 table](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)
+that gets the pool. The claim can be written directly on `step03_compare.auroc_count_only` rather than
+routed through a `summary`-step `Estimate`. What [the filed limitation](superpowers/spec-defects.md)
+still costs a real claim its place in the family is narrower now: only a recorded column carried
+under both `weight_by` and `cluster_by` — E2 declares neither — still has no `Member` and still comes
+back `supported: null` on a bound.
 
 **3. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
 quantities the configs declare are ratios of means over a paired table and the third is a rank

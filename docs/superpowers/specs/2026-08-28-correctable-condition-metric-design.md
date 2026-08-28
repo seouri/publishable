@@ -99,6 +99,20 @@ project's record already names as a defect it has shipped.
 gains a `ci95_corrected` where it had `null`, and its verdict may move from `supported: null` to
 `true` or `false`. That is the slice working. Nothing else may move at all.
 
+**AMENDED 2026-08-28 (Task 6): one more thing may move, and it is kept.** `correction.corrected_for`
+assigns Holm levels by `enumerate(rank_family(family))`. A counted constant hypothesis used to
+contribute no member, so every co-family hypothesis ranked over a shorter list than the one
+`family_size` actually counted. Task 5's member changes that: the constant hypothesis now takes a
+rank in `rank_family`'s own list, which can push a co-family member down a place — widening its Holm
+level and, because a wider level is a narrower α-adjustment, narrowing its own corrected bound. This
+is Holm step-down done more correctly, not a second effect layered on top of it: the family always
+had this member in it (`family_size` already counted it, per Decision 2), and only its *rank*, not
+its membership, was missing an entry to sort. It is a deliberately kept exception to "nothing else
+may move at all" above, named rather than left for the next reader to discover as a silent
+contradiction — the design's Decision 5 promise holds for a run declaring no constant-referenced
+hypothesis; where one exists and correction is real, its co-family members' Holm levels and corrected
+bounds may move too.
+
 ---
 
 ## What this design refuses
