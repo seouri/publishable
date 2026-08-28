@@ -834,8 +834,8 @@ def test_a_correlation_like_derived_metrics_interval_reflects_its_own_scatter():
     assert ra is not None and rb is not None
     assert abs(ra - rb) < 0.01  # nearly the same point estimate
 
-    interval_a, _ = percentile_of_derived(collapsed_a, compute_r, seed=7, draws=500)
-    interval_b, _ = percentile_of_derived(collapsed_b, compute_r, seed=7, draws=500)
+    interval_a = percentile_of_derived(collapsed_a, compute_r, seed=7, draws=500).interval
+    interval_b = percentile_of_derived(collapsed_b, compute_r, seed=7, draws=500).interval
     assert interval_a is not None and interval_b is not None
     width_a = interval_a.high - interval_a.low
     width_b = interval_b.high - interval_b.low
@@ -913,9 +913,9 @@ def test_no_interval_is_built_from_too_few_surviving_draws():
         calls["n"] += 1
         return 6.0 if calls["n"] <= 2 else None
 
-    interval, used = percentile_of_derived(collapsed, survives_twice, seed=7, draws=100)
-    assert interval is None
-    assert used == 2
+    resampled = percentile_of_derived(collapsed, survives_twice, seed=7, draws=100)
+    assert resampled.interval is None
+    assert resampled.draws_used == 2
 
 
 def test_an_interval_is_built_at_the_floor():
@@ -929,10 +929,10 @@ def test_an_interval_is_built_at_the_floor():
         calls["n"] += 1
         return float(sum(units.pred)) if calls["n"] <= min_honest_draws() else None
 
-    interval, used = percentile_of_derived(collapsed, survives_eighty, seed=7, draws=200)
-    assert used == min_honest_draws()
-    assert interval is not None
-    assert interval.low < interval.high  # never zero-width
+    resampled = percentile_of_derived(collapsed, survives_eighty, seed=7, draws=200)
+    assert resampled.draws_used == min_honest_draws()
+    assert resampled.interval is not None
+    assert resampled.interval.low < resampled.interval.high  # never zero-width
 
 
 def test_a_resampled_draw_reports_the_real_unit_key_not_a_synthetic_index():
@@ -1042,9 +1042,9 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated():
     def always_raises(units: UnitTable) -> float | None:
         raise ZeroDivisionError("degenerate draw")
 
-    interval, draws_used = percentile_of_derived(collapsed, always_raises, seed=7, draws=20)
-    assert interval is None  # every draw was dropped, not propagated
-    assert draws_used == 0  # attempted and failed, not "never attempted" — see below
+    resampled = percentile_of_derived(collapsed, always_raises, seed=7, draws=20)
+    assert resampled.interval is None  # every draw was dropped, not propagated
+    assert resampled.draws_used == 0  # attempted and failed, not "never attempted" — see below
 
 
 def test_a_compute_that_raises_valueerror_is_contained_the_same_as_zerodivisionerror() -> None:
@@ -1089,11 +1089,9 @@ def test_a_compute_that_raises_valueerror_is_contained_the_same_as_zerodivisione
         value = "high"  # what `aggregate` returning {"m": "high"} looks like
         return None if value is None else float(value)  # cli.py's resample_fn
 
-    interval, draws_used = percentile_of_derived(
-        collapsed, resample_fn_for_a_string_metric, seed=7, draws=20
-    )
-    assert interval is None
-    assert draws_used == 0
+    resampled = percentile_of_derived(collapsed, resample_fn_for_a_string_metric, seed=7, draws=20)
+    assert resampled.interval is None
+    assert resampled.draws_used == 0
 
 
 def test_a_derived_key_colliding_with_a_non_numeric_recorded_column_is_refused():
@@ -3203,6 +3201,38 @@ def test_the_paired_resample_carries_the_pool_it_read_its_interval_from():
     assert got.pool[hi] == got.interval.high
 
 
+def test_percentile_of_derived_carries_the_pool_it_read_its_interval_from():
+    """The same pin as `paired_percentile_of_derived`'s own pool test, one
+    construction over: `percentile_of_derived` recomputes a derived metric on
+    each draw and previously threw the resulting pool away. Reading the same
+    ranks back off the returned pool with `interval_at` must reproduce the
+    interval exactly — an assertion satisfied only by the ACTUAL pool
+    `interval` was read off, not by a re-drawn or re-sorted stand-in that
+    merely looks like one (non-empty, sorted, right length)."""
+    collapsed = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got = percentile_of_derived(collapsed, _mean_m, seed=7, draws=500)
+    assert isinstance(got, PairedResample)
+    assert got.interval is not None
+    assert len(got.pool) == got.draws_used
+    assert got.pool == sorted(got.pool)
+    assert interval_at(got.pool, 0.95) == (got.interval.low, got.interval.high)
+
+
+def test_percentile_of_derived_clustered_carries_the_pool_it_read_its_interval_from():
+    """The clustered sibling's own version of the same pin: the pool
+    `percentile_of_derived_clustered` returns must be the sequence of drawn
+    cluster-pool means `interval_at` actually indexed, not an equivalent-
+    looking stand-in."""
+    collapsed = {f"c{c}_{i}": {"m": float(10 * c + i)} for c in range(1, 5) for i in range(c + 2)}
+    clusters = {key: key.split("_")[0] for key in collapsed}
+    got = percentile_of_derived_clustered(collapsed, clusters, _mean_m, seed=3, draws=500)
+    assert isinstance(got, PairedResample)
+    assert got.interval is not None
+    assert len(got.pool) == got.draws_used
+    assert got.pool == sorted(got.pool)
+    assert interval_at(got.pool, 0.95) == (got.interval.low, got.interval.high)
+
+
 def test_the_paired_interval_is_narrower_than_two_independent_draws():
     """The property that makes pairing worth doing. Two conditions that move
     together have a stable difference even when each side is highly variable —
@@ -3217,8 +3247,8 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     keys = sorted(of)
     paired = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7).interval
-    a, _ = percentile_of_derived(of, _mean_m, seed=7)
-    b, _ = percentile_of_derived(against, _mean_m, seed=7)
+    a = percentile_of_derived(of, _mean_m, seed=7).interval
+    b = percentile_of_derived(against, _mean_m, seed=7).interval
     independent_width = (a.high - a.low) + (b.high - b.low)
     assert (paired.high - paired.low) < independent_width / 4
 
@@ -4125,8 +4155,10 @@ def test_percentile_of_derived_draws_within_the_strata_it_is_given():
     def compute(units: UnitTable) -> float:
         return sum(units.pred)
 
-    plain, plain_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000)
-    drawn, drawn_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
+    plain_resampled = percentile_of_derived(collapsed, compute, seed=7, draws=2000)
+    drawn_resampled = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
+    plain, plain_n = plain_resampled.interval, plain_resampled.draws_used
+    drawn, drawn_n = drawn_resampled.interval, drawn_resampled.draws_used
     assert plain is not None and drawn is not None
     assert plain_n == 2000 and drawn_n == 2000
     plain_width = plain.high - plain.low
@@ -4222,11 +4254,9 @@ def test_percentile_of_derived_refuses_the_singleton_stratum_case():
     def compute(units: UnitTable) -> float:
         return sum(units.pred)
 
-    interval, draws_used = percentile_of_derived(
-        collapsed, compute, seed=7, draws=2000, strata=strata
-    )
-    assert interval is None
-    assert draws_used == 0
+    resampled = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
+    assert resampled.interval is None
+    assert resampled.draws_used == 0
 
 
 def test_percentile_of_derived_refuses_a_multi_key_stratum_of_identical_rows_too():
@@ -4241,11 +4271,9 @@ def test_percentile_of_derived_refuses_a_multi_key_stratum_of_identical_rows_too
     def compute(units: UnitTable) -> float:
         return sum(units.pred)
 
-    interval, draws_used = percentile_of_derived(
-        collapsed, compute, seed=7, draws=2000, strata=strata
-    )
-    assert interval is None
-    assert draws_used == 0
+    resampled = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
+    assert resampled.interval is None
+    assert resampled.draws_used == 0
 
 
 def test_percentile_of_derived_does_not_over_refuse_one_constant_stratum_among_others():
@@ -4265,11 +4293,9 @@ def test_percentile_of_derived_does_not_over_refuse_one_constant_stratum_among_o
     def compute(units: UnitTable) -> float:
         return sum(units.pred)
 
-    interval, draws_used = percentile_of_derived(
-        collapsed, compute, seed=7, draws=2000, strata=strata
-    )
-    assert interval is not None
-    assert draws_used == 2000
+    resampled = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
+    assert resampled.interval is not None
+    assert resampled.draws_used == 2000
 
 
 def test_summarize_step_threads_strata_into_the_clustered_column_call():
@@ -5734,10 +5760,11 @@ def test_a_clustered_derived_draw_rests_on_the_cluster_count_not_the_row_count()
         rows = [row["y"] for row in table]
         return sum(rows) / len(rows)
 
-    clustered, survivors = percentile_of_derived_clustered(
+    clustered_resampled = percentile_of_derived_clustered(
         collapsed, clusters, mean_y, seed=3, draws=500
     )
-    unit_level, _ = percentile_of_derived(collapsed, mean_y, seed=3, draws=500)
+    clustered, survivors = clustered_resampled.interval, clustered_resampled.draws_used
+    unit_level = percentile_of_derived(collapsed, mean_y, seed=3, draws=500).interval
     assert clustered is not None and unit_level is not None
     assert survivors == 500
     assert (clustered.high - clustered.low) > (unit_level.high - unit_level.low)
@@ -5775,7 +5802,9 @@ def test_a_clustered_derived_draw_pools_units_rather_than_averaging_cluster_mean
         rows = [row["y"] for row in table]
         return sum(rows) / len(rows)
 
-    interval, _ = percentile_of_derived_clustered(collapsed, clusters, mean_y, seed=1, draws=2000)
+    interval = percentile_of_derived_clustered(
+        collapsed, clusters, mean_y, seed=1, draws=2000
+    ).interval
     assert interval is not None
     # Pooled: (10*100 + 10*(0+1+2+3+4)) / (10 + 50) = 18.333…; the cluster-mean
     # reading would give (100*10 + 2.0*10)/20 = 51.0. The interval must contain
@@ -5789,11 +5818,11 @@ def test_a_clustered_derived_draw_returns_its_survivor_count_even_when_degenerat
     rather than reinvented: `None` and `0` are different facts."""
     collapsed = {"a1": {"y": 1.0}, "b1": {"y": 2.0}}
     clusters = {"a1": "A", "b1": "B"}
-    interval, survivors = percentile_of_derived_clustered(
+    resampled = percentile_of_derived_clustered(
         collapsed, clusters, lambda table: None, seed=1, draws=50
     )
-    assert interval is None
-    assert survivors == 0
+    assert resampled.interval is None
+    assert resampled.draws_used == 0
 
 
 def test_a_clustered_derived_draw_over_constant_content_reports_no_interval():
@@ -5817,15 +5846,15 @@ def test_a_clustered_derived_draw_over_constant_content_reports_no_interval():
     plain form's narrower one."""
     collapsed = {f"u{i}": {"y": 5.0} for i in range(20)}
     clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
-    interval, survivors = percentile_of_derived_clustered(
+    resampled = percentile_of_derived_clustered(
         collapsed,
         clusters,
         lambda table: sum(row["y"] for row in table) / len(table),
         seed=1,
         draws=500,
     )
-    assert interval is None
-    assert survivors == 0
+    assert resampled.interval is None
+    assert resampled.draws_used == 0
 
 
 # --- H5b task 1: the guard pin, arms B and F --------------------------------

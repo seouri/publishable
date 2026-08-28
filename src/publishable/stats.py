@@ -1224,7 +1224,7 @@ def percentile_over_units(
 
     **This returns a bare `Interval`, with no survivor count, and that is a
     decision rather than an omission — conditional on finite inputs.**
-    `percentile_of_derived` returns `(Interval, int)` because a derived metric's
+    `percentile_of_derived` returns a `PairedResample` because a derived metric's
     `compute` can fail on a degenerate draw — `nan`, `None`, or a raise — so how
     many draws survived is a real fact about the interval. A column metric's
     draw statistic is a mean over a non-empty sample of FINITE values with
@@ -1578,9 +1578,9 @@ def percentile_of_derived(
     draws: int = 2000,
     confidence: float = 0.95,
     strata: dict[str, str] | None = None,
-) -> tuple[Interval | None, int]:
-    """A percentile interval for a derived metric, by recomputing it, and the
-    number of draws it actually rests on.
+) -> PairedResample:
+    """A percentile interval for a derived metric, by recomputing it, the
+    number of draws it actually rests on, and the pool it was read from.
 
     A derived metric has no per-unit value to resample directly — `aggregate`
     returned one number for the whole table, not one per unit — so this is
@@ -1626,8 +1626,8 @@ def percentile_of_derived(
 
     Counting `None`/`nan`/raise as skipped can only shrink the surviving count
     relative to `draws`, so the percentile ranks are read off *that* count,
-    and the second return value is that surviving count — **always**, even
-    when the interval is `None`. That is what lets `summarize_step` tell "the
+    and `draws_used` is that surviving count — **always**, even when the
+    interval is `None`. That is what lets `summarize_step` tell "the
     resample was attempted and every draw was degenerate" (a surviving count
     of 0) apart from "resampling was never attempted at all" (no count
     to report), which otherwise reach `run.yaml` byte-identical: both would
@@ -1638,7 +1638,11 @@ def percentile_of_derived(
     interval a percentile can honestly be read off (that function says why),
     so the interval is `None` while the count returned alongside it stays
     real. `cli.py` warns on any shortfall, a count below the floor and a count
-    merely reduced being the same event at two magnitudes.
+    merely reduced being the same event at two magnitudes. `pool` is the sorted
+    surviving values themselves — the ones `interval` was read off — carried
+    for the same reason `PairedResample.pool` is: a caller building a
+    corrected interval at a smaller α needs the same draws, not a re-drawn
+    approximation of them.
 
     **With `strata`, each draw preserves each stratum's own key count and draws
     keys with replacement within it** — the same discipline
@@ -1686,7 +1690,7 @@ def percentile_of_derived(
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
-        return None, 0
+        return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
     n = len(keys)
     pools: dict[str, list[str]] | None = None
@@ -1707,7 +1711,7 @@ def percentile_of_derived(
         # way the two sibling constructions refuse their own degenerate case
         # — see the docstring's own paragraph for why this is checked on the
         # DRAW's structure and not by running `compute` and comparing outputs.
-        return None, 0
+        return PairedResample(interval=None, draws_used=0, pool=[])
     values: list[float] = []
     for _ in range(draws):
         if ordered_pools is not None:
@@ -1735,12 +1739,13 @@ def percentile_of_derived(
             continue
         values.append(float(value))
     if len(values) < min_honest_draws(confidence):
-        return None, len(values)
+        return PairedResample(interval=None, draws_used=len(values), pool=sorted(values))
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
-    return (
-        Interval(low=values[lo], high=values[hi], method="percentile_over_units"),
-        len(values),
+    return PairedResample(
+        interval=Interval(low=values[lo], high=values[hi], method="percentile_over_units"),
+        draws_used=len(values),
+        pool=values,
     )
 
 
@@ -1752,9 +1757,9 @@ def percentile_of_derived_clustered(
     draws: int = 2000,
     confidence: float = 0.95,
     strata: dict[str, str] | None = None,
-) -> tuple[Interval | None, int]:
-    """A percentile interval for a derived metric, resampling whole clusters, and
-    the number of draws it actually rests on.
+) -> PairedResample:
+    """A percentile interval for a derived metric, resampling whole clusters, the
+    number of draws it actually rests on, and the pool it was read from.
 
     `reference.md` states the construction twice, and this docstring does not
     add a third wording: each replicate draws `G` clusters with replacement and
@@ -1784,7 +1789,7 @@ def percentile_of_derived_clustered(
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
-        return None, 0
+        return PairedResample(interval=None, draws_used=0, pool=[])
     pools = _draw_pools(keys, strata, clusters)
     # The content-based refusal `percentile_over_units_clustered` makes
     # "whether or not `strata` is declared" (`reference.md` § Statistical
@@ -1804,7 +1809,7 @@ def percentile_of_derived_clustered(
         <= 1
         for group in pools
     ):
-        return None, 0
+        return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
     values: list[float] = []
     for _ in range(draws):
@@ -1822,12 +1827,15 @@ def percentile_of_derived_clustered(
             continue
         values.append(float(value))
     if len(values) < min_honest_draws(confidence):
-        return None, len(values)
+        return PairedResample(interval=None, draws_used=len(values), pool=sorted(values))
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
-    return (
-        Interval(low=values[lo], high=values[hi], method="percentile_of_derived_clustered"),
-        len(values),
+    return PairedResample(
+        interval=Interval(
+            low=values[lo], high=values[hi], method="percentile_of_derived_clustered"
+        ),
+        draws_used=len(values),
+        pool=values,
     )
 
 
@@ -3290,12 +3298,16 @@ def summarize_step(
             derived_interval: Interval | None
             draws_used: int | None
             if compute is not None and seed is not None:
-                derived_interval, draws_used = (
+                derived_resample = (
                     percentile_of_derived_clustered(
                         collapsed, clusters, compute, seed, draws=draws, strata=strata
                     )
                     if clusters is not None
                     else percentile_of_derived(collapsed, compute, seed, draws=draws, strata=strata)
+                )
+                derived_interval, draws_used = (
+                    derived_resample.interval,
+                    derived_resample.draws_used,
                 )
             else:
                 derived_interval, draws_used = None, None
