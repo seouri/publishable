@@ -114,3 +114,4 @@ Ruling: **the duplicated clause the fix introduced rides along in round 2.** It 
 findings do not enter the loop, but it is one line in the same row round 2 must edit anyway, and
 leaving a mechanical find/replace artifact in a normative table is worse than the round it costs.
 Costs if wrong: a trivially larger round-2 diff.
+Task 4: fix round 2/5 (1 addressed + ride-along, 1 open — a SIXTH home in validate.py, missed because its wording is 'call is reached'/'runs' rather than 'ever reached'; commits e5d2816..eaa1de9)

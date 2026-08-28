@@ -183,3 +183,57 @@ into that code's 'raises while importing' shape."
 - `uv run ruff check .` — All checks passed!
 - `uv run ruff format --check .` — 101 files already formatted
 - `uv run mypy` — Success: no issues found in 56 source files
+
+## Fix round 3 (reviewer found a sixth home in a file previously reported clean)
+
+**Finding 3, still open — sixth home in `validate.py`, both instances fixed.** Lines ~569 and
+~576 read "before its own `@register_template` call is reached" and "before its own
+`@register_template` runs" — the same false mechanism (decoration treated as something the
+class body sequentially reaches or runs, rather than something applied to the finished class
+after the fact, with the factory call itself already evaluated earlier). Round 2's report
+claimed "all four files reported clean" on a pattern set keyed on the exact wordings already
+seen ("ever reached", "call is ever reached"); the live text said "is reached" (no "ever") and
+"runs", which those patterns could not match — a sweep that has never been shown to find
+something present is not evidence of a zero, and this one hadn't been. Both instances now read
+"before `@register_template` or anything else ever sees the class."
+
+**Sweep redone from the mechanism, not from wordings already seen.** Enumerated by reading,
+before grepping, every place the claim could be made: `templates/base.py`, `templates/
+discovery.py`, `templates/registry.py`, `validate.py`, `materialize.py`, `cli.py`, `freeze.py`,
+`report.py`, `reproduce.py`, `demo.py`, `generators/template.py`, `generators/experiment.py`,
+`plugin_scaffold.py`, every `tests/test_*.py` naming `register_template`, and the four documents
+(`docs/reference.md`, `docs/design-principles.md`, `docs/experimental-designs.md`, `README.md`).
+Patterns, built from the mechanism ("something happens before the decorator does") rather than
+from strings already seen:
+- `register_template[^.\n]{0,80}(is reached|reached|runs?\b|has(?:n't| not) run|executed|fires|triggers|applies|is applied)`
+- `before[^.\n]{0,40}(the )?decorator[^.\n]{0,60}(reached|runs?\b|applies|is applied|executes?|fires)`
+- `decorator[^.\n]{0,60}not yet`
+
+Run whitespace-normalized (`re.sub(r"\s+", " ", text)`) so a wrap cannot hide a hit, over all 21
+enumerated files.
+
+**Proof of life** — before trusting a zero, ran the same first pattern against the captured
+pre-fix `validate.py` text (the two lines this round fixes) and confirmed it finds both:
+```
+proof-of-life hits against pre-fix text: 2
+ -> es running # before its own `@register_template` call is reached, so a fil
+ ->  class body, before its own `@register_template` runs, leaves n
+```
+
+**Final sweep result, against the current tree:** one raw match remained after the fix —
+`tests/test_cli.py`: "`@register_template` runs before the module-level raise below it" — read
+in full context (`test_a_declared_credential_reaches_no_diagnostic_when_its_own_template_fails_
+to_load`), this is a *true*, different claim: it describes execution order between the already-
+applied decorator (decoration completes when the class+decorator statement finishes) and a
+*separate*, later module-level statement — not the false claim about reaching a line during
+class-body execution. Confirmed correct by reading, not excluded by pattern-matching alone.
+Two pre-existing hits in `templates/discovery.py` and one in `reproduce.py` ("a class body
+finishes running before `@register_template` sees it") and the fixed `reference.md`/`base.py`/
+`test_templates.py` instances all use the correct "sees it"/"sees the class" wording already.
+**Final count: 0 unresolved false-mechanism claims.**
+
+**Commands run for this round** (comments only, so ruff/mypy plus the covering tests):
+- `uv run ruff check src/publishable/validate.py` — All checks passed!
+- `uv run ruff format --check src/publishable/validate.py` — 1 file already formatted
+- `uv run mypy` — Success: no issues found in 56 source files
+- `uv run pytest tests/test_templates.py tests/test_materialize.py "tests/test_cli.py::test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malformed_parameter_spec" -q` — 79 passed

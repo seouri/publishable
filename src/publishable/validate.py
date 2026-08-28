@@ -566,15 +566,15 @@ def validate_config(
         # a load or collision fault means it never will, and the finding just
         # appended can itself carry a raising file's own exception text
         # (`E-TEMPLATE-LOAD` embeds `{exc!r}`). A class body finishes running
-        # before its own `@register_template` call is reached, so a file that
-        # raises *after* that call, or a file that raises while a sibling in
+        # before `@register_template` or anything else ever sees the class, so a
+        # file that raises after registration, or a file that raises while a sibling in
         # the same directory already registered cleanly, still leaves a fully
         # formed class behind — `discover_local`/`_merged` hand it back as
         # `exc.partial_templates` for exactly this. Read the same way a
         # resolved template's declarations are read below, so the set does not
         # drift from `declared_credential_names_for`. A raise from *inside* a
-        # class body, before its own `@register_template` runs, leaves no
-        # class to read; that residual is `reference.md`'s to describe rather
+        # class body, before `@register_template` or anything else ever sees the
+        # class, leaves no class to read; that residual is `reference.md`'s to describe rather
         # than this call's to close.
         partial = getattr(exc, "partial_templates", None) or []
         names: list[str] = []
