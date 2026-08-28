@@ -36,7 +36,7 @@ The per-slice history that used to live here is in the [development record](#the
 | `docs/design-principles.md` | **Normative.** Why each rule is what it is |
 | `docs/experimental-designs.md` | How each experimental design is expressed; what core prevents and refuses |
 | `docs/reference.md` | Config schema, CLI, `io` API, templates, sweeps, artifact layout |
-| `docs/feasibility-*.md` — currently [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
+| `docs/feasibility-*.md` — [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md), [`growth-chart-literacy`](docs/feasibility-growth-chart-literacy.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
 | [`docs/releasing.md`](docs/releasing.md) | **Non-normative.** The maintainer's runbook for a PyPI and Homebrew release, with each step's reason attached |
 | [`docs/tutorial-writing-a-plugin.md`](docs/tutorial-writing-a-plugin.md) | **Non-normative.** The plugin tutorial — why/when a plugin, and how to build one, measured end to end and pinned to a commit. It reuses `reference.md` § Creating a plugin's own `my_assay` for the project-local template and a second stem for the installed plugin, because one name claimed twice is refused and the tutorial shows that refusal; every build claim in it is dated |
 
