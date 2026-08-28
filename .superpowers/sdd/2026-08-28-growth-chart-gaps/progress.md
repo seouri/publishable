@@ -170,3 +170,7 @@ Task 6+7: minor (deferred): the report says "six homes" and lists seven — a sl
 not in governed spec or code.
 Task 6+7: complete (commits 7161ae5..664b21d, 3 fix rounds, review clean, 2 parked;
 suite 3499 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
+Task 8: review found 1 Important (fixture distinguishes 3 of 4 candidates while its docstring claims 4), 1 Minor judged not-a-gap; commits fddf329..4492018
+Task 8: fix round 1/5 (1 addressed, 0 open — all four candidate behaviours now observationally
+distinct, verified by independent derivation; commits 4492018..59297df)
+Task 8: complete (commits fddf329..59297df, review clean)
