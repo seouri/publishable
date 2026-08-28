@@ -1901,7 +1901,7 @@ These are the deliverable's second output: places where a real plan pressed on t
 
 **6. Partially closed — the documentation half is fixed; the resolver incompatibility is untouched and was never itself the gap.** `{by: calc_id, collapse: mean}` over a resolver roster still earns `E-RESOLVER-MEASUREMENT-FIELD` — the resolver must yield one `Unit` per measurement — and the same declaration still applies `mean` to the string-valued attributes, earning two `E-DATA-MEASUREMENTS-COLLAPSE-TYPE`; both diagnostics were correct behavior then and now, not a gap in themselves. What this entry actually found — that the config schema's one-line comment did not say `collapse` applies to **every** carried column rather than to the numeric ones — is fixed: [§ The one config file](reference.md#the-one-config-file) now states it directly, which is what makes the per-column map the documented ordinary case rather than something a reader discovers from the second error.
 
-**7. Closed — `compare: {to: constant, value: N}` is now the absolute-threshold hypothesis form.** A claim against a fixed reference — chance for an AUROC, zero for a difference already computed elsewhere, a regulatory floor — no longer has to route through a `summary`-step `Estimate` outside the correction family. The new form is core-computed from the metric's own per-condition value, `verdict_rests_on: computed`, and joins the [hypothesis family](reference.md#pre-registration) like a baseline comparison or a declared contrast, and gets a real corrected bound (`evaluate_on: ci95_lower`/`ci95_upper`) under a declared correction method too, wherever the metric's own raw interval exists. Two standing exceptions are recorded rather than hidden: a metric with no raw interval at all has nothing to correct, and a recorded column carried under both `weight_by` and `cluster_by` gets no correctable `Member` even though its raw interval exists — either way a bound test on it comes back `supported: null`, and `evaluate_on: observed` is the form to use there. The weighted-clustered residual is filed as its own `spec-defects.md` entry rather than left silent; the no-raw-interval case was never a gap, since a metric with no interval had nothing for `evaluate_on: ci95_lower` to answer either way.
+**7. Closed — `compare: {to: constant, value: N}` is now the absolute-threshold hypothesis form.** A claim against a fixed reference — chance for an AUROC, zero for a difference already computed elsewhere, a regulatory floor — no longer has to route through a `summary`-step `Estimate` outside the correction family. The new form is core-computed from the metric's own per-condition value, `verdict_rests_on: computed`, and joins the [hypothesis family](reference.md#pre-registration) like a baseline comparison or a declared contrast, and gets a real corrected bound (`evaluate_on: ci95_lower`/`ci95_upper`) under `holm` or `bonferroni` too, wherever the metric's own raw interval exists. Two standing exceptions are recorded rather than hidden: a metric with no raw interval at all has nothing to correct, and a recorded column carried under both `weight_by` and `cluster_by` gets no correctable `Member` even though its raw interval exists — either way a bound test on it comes back `supported: null`, and `evaluate_on: observed` is the form to use there. **`fdr_bh` is not a third exception**, and the distinction matters for reading a null bound: Benjamini-Hochberg implies no per-comparison level, so no member of any kind carries a corrected bound under it — a `vs_baseline` delta and a declared contrast included. A bound-evaluated gate reads `supported: null` there whatever it compares, which is a prior condition on the promise rather than something a constant reference earns. The weighted-clustered residual is filed as its own `spec-defects.md` entry rather than left silent; the no-raw-interval case was never a gap, since a metric with no interval had nothing for `evaluate_on: ci95_lower` to answer either way.
 
 **One gap belongs to the source rather than to the specification, and it bounds this whole analysis.** OI-7 leaves the cohort, the variable derivations and the source cohort size undefined; OI-8 leaves the model roster and the prompt specification undefined. Every unit count in this document is therefore the plan's own stated sample size rather than something checked as drawable, and **no cost or runtime figure is given at all**, because there is no anchor the source itself observed — no roster, no prompt, and so no token count. The request counts below are exact; multiplying them by a price is not something this document can honestly do.
 
@@ -2335,6 +2335,61 @@ to do — `compare: {to: constant, value: 0.5}` directly on the condition-scoped
 now answers with a real corrected bound rather than `supported: null`. That rewrite was not made here:
 this task reads and reasons, per its own charter, rather than editing the downstream project or running
 its pipeline, which needs a deployment this analysis has never had.
+
+---
+
+### Re-measured on 2026-08-28 against commit `92ce44e` — the slice's own review, and three sentences it had to take back
+
+The `correctable-condition-metric` slice is complete at this commit: seven tasks and one fix wave,
+`3545 passed, 1 skipped, 2 xfailed`, with `ruff`, `ruff format --check` and `mypy` clean. This entry
+records what its **final whole-branch review** found, because the finding is about this document's
+subject rather than only about the slice.
+
+**The code was right and the documents were not.** The review returned three Important findings and
+all three were sentences the slice itself had just written, each false against the build it described:
+
+| What the slice wrote | What the code does | Where it was corrected |
+|---|---|---|
+| A corrected bound exists "except in two cases" | `correction.py`'s `_level_for` returns `None` for `fdr_bh`, so **no** member of any kind carries one under BH | [§ Pre-registration](reference.md#pre-registration) and two neighbouring passages now scope the promise to `holm`/`bonferroni` and name BH as a prior condition |
+| Row 4 of the design's own decision table: "derived, no declared `resample`" is the no-raw-interval case | A derived metric is resampled whenever a `compute` callable and a seed exist, declared `statistics.resample` or not — the row's conclusion is right and its stated cause is not | `spec-defects.md`, `hypotheses.py`, and a third home in `cli.py` the fix brief had not named |
+| [Finding 2](#gaps-this-analysis-found-in-the-specification) above: the E2 claim can be written "directly on `step03_compare.auroc_count_only`" | That metric **is** the `summary`-step `Estimate`; the condition-scoped metric that could carry `compare: {to: constant}` is `growth_label.aggregate`'s own `auroc` | Finding 2, corrected in place |
+
+[Gap 7](#gaps-this-analysis-found-in-the-specification) above carried the first of those overstatements
+too, and is corrected in this revision: it now scopes the corrected bound to `holm` or `bonferroni` and
+names `fdr_bh` as a prior condition on the whole promise. The distinction is not pedantry for a reader of
+this analysis — under BH a bound-evaluated gate reads `supported: null` no matter what it compares, so a
+null bound there says nothing about the hypothesis form and everything about the method.
+
+**Two mechanical results from the same review, both about this slice's own tests.** `pools_by_key` — the
+carrier the pool was to be handed through — was written and never read, and its comment claimed the job a
+local variable actually did; it is deleted. And the `declaration_index` offset that keeps a condition
+member from colliding with a comparison member was unpinned: mutating it to `=i` left `test_cli.py`,
+`test_hypotheses.py` and `test_correction.py` fully green at 702 passed. It is pinned now, by a test that
+forces an exact evidence-ratio tie by construction — a collision alone is invisible, because the sort is
+stable and the family is built in hypothesis order.
+
+**The fifteen configs, re-validated at this commit** from fresh fixtures: thirteen clean,
+`e05c-fixed-n` and `e08-ordering` each carrying the one `W-DATA-CLUSTER-UNDECLARED` that
+[gap 4's retraction](#gaps-this-analysis-found-in-the-specification) explains. Identical to
+[the previous measurement](#re-checked-on-2026-08-28-against-commit-ae9677e--the-fifteen-configs-re-validated-after-the-slice-closed) — nothing in the fix wave touched a validation path.
+
+**A correction to that previous entry rather than an edit of it.** It states that
+`step03_compare.py`'s docstring "still narrates the *pre-slice* reason for routing around the
+condition-scoped `auroc`". That was true when it was written and is not true now: the docstring rested
+its routing decision on core building no correctable member for a condition's own value, which is
+exactly what this slice retired, and `2026-08-28-gcl-measurement` installs `publishable` editable off
+this working tree — so the sentence was false against the code that repo actually runs. It has been
+rewritten there to name both live routes and what each buys; **the routing itself is unchanged**, because
+the `Estimate`'s bootstrap pools every fold's out-of-fold score into the one AUROC over patients that E2
+claims, where the template's `auroc` is per condition. That remains the study's trade to make — it just
+now rests on current facts.
+
+**One observation not filed as a gap.** `publishable validate configs/e01-reference-gate` — the
+experiment *directory* rather than its `config.yaml` — reports `E-IO-FAILED  Is a directory`.
+[§ CLI reference](reference.md#cli-reference) documents the argument as a config file path and every
+example writes one, so this is a thin diagnostic rather than a contradiction, and it is recorded here
+instead of filed because it is a property of core's argument handling rather than anything this
+analysis's configs pressed on.
 
 ---
 
