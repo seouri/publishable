@@ -69,10 +69,18 @@ Then drive it. Install the **wheel** into a throwaway venv outside the repositor
 uv venv .venv && uv pip install --python .venv/bin/python <path>/dist/publishable-<v>-py3-none-any.whl
 ./.venv/bin/publishable list-templates      # resolves `generic`
 ./.venv/bin/publishable new my-study        # proves readme_templates survived
+cd my-study
+cat >> pyproject.toml <<'EOF'                # WITHOUT THIS THE REST TESTS THE PUBLISHED VERSION
+[tool.uv.sources]
+publishable = { path = "<path>/dist/publishable-<v>-py3-none-any.whl" }
+EOF
+uv sync && uv run python -c "import publishable; print(publishable.__version__)"   # must print <v>
 # then: generate experiment -> validate -> run -> report
 ```
 
-`run` reaching `status: completed` and writing a readable `units.parquet` is the check that matters, because it is the only one that exercises `pyarrow`. Note that `publishable --help` is *not* a smoke test: operation commands take paths and no flags, so it prints `unknown command`.
+**Everything after `new` runs in the scaffolded project's OWN environment, not the venv you just installed into**, and a scaffolded `pyproject.toml` declares a bare `dependencies = ["publishable"]`. So `uv run publishable validate|run|report` resolves core **from PyPI** — the *previous* release — and the whole arc goes green while saying nothing about the artifact under test. Measured on 2026-08-28 cutting 0.2.1: the project environment reported `0.2.0` until it was repointed at the wheel. This is the *answering a question with a proxy* shape from `CLAUDE.md`, aimed at the release gate itself: the arc that proves the candidate works was proving the last one did. Repoint with `[tool.uv.sources]`, then read the version back before believing anything downstream of it, and confirm the finished record carries `publishable_version: <v>`.
+
+`run` reaching `status: completed` and writing a readable `units.parquet` is the check that matters, because it is the only one that exercises `pyarrow`. Note that `publishable --help` is *not* a smoke test: operation commands take paths and no flags, so it prints `unknown command`. Two more things the arc needs and the scaffold does not supply: `metadata.description` and `metadata.authors` are required and materialize empty, and `data.units.key` defaults to `patient_id` against a roster file that must be named `index.csv` — three diagnostics to walk through before `validate` passes, none of them a defect.
 
 ## 3. TestPyPI
 
@@ -211,7 +219,7 @@ README's install block and the release notes both gain the routes now that they 
 - [ ] Version moved at all six sites — `uv.lock` being the one `uv` writes; the three scaffold/fixture sites untouched
 - [ ] `CITATION.cff` `date-released` is the actual release date
 - [ ] `uv build`; `twine check`; both archive listings read
-- [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet`
+- [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet` — with the scaffolded project repointed at the wheel, and `publishable_version: <v>` read back out of the finished `run.yaml`
 - [ ] TestPyPI upload and install — only for a new project name, a packaging-metadata change, or a README change; `verify` covers an ordinary release
 - [ ] `main` pushed; tag pushed; GitHub release created, no install block yet
 - [ ] `release.yml` green through `verify` and `publish`; uploaded sha256 equals the local one
