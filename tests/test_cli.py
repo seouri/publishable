@@ -28637,3 +28637,427 @@ def test_the_warning_reports_once_per_step_not_once_per_condition(tmp_path, caps
         sweep={"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
     )
     assert doc["stdout"].count("W-STEP-RETURN-DISCARDED") == 1
+
+
+# ===========================================================================
+# Task 1 (docs/superpowers/plans/2026-08-28-correctable-condition-metric),
+# the bit-stability oracle: captured BEFORE `correction.Member` grows a
+# `compare: {to: constant}` route, so a later green on this exact literal is
+# evidence the correction machinery genuinely did not move, not coincidence.
+# The run below deliberately declares NO `compare: {to: constant}` hypothesis
+# — that combination is the one the slice is allowed to change (a `null`
+# `ci95_corrected` there may legitimately become non-null) — so this oracle
+# stays a pure control: every corrected bound here comes from `vs_baseline`,
+# a declared `statistics.contrasts` entry, or a `compare: {to: baseline}`
+# hypothesis, none of which this slice's charter touches.
+# ===========================================================================
+
+_TASK1_ORACLE_GOLDEN = [
+    ("code_hash", "<normalized>"),
+    ("config.data.input_dir", "<normalized>"),
+    ("config.data.input_manifest_policy", "hash_all"),
+    ("config.data.output_dir", "<normalized>"),
+    ("config.data.units.allocation", "within"),
+    ("config.data.units.cluster_by", None),
+    ("config.data.units.from", "index.csv"),
+    ("config.data.units.holdout", None),
+    ("config.data.units.key", "patient_id"),
+    ("config.data.units.measurements", None),
+    ("config.data.units.weight_by", None),
+    ("config.entrypoint", "cohort_pilot.experiment:CohortPilotExperiment"),
+    ("config.experiment_type", "generic"),
+    ("config.hypotheses.0.compare.condition", "method=spearman"),
+    ("config.hypotheses.0.compare.to", "baseline"),
+    ("config.hypotheses.0.direction", "greater"),
+    ("config.hypotheses.0.evaluate_on", "ci95_lower"),
+    ("config.hypotheses.0.id", "h1"),
+    ("config.hypotheses.0.kind", "confirmatory"),
+    ("config.hypotheses.0.metric", "step01_summarize_units.pred"),
+    ("config.hypotheses.0.statement", "spearman exceeds pearson"),
+    ("config.hypotheses.0.threshold", 0.5),
+    ("config.limits.max_executions", 500),
+    ("config.limits.max_failed_fraction", 0.2),
+    ("config.limits.max_ineligible_fraction", 0.5),
+    ("config.limits.min_clusters", 10),
+    ("config.limits.min_reported_n", 10),
+    ("config.limits.min_units_per_cell", 20),
+    ("config.metadata.authors.0", "Kyungjoon Lee"),
+    ("config.metadata.description", "an end-to-end helper run"),
+    ("config.metadata.institution", ""),
+    ("config.metadata.name", "cohort-pilot"),
+    ("config.parameters.analysis.confidence", 0.95),
+    ("config.parameters.analysis.drop_missing", True),
+    ("config.parameters.analysis.method", "pearson"),
+    ("config.parameters.analysis.min_samples", 30),
+    ("config.plugin", None),
+    ("config.replication.repeats.0.kind", "seed"),
+    ("config.replication.repeats.0.n", 3),
+    ("config.schema_version", "1.0"),
+    ("config.statistics.contrasts.0.against", "baseline"),
+    ("config.statistics.contrasts.0.id", "spearman_vs_pearson"),
+    ("config.statistics.contrasts.0.of", "method=spearman"),
+    ("config.statistics.resample.method", "bootstrap"),
+    ("config.statistics.resample.n", 500),
+    ("config.sweep.baseline.analysis.method", "pearson"),
+    ("config.sweep.grid.analysis.method.0", "spearman"),
+    ("config.sweep.grid.analysis.method.1", "kendall"),
+    ("config.template_version", "1.0.0"),
+    ("draft", False),
+    ("execution.conditions.0.index", 0),
+    ("execution.conditions.0.label", "baseline"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed40.attempts", 1),
+    ("execution.conditions.0.steps.step01_summarize_units.seed40.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed40.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed40.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed47.attempts", 1),
+    ("execution.conditions.0.steps.step01_summarize_units.seed47.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed47.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed47.wall_seconds", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed61.attempts", 1),
+    ("execution.conditions.0.steps.step01_summarize_units.seed61.started_at", "<normalized>"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed61.status", "completed"),
+    ("execution.conditions.0.steps.step01_summarize_units.seed61.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.index", 1),
+    ("execution.conditions.1.label", "method=spearman"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed40.attempts", 1),
+    ("execution.conditions.1.steps.step01_summarize_units.seed40.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed40.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed40.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed47.attempts", 1),
+    ("execution.conditions.1.steps.step01_summarize_units.seed47.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed47.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed47.wall_seconds", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed61.attempts", 1),
+    ("execution.conditions.1.steps.step01_summarize_units.seed61.started_at", "<normalized>"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed61.status", "completed"),
+    ("execution.conditions.1.steps.step01_summarize_units.seed61.wall_seconds", "<normalized>"),
+    ("execution.conditions.2.index", 2),
+    ("execution.conditions.2.label", "method=kendall"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed40.attempts", 1),
+    ("execution.conditions.2.steps.step01_summarize_units.seed40.started_at", "<normalized>"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed40.status", "completed"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed40.wall_seconds", "<normalized>"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed47.attempts", 1),
+    ("execution.conditions.2.steps.step01_summarize_units.seed47.started_at", "<normalized>"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed47.status", "completed"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed47.wall_seconds", "<normalized>"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed61.attempts", 1),
+    ("execution.conditions.2.steps.step01_summarize_units.seed61.started_at", "<normalized>"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed61.status", "completed"),
+    ("execution.conditions.2.steps.step01_summarize_units.seed61.wall_seconds", "<normalized>"),
+    ("layout.conditions", True),
+    ("layout.repeats", True),
+    ("parameters_hash", "<normalized>"),
+    ("provenance.allocation", None),
+    ("provenance.allocation_hash", None),
+    ("provenance.apparatus", None),
+    ("provenance.environment.hardware.cpu_count", "<normalized>"),
+    ("provenance.environment.hostname", "<normalized>"),
+    ("provenance.environment.manager", "uv"),
+    ("provenance.environment.os", "<normalized>"),
+    ("provenance.environment.python_version", "<normalized>"),
+    ("provenance.environment.uv_lock", None),
+    ("provenance.environment.uv_lock_hash", None),
+    ("provenance.git.branch", "<normalized>"),
+    ("provenance.git.code_dirty", False),
+    ("provenance.git.commit", "<normalized>"),
+    ("provenance.git.config_committed", True),
+    ("provenance.git.remote", None),
+    ("provenance.git.repo_root", "<normalized>"),
+    ("provenance.input_manifest", "manifest/input.json"),
+    ("provenance.input_manifest_hash", "<normalized>"),
+    ("provenance.publishable_version", "0.2.0"),
+    ("provenance.units.key", "patient_id"),
+    ("provenance.units.n", 40),
+    (
+        "provenance.units_hash",
+        "sha256:5905022fcad43fa710893686c8ab70d154e8144cb219a9af09b181713d107c0a",
+    ),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.0", 15.9875),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.ci95.1", 23.375),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.correction", None),
+    (
+        "results.conditions.0.aggregated.step01_summarize_units.pred.method",
+        "percentile_over_units",
+    ),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.completed", 40),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.n.resolved", 40),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.n", 3),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.resample.n", 500),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.resample_draws", 500),
+    ("results.conditions.0.aggregated.step01_summarize_units.pred.value", 19.75),
+    ("results.conditions.0.index", 0),
+    ("results.conditions.0.is_baseline", True),
+    ("results.conditions.0.label", "baseline"),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed40.n_units", 40),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed47.n_units", 40),
+    ("results.conditions.0.per_repeat.step01_summarize_units.seed61.n_units", 40),
+    ("results.conditions.0.values.analysis.method", "pearson"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.0", 17.0625),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.ci95.1", 24.3375),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.correction", None),
+    (
+        "results.conditions.1.aggregated.step01_summarize_units.pred.method",
+        "percentile_over_units",
+    ),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.completed", 40),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.n.resolved", 40),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.n", 3),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.resample.n", 500),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.resample_draws", 500),
+    ("results.conditions.1.aggregated.step01_summarize_units.pred.value", 20.75),
+    ("results.conditions.1.index", 1),
+    ("results.conditions.1.is_baseline", False),
+    ("results.conditions.1.label", "method=spearman"),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed40.n_units", 40),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed47.n_units", 40),
+    ("results.conditions.1.per_repeat.step01_summarize_units.seed61.n_units", 40),
+    ("results.conditions.1.values.analysis.method", "spearman"),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.ci95.0", 0.8250000000000028),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.ci95.1", 1.1500000000000021),
+    (
+        "results.conditions.1.vs_baseline.step01_summarize_units.pred.ci95_corrected.0",
+        0.8000000000000007,
+    ),
+    (
+        "results.conditions.1.vs_baseline.step01_summarize_units.pred.ci95_corrected.1",
+        1.1750000000000007,
+    ),
+    (
+        "results.conditions.1.vs_baseline.step01_summarize_units.pred.cohens_d",
+        1.9748417658131499,
+    ),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.correction", "holm"),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.correction_level", 0.025),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.delta", 1.0),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.family.comparisons", 3),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.family.metrics", 1),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.family_size", 3),
+    (
+        "results.conditions.1.vs_baseline.step01_summarize_units.pred.method",
+        "paired_percentile_over_units",
+    ),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.n_paired", 40),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.paired", True),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.conditions.1.vs_baseline.step01_summarize_units.pred.resample.n", 500),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.ci95.0", 19.0625),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.ci95.1", 26.3375),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.correction", None),
+    (
+        "results.conditions.2.aggregated.step01_summarize_units.pred.method",
+        "percentile_over_units",
+    ),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.n.completed", 40),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.n.failed", 0),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.n.ineligible", 0),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.n.resolved", 40),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.repeat_spread.kind", "seed"),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.repeat_spread.n", 3),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.repeat_spread.std", 0.0),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.resample.n", 500),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.resample_draws", 500),
+    ("results.conditions.2.aggregated.step01_summarize_units.pred.value", 22.75),
+    ("results.conditions.2.index", 2),
+    ("results.conditions.2.is_baseline", False),
+    ("results.conditions.2.label", "method=kendall"),
+    ("results.conditions.2.per_repeat.step01_summarize_units.seed40.n_units", 40),
+    ("results.conditions.2.per_repeat.step01_summarize_units.seed47.n_units", 40),
+    ("results.conditions.2.per_repeat.step01_summarize_units.seed61.n_units", 40),
+    ("results.conditions.2.values.analysis.method", "kendall"),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.basis", "units"),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.ci95.0", 2.825000000000003),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.ci95.1", 3.150000000000002),
+    (
+        "results.conditions.2.vs_baseline.step01_summarize_units.pred.ci95_corrected.0",
+        2.775000000000002,
+    ),
+    (
+        "results.conditions.2.vs_baseline.step01_summarize_units.pred.ci95_corrected.1",
+        3.1750000000000007,
+    ),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.cohens_d", 5.92452529743945),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.correction", "holm"),
+    (
+        "results.conditions.2.vs_baseline.step01_summarize_units.pred.correction_level",
+        0.016666666666666666,
+    ),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.delta", 3.0),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.family.comparisons", 3),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.family.metrics", 1),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.family_size", 3),
+    (
+        "results.conditions.2.vs_baseline.step01_summarize_units.pred.method",
+        "paired_percentile_over_units",
+    ),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.n_paired", 40),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.paired", True),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.conditions.2.vs_baseline.step01_summarize_units.pred.resample.n", 500),
+    ("results.contrasts.0.against", "00_baseline"),
+    ("results.contrasts.0.id", "spearman_vs_pearson"),
+    ("results.contrasts.0.of", "01_method=spearman"),
+    ("results.contrasts.0.step01_summarize_units.pred.basis", "units"),
+    ("results.contrasts.0.step01_summarize_units.pred.ci95.0", 0.8250000000000028),
+    ("results.contrasts.0.step01_summarize_units.pred.ci95.1", 1.1500000000000021),
+    ("results.contrasts.0.step01_summarize_units.pred.ci95_corrected.0", 0.8250000000000028),
+    ("results.contrasts.0.step01_summarize_units.pred.ci95_corrected.1", 1.1500000000000021),
+    ("results.contrasts.0.step01_summarize_units.pred.cohens_d", 1.9748417658131499),
+    ("results.contrasts.0.step01_summarize_units.pred.correction", "holm"),
+    ("results.contrasts.0.step01_summarize_units.pred.correction_level", 0.05),
+    ("results.contrasts.0.step01_summarize_units.pred.delta", 1.0),
+    ("results.contrasts.0.step01_summarize_units.pred.family.comparisons", 3),
+    ("results.contrasts.0.step01_summarize_units.pred.family.metrics", 1),
+    ("results.contrasts.0.step01_summarize_units.pred.family_size", 3),
+    (
+        "results.contrasts.0.step01_summarize_units.pred.method",
+        "paired_percentile_over_units",
+    ),
+    ("results.contrasts.0.step01_summarize_units.pred.n_paired", 40),
+    ("results.contrasts.0.step01_summarize_units.pred.paired", True),
+    ("results.contrasts.0.step01_summarize_units.pred.resample.method", "bootstrap"),
+    ("results.contrasts.0.step01_summarize_units.pred.resample.n", 500),
+    (
+        "results.hypotheses.0.declared_in",
+        "parameters_hash sha256:94dab15e082502d35b5a1b1c8e7dda05298d972017c247ee899626c6624bee76",
+    ),
+    ("results.hypotheses.0.family.hypotheses", 1),
+    ("results.hypotheses.0.family_size", 1),
+    ("results.hypotheses.0.id", "h1"),
+    ("results.hypotheses.0.kind", "confirmatory"),
+    ("results.hypotheses.0.observed.ci95.0", 0.8250000000000028),
+    ("results.hypotheses.0.observed.ci95.1", 1.1500000000000021),
+    ("results.hypotheses.0.observed.ci95_corrected.0", 0.8250000000000028),
+    ("results.hypotheses.0.observed.ci95_corrected.1", 1.1500000000000021),
+    ("results.hypotheses.0.observed.delta", 1.0),
+    ("results.hypotheses.0.observed.method", "paired_percentile_over_units"),
+    ("results.hypotheses.0.supported", True),
+    ("results.hypotheses.0.verdict_evaluated_on", "ci95_lower"),
+    ("results.hypotheses.0.verdict_rests_on", "computed"),
+    ("run_id", "<normalized>"),
+    ("schema_version", "1.0"),
+    ("status", "completed"),
+]
+
+
+def test_task1_bit_stability_oracle_over_the_correction_machinery(tmp_path: Path):
+    """The bit-stability oracle this slice's task 1 exists to lay down, BEFORE
+    `correction.Member` grows a route for a condition's own metric
+    (`compare: {to: constant}`). Captured at commit b5eb0ef.
+
+    Drives a real end-to-end run through `run_a_project` (`main(["run", ...])`,
+    the installed console script's own entry point) with every piece the task
+    1 brief requires present at once: a declared `statistics.resample`
+    (`bootstrap`, `n=500`, so every metric block is a real percentile
+    construction, not the t-based default); a three-condition sweep with a
+    `sweep.baseline` (`pearson`) and a `grid` (`spearman`, `kendall`), so
+    `vs_baseline` entries exist for two conditions; a declared
+    `statistics.contrasts` entry (`spearman_vs_pearson`, `of` the spearman
+    condition `against` baseline); the config's own default
+    `statistics.correction: holm` (unchanged, not overridden — H9a's golden
+    shows `generate_experiment` already ships it), so every corrected bound
+    below is really computed, not merely declared; and one confirmatory
+    hypothesis evaluated on `ci95_lower` (`compare: {to: baseline}` — NOT
+    `to: constant`, since that combination is exactly what this slice may
+    still change, and an oracle over it would forbid the very thing being
+    built). `units=40` clears `limits.min_reported_n` (10) comfortably, and
+    `replication` is three `seed` repeats so `repeat_spread` is a real
+    computation over more than one draw.
+
+    Verified before capture: the record's `vs_baseline`/`contrasts`/
+    `hypotheses.observed` blocks all carry non-null `ci95_corrected` and a
+    `family_size` of 3 (two `vs_baseline` comparisons plus the contrast, one
+    family over one metric) — an oracle over an all-null record would pass
+    forever and guard nothing (task 1 brief).
+
+    The golden literal was CAPTURED BY RUNNING this exact fixture (a
+    throwaway driver script, discarded once the literal below was copied in)
+    and independently reproduced byte-for-byte on a second, fully separate
+    invocation (fresh `tmp_path`, fresh git commit, fresh run) before being
+    pinned — never transcribed from `run_record.py`.
+
+    Normalization: delegates entirely to H9a arm A's `_h9a_run_yaml_leaves`
+    (same walk, same sort, same leaf-name/tmp-path rules) rather than
+    inventing a second idiom for the same job. That function normalizes,
+    by leaf name: `code_hash`/`parameters_hash`/`input_manifest_hash` (the
+    three hashes — content-derived from paths and timing this fixture
+    re-creates fresh every invocation); `started_at`/`wall_seconds`/`run_id`
+    (wall-clock and a fresh UUID); `hostname`/`os`/`python_version`/
+    `cpu_count` (facts about the machine running the suite, not about
+    behaviour); `commit`/`branch` (a fresh commit's SHA is timestamp-
+    sensitive, and a CI checkout may not be on `main`) — plus, by value, any
+    string containing the `tmp_path` prefix (`input_dir`/`output_dir`/
+    `repo_root`). One value is deliberately NOT normalized despite embedding
+    a hash as text: `results.hypotheses.0.declared_in` (`"parameters_hash
+    sha256:..."`) — verified genuinely stable (byte-identical across two
+    separate captures, each its own tmp dir and git commit) because it hashes
+    only the resolved parameter values, which this fixture holds fixed; were
+    it path- or timing-sensitive it would have differed between the two
+    captures and it did not.
+
+    Mutation (proves the oracle can fail): perturbing a stored
+    `ci95_corrected` bound in the golden list (or, symmetrically, in a fresh
+    record) must turn this test red; restoring it must turn it green again.
+    Both directions were run by hand before this test was finalized (see the
+    task 1 report for the exact before/after `pytest` output) rather than
+    trusted on the strength of the assertion alone.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+        doc = run_a_project(
+            tmp_path,
+            units=40,
+            replication={"repeats": [{"kind": "seed", "n": 3}]},
+            sweep={
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+            statistics={
+                "resample": {"method": "bootstrap", "n": 500},
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "baseline",
+                    }
+                ],
+            },
+            hypotheses=[
+                {
+                    "id": "h1",
+                    "kind": "confirmatory",
+                    "statement": "spearman exceeds pearson",
+                    "metric": "step01_summarize_units.pred",
+                    "compare": {"condition": "method=spearman", "to": "baseline"},
+                    "direction": "greater",
+                    "threshold": 0.5,
+                    "evaluate_on": "ci95_lower",
+                },
+            ],
+        )
+    run_doc = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    leaves = _h9a_run_yaml_leaves(run_doc, tmp_path)
+    corrected = [
+        v for p, v in leaves if p.endswith("ci95_corrected.0") or p.endswith("ci95_corrected.1")
+    ]
+    assert corrected and all(v is not None for v in corrected)
+    family_sizes = [v for p, v in leaves if p.endswith("family_size")]
+    assert family_sizes and max(family_sizes) > 1
+    assert leaves == _TASK1_ORACLE_GOLDEN
