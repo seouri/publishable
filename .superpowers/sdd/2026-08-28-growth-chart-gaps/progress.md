@@ -137,3 +137,6 @@ Task 4: minor (deferred): those three homes say "before its own `@register_templ
 *application* or *registration* is meant. The claim is true; the word "call" is what keeps drawing
 false positives, and sharpening it would stop the next sweep re-finding them.
 Task 4: complete (commits e40b9e2..48e9ea4, 3 fix rounds, review clean after adjudication; suite 3488 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
+Task 5: complete (commits b831bcc..5da4986, review clean)
+Task 5: minor (deferred): traceback-absence asserted on both stdout and stderr rather than only the
+stream a traceback goes to — harmless, since stdout is independently pinned to the diagnostic.
