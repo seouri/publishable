@@ -55,7 +55,7 @@ Nine runs, two pipelines, one plugin. How many git repositories that is has a me
 |---|---|---|
 | `growth-screen` | `src/growth_screen/`, `configs/screen-*` — E1 through E6 | Its own `code_hash`, over `src/**` and `templates/**` |
 | `growth-shortcut` | `src/growth_shortcut/`, `configs/shortcut-*` — C1 through C3 | Its own `code_hash` |
-| `publishable-llm` | The `llm_screen` template, the `patient_trajectory` resolver, the `llm_deployment` probe, and the reusable steps | `uv.lock`, in each of the two above |
+| `publishable-llm` | The `llm_screen` template, the `patient_trajectory` resolver, the `llm_deployment` probe, and the reusable steps | `uv.lock`, in each of the two above — **for the template, as specified rather than as built**: whether core loads an installed template is a build fact and lives in the dated entries ([§ Executability on this build](#executability-on-this-build)) |
 
 **The plugin is a separate repository, and not by preference.** Only a template can live locally: [§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) finds a local `templates/*.py` by path, and everything else registers through an entry point, which needs an installed package. This design needs a resolver and a probe, so it needs one. Vendoring it as a `uv` path dependency inside an experiment repo would be the worst available option: at `plugins/` it sits outside `src/**` and `templates/**` so `code_hash` doesn't cover it, and a path dependency doesn't pin content either — it would be the one piece of code producing these numbers that nothing pins at all.
 
@@ -2702,6 +2702,41 @@ the command printed rather than a claim of its own. `reference.md` says only *no
 build* and promises nothing. The document changes first, so this is recorded in
 `docs/superpowers/spec-defects.md` and left for a reader to decide, not edited into `validate.py` from
 here.
+
+#### Reanalysis of that refusal against the plugin tutorial, same date
+
+Reading [`tutorial-writing-a-plugin.md`](tutorial-writing-a-plugin.md) after the measurement changes what
+this refusal is, and it is worth separating from the paragraph above rather than folded into it. **The
+tutorial is built around it**: § What a plugin can do gives it a row and says *"that last row shapes the
+rest of this tutorial"*, Route A builds the project-local template and Route B packages the machinery
+around it, and § What core refuses, by code gives it the first row. Its claim that the refusal fires *"at
+`init` and at `validate`"* was checked: `generate experiment --template llm_screening` against the
+installed plugin prints the same message, exits `1`, and creates nothing.
+
+**So the honest description is a permanent refusal wearing the temporary family's name**, and the
+consequence for this analysis is structural rather than a footnote. `reference.md` § Templates and the
+tutorial's three-homes table both recommend the installed home *"when two or more projects share the
+experiment type"* — which is [§ Three repositories](#three-repositories-and-what-decides-the-seams)'
+case exactly, one `llm_screen` across `growth-screen` and `growth-shortcut` — and it is the one home this
+build permanently refuses. Taking the route that works moves the template out of `uv.lock` and into each
+consuming repository's `code_hash`: **one copy per experiment repository**, each inside its own code
+identity, so editing the shared experiment type moves every run identity in that repo and the two repos
+share no template identity at all. That is the opposite of the property § Three repositories argues the
+plugin exists to supply, and it is a duplication [§ What the plugin must not build](#what-the-plugin-must-not-build)
+would refuse if it were any other artifact. The resolver, the probe and the steps are unaffected — all
+three dispatch from an install, measured above — so what the seam loses is exactly the template and
+nothing else.
+
+**Nothing in the body above is retro-edited on this**, on the same rule the rest of this section follows:
+§ Package describes what the specification permits and is right about it, and § Three repositories now
+carries a pointer to this entry the way it already does for `draft` and `resume`. The filing in
+`docs/superpowers/spec-defects.md` is re-headed and its severity raised from Minor to Major, on three
+grounds this measurement supplies: the `-UNSUPPORTED` suffix classifies a documented, permanent refusal as
+undocumented and temporary; the family's exemption from `reference.md` § Errors is justified there by a
+retirement *"this project already commits to"* which the complete charter falsifies, leaving the code with
+no row in the normative registry and its only per-code documentation in a tutorial that calls itself
+authoritative over nothing; and two documents recommend the installed template without saying it cannot be
+used.
 
 Full local gates at this commit, run rather than assumed: `3485 passed, 1 skipped, 2 xfailed in
 418.90s`, `ruff check .` *All checks passed!*, `mypy` *no issues found in 56 source files*. Nothing this

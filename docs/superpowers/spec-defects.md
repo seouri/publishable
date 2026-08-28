@@ -11615,7 +11615,7 @@ analysis' own anchors.
 
 ---
 
-## OPEN — `E-TEMPLATE-INSTALLED-UNSUPPORTED` promises a later slice, and there is no later slice — **Owner: unassigned, and no slice follows**
+## OPEN — `E-TEMPLATE-INSTALLED-UNSUPPORTED` is a permanent refusal wearing the temporary family's name, its message, and its registry exemption — **Owner: unassigned, and no slice follows**
 
 **Found 2026-08-27 by the same re-measurement, measured against `dc03ec4`.**
 
@@ -11639,3 +11639,65 @@ The tutorial's transcript then needs re-measuring, because it quotes the old tex
 **Severity:** Minor in behaviour, and the reason to file it anyway is that it is the single message
 standing between a written plugin and a run: measured on 2026-08-27, installing a real plugin beside core
 `0.1.3` refuses every config in the feasibility analysis on this code alone.
+
+---
+
+**Reanalysis, appended 2026-08-27 against `119dc87`, after reading
+[`../tutorial-writing-a-plugin.md`](../tutorial-writing-a-plugin.md): the stale sentence is a symptom, and
+the defect is the classification.** The entry above filed one message. Read against the tutorial — which
+is built around this refusal rather than mentioning it — the message is the smallest of four disagreements,
+and the heading is rewritten accordingly.
+
+**What the tutorial does with it.** § What a plugin can do gives it a row and then says *"That last row
+shapes the rest of this tutorial"*: Route A builds a project-local template, Route B packages the machinery
+around it, § 4 *"A plugin's template is refused"* is a section of its own, and § What core refuses, by code
+gives it the **first row in the table**. A tutorial does not organise itself around a refusal it expects to
+be retired. Measured while re-reading it, the tutorial's claim that the refusal fires *"at `init` and at
+`validate`"* holds: `generate experiment --template llm_screening` against an installed template prints the
+same message, exits `1`, and creates nothing.
+
+**The four disagreements, in the order a reader meets them.**
+
+1. **The suffix.** `CLAUDE.md` § Misreadings defines the family: *"a `-UNSUPPORTED` suffix is the
+   undocumented build family, retired wholesale and absent from the registry. A **narrow** refusal of a
+   combination is documented, carries rows, and outlives the slice that minted it."* By that taxonomy this
+   code is in the **second** category — documented in a tutorial section, a route and a table row — and it
+   carries the **first** category's name.
+2. **The message.** *"installed templates will be honored in a later slice"*, with no later slice. This is
+   what the entry above filed.
+3. **The registry exemption, whose stated justification is now false.** `reference.md` § Errors `validate`
+   reports excuses the whole family from the table because *"it retires with the slice that implements the
+   feature it names"* and *"documenting one here would pin a row this project already commits to deleting
+   on a schedule neither this table nor its author controls."* There is no such schedule and no such
+   commitment: the charter is complete. So the one surviving member has **no row in the normative
+   registry**, against `CLAUDE.md`'s *§ Errors carries one row per code*, and the only per-code
+   documentation a user can find is in a **non-normative** tutorial that says of itself it is *"authoritative
+   over nothing."*
+4. **The specification still endorses what the build permanently refuses.** § Do you need a plugin at all?
+   and `reference.md` § Templates both give three homes for a template and recommend the installed one
+   *"when two or more projects share the experiment type"* — with `uv.lock` as its pin. That
+   recommendation cannot be followed on this build in any project, ever, and neither document says so in
+   its own voice; the tutorial's own hedge, *"the artifact that becomes usable if that refusal is ever
+   lifted"*, is the honest temperature and it appears once, at the end of § 4.
+
+**The consequence that is not about wording.** A template refused as an install is a template that must
+live in `templates/`, which `code_hash` covers. So the pin moves from `uv.lock` to each consuming
+repository's own code identity, and a shared experiment type becomes **one copy per repository**: editing
+it moves every run identity in that repo, and two repositories sharing the type share no template identity
+at all. [`../feasibility-llm-growth-studies.md`](../feasibility-llm-growth-studies.md) is the worked case —
+its § Three repositories argues the seam from exactly this pinning, and its § Package puts the template in
+the plugin.
+
+**What a closure is now, restated.** Not building installed-template loading — that is a slice. It is a
+**reclassification**, and it is four edits rather than one: re-word the message to state a permanent limit
+and name the route; give the code a row in `reference.md` § Errors, which means narrowing the family's
+exemption to members that really are unbuilt blocks; say in § Templates and in the tutorial's three-homes
+table that the installed home is refused as this project ships; and re-measure the tutorial's transcripts,
+which quote the old message. **Deliberately not proposed here: deleting the installed-template home from
+the specification.** It is the right design and core resolves the name already — what is wrong is that
+three documents describe it as available.
+
+**Severity: revised to Major**, from Minor. Not for the behaviour, which is unchanged and correctly
+documented in one non-normative place, but because a permanent refusal is described as temporary in the
+tool's own output, exempted from the normative error registry by a justification that has expired, and
+recommended as the right choice by two documents that never say it cannot be taken.
