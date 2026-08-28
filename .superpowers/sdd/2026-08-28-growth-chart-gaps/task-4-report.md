@@ -146,3 +146,40 @@ re-run the full suite):
 - `uv run ruff check .` — All checks passed! (after fixing one E501 the new docstring wording introduced)
 - `uv run ruff format --check .` — 101 files already formatted
 - `uv run mypy` — Success: no issues found in 56 source files
+
+## Fix round 2 (reviewer re-review after e5d2816)
+
+**Finding 3, still open — fixed the fifth home this time.** `docs/reference.md:4274`'s "A raise
+from *inside* a class body, before its own `@register_template` line is ever reached, leaves no
+class behind to ask" carried the identical wrong mechanism claim (treats the decorator line as
+something class-body execution sequentially reaches, when the factory call already evaluated
+before the class body ran). My round-1 sweep found this line via one grep pattern but I reasoned
+it was "a different established topic" and left it — that reasoning doesn't survive: the rule is
+to sweep for the *claim*, not the file or the topic. Normalized to "before `@register_template`
+or anything else ever sees the class," matching the rest.
+
+Swept before reporting, two passes:
+1. `grep -n "register_template" docs/reference.md | grep -iE "ever reached|before it runs|has
+   not run|prior to the decorator|is ever reached|line is reached|call is ever reached"` — found
+   only line 4274 (fixed above); the other listed patterns matched nothing there.
+2. Whitespace-normalized regex sweep (`re.sub(r'\s+', ' ', text)` then search, so a phrase
+   wrapped across a line break cannot hide from a literal grep) over all four touched files —
+   `docs/reference.md`, `src/publishable/templates/base.py`, `src/publishable/validate.py`,
+   `tests/test_templates.py` — with patterns `@register_template...ever runs`,
+   `@register_template...is ever reached`, `@register_template...line is reached`,
+   `@register_template...call is ever reached`, `before it runs`, `has not run yet`,
+   `prior to the decorator`, `decorator...has not`. All four files reported clean after the fix.
+   (The normalized sweep also caught one unrelated `"...is ever reached"` hit, about
+   `.title`/`.body` parsing — confirmed unrelated to `@register_template`, left alone.)
+
+**Ride-along — de-duplicated the doubled clause.** The `E-TEMPLATE-PARAM-PATH` row at
+`docs/reference.md` ~line 644 said "before `@register_template` or anything else ever sees the
+class" twice in one sentence (round 1's find/replace hit the row's second, unrelated clause too).
+Removed the redundant repetition; the row now states the fact once and moves on to "so it folds
+into that code's 'raises while importing' shape."
+
+**Commands run for this round:**
+- `uv run pytest tests/test_templates.py tests/test_materialize.py "tests/test_cli.py::test_validate_reports_rather_than_raises_on_a_partial_template_with_a_malformed_parameter_spec" -q` — 79 passed
+- `uv run ruff check .` — All checks passed!
+- `uv run ruff format --check .` — 101 files already formatted
+- `uv run mypy` — Success: no issues found in 56 source files

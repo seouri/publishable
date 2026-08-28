@@ -99,3 +99,18 @@ Task 4: carried to T11: `feasibility-growth-chart-literacy.md` gap 1 still asser
 Task 4: freeze.py `claim.cls()` — reviewer judged it out of scope and needing nothing now, AND
 judged the implementer's reasoning about it wrong. Not carried; the exposure is pre-existing and
 unrelated to this code.
+Task 4: fix round 1/5 (2 addressed, 1 open — the wrong-mechanism claim survives at a fifth home,
+`reference.md` line ~4274, consciously skipped as "a different established topic"; commits
+a2074be..e5d2816)
+
+Ruling: **Finding 1 counts as ADDRESSED on judgment, not on mechanism.** The re-review verified that
+`GenericTemplate` is the only live unwrapped class definition outside `discover_local` and that its
+own paths are valid, so the narrowed sentence is true of exactly the surface that exists — but it
+calls the no-core-raises-row decision "defensible but disputable". Accepted: a raise nothing can
+reach needs no row, and adding one would document a surface a reader cannot produce. Costs if wrong:
+§ Errors core raises is missing a code that some future core template could emit.
+
+Ruling: **the duplicated clause the fix introduced rides along in round 2.** It is Minor and Minor
+findings do not enter the loop, but it is one line in the same row round 2 must edit anyway, and
+leaving a mechanical find/replace artifact in a normative table is worse than the round it costs.
+Costs if wrong: a trivially larger round-2 diff.
