@@ -5748,6 +5748,19 @@ def _check_hypotheses(
     ask and nothing in the record reveals the substitution.
     `E-HYPOTHESIS-COMPARE-TO`.
 
+    **`contrast` wins over `to: constant`, the same precedence `resolve` already
+    gives it over `to: baseline`/bare `condition`.** `{contrast: x, to:
+    constant, value: 0.5}` resolves through the contrast — `hypotheses.resolve`
+    checks `"contrast" in compare` before it checks `to` at all — so `value`
+    and `condition` are read no further. This is a real fault review caught,
+    the reverse order having silently discarded a declared contrast and
+    computed the verdict against the constant instead, with nothing in
+    `run.yaml` to say so — the same shape `E-HYPOTHESIS-COMPARE-TO`'s own
+    message names ("a comparison that will never be made and is silently
+    evaluated ... instead"). Left legal rather than refused, on the same
+    grounds `{contrast: x, condition: y}` already is: one precedence rule for
+    the whole field, not a special refusal for one pairing of forms.
+
     **`compare.value` is required, and numeric, exactly when `to: constant`.**
     `hypotheses.verdict_for` reads it as the fixed reference and subtracts it
     from the tested number before comparing to `threshold` — an absent or
@@ -5990,11 +6003,13 @@ def _check_hypotheses(
             # condition and nothing to compare it against.
             #
             # Excludes `contrast in compare`: `resolve` checks `"contrast" in
-            # compare` first and returns from that branch without ever reading
-            # `condition` — so `{contrast: x, condition: y}` resolves through the
-            # contrast, not the baseline, and needs no baseline at all. Without
-            # this exclusion, a hypothesis that names both would be refused for a
-            # comparison it was never going to make.
+            # compare` first — ahead of `to: constant` too, not only the
+            # baseline/condition fallback — and returns from that branch
+            # without ever reading `condition`, `to` or `value` again. So
+            # `{contrast: x, condition: y}` and `{contrast: x, to: constant,
+            # value: 0.5}` both resolve through the contrast, neither needs a
+            # baseline, and neither is refused for a comparison it was never
+            # going to make.
             implies_baseline = compare.get("to") == "baseline" or (
                 "condition" in compare and "to" not in compare and "contrast" not in compare
             )

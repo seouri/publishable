@@ -100,6 +100,33 @@ def test_a_contrast_hypothesis_reads_the_entry_it_names_not_the_first():
     assert got.block == {"delta": -0.11, "ci95": [-0.19, -0.03]}
 
 
+def test_a_contrast_wins_over_a_declared_constant_and_condition():
+    """The whole-branch review's finding: `resolve` used to test `to ==
+    "constant"` before it tested `"contrast" in compare`, so a hypothesis
+    declaring all three — `{to: constant, value: 0.5, contrast: "sensitivity",
+    condition: "method=spearman"}` — silently resolved against the named
+    condition's own value and the declared contrast was never read. `contrast`
+    must win here exactly as it already does over a bare `{condition: X}` or
+    `to: baseline` (`test_a_contrast_hypothesis_reads_that_contrast_entry`'s
+    own precedent) — one precedence rule for the whole field, not a special
+    case for one pairing of forms."""
+    got = _resolve(
+        {
+            "id": "h",
+            "metric": "step03_screen.auroc",
+            "compare": {
+                "to": "constant",
+                "value": 0.5,
+                "contrast": "sensitivity",
+                "condition": "method=spearman",
+            },
+        }
+    )
+    assert got.where == "contrast:sensitivity"
+    assert got.block == {"delta": 0.04, "ci95": [0.01, 0.07]}
+    assert got.rests_on == "computed"
+
+
 def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():
     """The Critical's second door, checked rather than assumed. A `summary` step
     returning a bare `{"adjusted": "high"}` — no `Estimate` — never reaches

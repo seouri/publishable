@@ -180,3 +180,55 @@ passed — each caught the injected `ci95_corrected: null` key) → restored →
 
 **Concerns:** none new. The spec-defects entry restates fix round 1's own concern in the file's
 permanent-record form, so future readers see it without depending on this SDD report surviving.
+
+---
+
+## Fix round 3 of 5 — whole-branch review finding
+
+**Status:** done.
+
+**Finding:** `compare: {to: constant}` silently discarded a declared `contrast` — `resolve` tested
+`to == "constant"` before `"contrast" in compare`, inverting the already-established (if only
+partially documented) precedence that a declared `contrast` wins over every other form.
+
+**Shape chosen: legal combination, contrast wins, documented and pinned — not a refusal.** Reused
+reasoning already in `validate.py`'s own comment: `{contrast: x, condition: y}` was already legal
+and already resolved through the contrast with `condition` silently unread, on the grounds that
+`resolve` checks `"contrast" in compare` first. Refusing `{contrast, to: constant}` while leaving the
+identical-shaped `{contrast, to: baseline}` and `{contrast, condition}` unrefused would have been a
+new, asymmetric special case — the same fault under a different pairing would stay legal. Extending
+the one existing precedence rule to cover all three forms uniformly (reorder `resolve` so the
+`"contrast" in compare` branch is checked first, ahead of `to: constant` too) fixes the reported case
+without inventing an inconsistency. `E-HYPOTHESIS-COMPARE-VALUE` still validates `value` whenever
+`to: constant` is present regardless of `contrast`, matching how `compare.condition`'s own label
+validity is already checked regardless of `contrast` — one rule, not a per-field carve-out.
+
+**Code:** `src/publishable/hypotheses.py::resolve` — moved the `"contrast" in compare` branch above
+the `compare.get("to") == "constant"` branch; docstring updated to state the full precedence.
+`src/publishable/validate.py` — updated the `_check_hypotheses` docstring and the inline comment
+above `implies_baseline` to state the extended precedence.
+
+**Docs:** `docs/reference.md` § Pre-registration's "compare names both sides" paragraph gained one
+sentence stating the precedence explicitly (`compare: {contrast: x, condition: y}` and
+`compare: {contrast: x, to: constant, value: 0.5}` both resolve through the contrast). Swept for
+`resolve checks|checked first|wins over|precedence` across reference.md — no other home needed a
+change; the field never previously documented multi-form combination behaviour at all, so this is
+new coverage rather than a correction of an existing false claim.
+
+**Test:** `test_a_contrast_wins_over_a_declared_constant_and_condition` (test_hypotheses.py),
+instantiating the reviewer's exact fixture — `{to: constant, value: 0.5, contrast: "sensitivity",
+condition: "method=spearman"}` — and asserting `where == "contrast:sensitivity"` with the contrast's
+own block, not the named condition's.
+
+**Mutation evidence (backup → mutate → red → restore → re-run to confirm green, never `git status`):**
+reverted `hypotheses.py` to the pre-fix ordering (`to: constant` checked before `contrast`) →
+`test_a_contrast_wins_over_a_declared_constant_and_condition` failed, reproducing the exact reported
+symptom (`AssertionError: assert 'const:1' == 'contrast:sensitivity'`) → restored the reorder →
+49/49 green.
+
+**Verification:** `uv run pytest tests/test_hypotheses.py tests/test_validate.py` (860 passed),
+`tests/test_cli.py -k hypothes` (8 passed); `uv run ruff check .` (all checks passed);
+`uv run ruff format .` (1 file reformatted, then `--check` clean); `uv run mypy` (no issues, 56
+files).
+
+**Concerns:** none new.

@@ -206,3 +206,10 @@ and the whole-branch review at T11 is the net.
 
 Task 9: complete (commits ae21f78..7c19472, 2 fix rounds, review clean, 1 new spec-defects filing)
 Task 10: complete (commits fc6413c..40f1663, review clean)
+Task 11: complete (commits 6bac09a..6d99a88, review clean; suite 3524 passed, 1 skipped, 2 xfailed)
+
+Whole-branch review (79e3a9b..6d99a88, 27 commits): 1 Important, 1 Minor. Every deferred minor and
+both parked findings triaged as STANDS; one was already fixed at HEAD.
+Whole-branch: minor (deferred): `_group_axes_already_erred`'s three defensive skips
+(`validate.py` ~4245-4275) have no test — direction of error is safe (more warnings, not fewer), and
+`expand` raises first on a malformed `sweep`, verified by probe, so the branch is unreachable.

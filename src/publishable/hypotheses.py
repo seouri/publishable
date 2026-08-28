@@ -74,6 +74,15 @@ def resolve(
     because the same condition can carry both a `vs_baseline` delta and a
     constant-referenced hypothesis on its own value, and the two must never
     collide in `by_key`.
+
+    **`contrast` wins over everything else `compare` also names.** Checked
+    first, ahead of both `to: constant` and the baseline/condition fallback:
+    `{contrast: x, to: constant, value: 0.5}` and `{contrast: x, condition: y}`
+    both resolve through the contrast, and every other key `compare` carries is
+    read no further. One precedence rule for the whole field rather than one
+    per pair of forms, and it is why the constant branch sits below this one
+    rather than above it — the reverse order silently discarded a declared
+    `contrast` and computed the verdict against the constant instead.
     """
     step, _, metric = str(hyp.get("metric", "")).partition(".")
     compare = hyp.get("compare")
@@ -86,6 +95,33 @@ def resolve(
             metric=metric,
             block=block if isinstance(block, dict) else None,
             rests_on="reported",
+        )
+
+    # `contrast` wins whenever it is declared, over `to: constant` exactly as
+    # it already did over `to: baseline`/bare `condition` (the precedent
+    # `validate.py`'s own comment above the baseline-need exclusion states):
+    # `{contrast: x, to: constant, value: 0.5, condition: y}` resolves through
+    # the contrast, and `condition`/`value` are read no further, the same way
+    # `{contrast: x, condition: y}` already resolves through the contrast and
+    # needs no baseline at all. Checked FIRST, ahead of `to: constant`, is
+    # what makes this true — the reverse order (constant-branch first) is a
+    # real fault review caught: a declared contrast was silently discarded
+    # and the verdict computed against the constant instead, with nothing in
+    # `run.yaml` to say the contrast was never read.
+    if "contrast" in compare:
+        cid = str(compare["contrast"])
+        found = None
+        for entry in contrasts or []:
+            if entry.get("id") == cid:
+                step_block = entry.get(step)
+                found = step_block.get(metric) if isinstance(step_block, dict) else None
+                break
+        return Observation(
+            where=f"contrast:{cid}",
+            step=step,
+            metric=metric,
+            block=found if isinstance(found, dict) else None,
+            rests_on="computed",
         )
 
     if compare.get("to") == "constant":
@@ -101,22 +137,6 @@ def resolve(
         found = (aggregated or {}).get(index, {}).get(step, {}).get(metric)
         return Observation(
             where=f"const:{index}",
-            step=step,
-            metric=metric,
-            block=found if isinstance(found, dict) else None,
-            rests_on="computed",
-        )
-
-    if "contrast" in compare:
-        cid = str(compare["contrast"])
-        found = None
-        for entry in contrasts or []:
-            if entry.get("id") == cid:
-                step_block = entry.get(step)
-                found = step_block.get(metric) if isinstance(step_block, dict) else None
-                break
-        return Observation(
-            where=f"contrast:{cid}",
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
