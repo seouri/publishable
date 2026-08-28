@@ -48,3 +48,40 @@ clean; `uv run mypy` clean (56 files). Full suite left to the controller per ins
 
 **Concerns:** none. `pools_by_key` is populated but not yet read anywhere — expected,
 since task 5 owns building `Member` from it.
+
+## Fix round 1
+
+**FINDING 1 (stratum pop unpinned):** confirmed live. Added
+`test_a_report_by_levels_run_yaml_never_carries_a_pool` (`tests/test_cli.py`), modelled
+on `test_a_report_by_level_resamples_without_joining_the_correction_family`: a
+`report_by: [cohort]` config with `statistics.resample` declared and `aggregate_returns`
+set, so the level's own derived metric (`mean_pred`) resamples unconditionally. Factored
+the shared walk into `_assert_no_pool_leaked(run) -> bool` (returns whether a
+`resample_draws` was found) and reused it from both pool tests, so the must-be-present
+pairing is identical on both arms.
+
+Mutation evidence: replaced `level_metric.pop("pool", None)` with `pass` → new test FAILED
+with `AssertionError: a pool reached run.yaml: {...}` at
+`conditions[0].aggregated.step01_summarize_units.by.cohort.a.mean_pred` (matches the
+reviewer's fixture exactly). Restored the pop, reran — `3 passed` (both pool tests plus
+the Task 1 oracle), confirming the fix by behaviour rather than `git status`.
+
+**FINDING 2 (report overstated the pop as a no-op):** correction — the sentence
+"popped and discarded — no `Member` is built for a stratum, so its pool has no
+consumer" is replaced by: **that pop is the entire no-leak guarantee on the
+`report_by` path** — it is the only place a level's pool is ever removed before
+`levels_block[level]` (and so `run.yaml`) is written, which round 1's mutation
+now proves directly rather than by argument.
+
+**RIDE-ALONG (copy asymmetry):** `derived_pool` was `list(derived_resample.pool)`
+(a copy) while the column branch stored `column_resample.pool` by reference. Changed
+`derived_pool` to store `derived_resample.pool` directly, matching the column branch:
+nothing between the resample call and the `"pool"` key being written mutates either
+list, `cli.py`'s pop only removes the dict entry, and `Member.pool` (task 5) will hold
+a tuple regardless — so the copy bought nothing and the two branches now agree.
+
+**Re-verification:** targeted suite `test_cli.py -k "resample or report_by or stratum or
+weighted or clustered or pool or oracle"` — 113 passed (was 107, +2 for the two new
+test functions the `-k` filter now also matches — `_assert_no_pool_leaked` is a
+helper, not a test, and adds nothing to the count). Oracle green throughout.
+`ruff check`, `ruff format --check`, `mypy` all clean after the fix.

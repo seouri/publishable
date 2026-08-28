@@ -13512,30 +13512,12 @@ def test_an_unclustered_resampled_contrast_draws_what_it_always_drew(tmp_path, c
     assert entry["ci95"][1] == pytest.approx(23.025)
 
 
-def test_a_resampled_runs_run_yaml_never_carries_a_pool(tmp_path, capsys):
-    """Task 4 (H5c): `stats.summarize_step` now hands `cli.py` a `"pool"` key
-    beside `resample_draws`, so a condition's own metric can later have a
-    `correction.Member` built from the same draws its raw interval came from
-    (task 5). `correction.Member`'s own docstring is explicit that a pool "may
-    not reach `run.yaml`" — two thousand floats per metric per condition would
-    turn the one file this project promises a person can read into one they
-    cannot — so `cli.py` must pop the key off every block before it lands in
-    `aggregated`.
-
-    Paired with a must-be-present check (`CLAUDE.md`'s "a control asserting
-    only absences" defect): a `run.yaml` where nothing ran, or where no metric
-    was ever resampled, would pass the no-`pool` assertion for a reason that
-    has nothing to do with this task, so the walk also demands at least one
-    `resample_draws` in the record — proof a resample actually happened and
-    still left no pool behind."""
-    doc = run_a_project(
-        tmp_path,
-        capsys=capsys,
-        units=40,
-        statistics={"resample": {"method": "bootstrap", "n": 500}},
-    )
-    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-
+def _assert_no_pool_leaked(run: dict[str, Any]) -> bool:
+    """Walk a loaded `run.yaml`, asserting no dict anywhere carries the
+    `"pool"` key `stats.summarize_step` hands back beside `resample_draws`,
+    and returning whether at least one `resample_draws` was found — so a
+    caller can pair the absence with a must-be-present check rather than
+    letting "nothing resampled" pass for free."""
     found_resample_draws = False
 
     def _walk(node: Any) -> None:
@@ -13551,7 +13533,88 @@ def test_a_resampled_runs_run_yaml_never_carries_a_pool(tmp_path, capsys):
                 _walk(value)
 
     _walk(run)
-    assert found_resample_draws
+    return found_resample_draws
+
+
+def test_a_resampled_runs_run_yaml_never_carries_a_pool(tmp_path, capsys):
+    """Task 4 (H5c): `stats.summarize_step` now hands `cli.py` a `"pool"` key
+    beside `resample_draws`, so a condition's own metric can later have a
+    `correction.Member` built from the same draws its raw interval came from
+    (task 5). `correction.Member`'s own docstring is explicit that a pool "may
+    not reach `run.yaml`" — two thousand floats per metric per condition would
+    turn the one file this project promises a person can read into one they
+    cannot — so `cli.py` must pop the key off every block before it lands in
+    `aggregated`.
+
+    Paired with a must-be-present check (`CLAUDE.md`'s "a control asserting
+    only absences" defect): a `run.yaml` where nothing ran, or where no metric
+    was ever resampled, would pass the no-`pool` assertion for a reason that
+    has nothing to do with this task, so the walk also demands at least one
+    `resample_draws` in the record — proof a resample actually happened and
+    still left no pool behind.
+
+    This covers the MAIN and RETRY `summarize_step` call sites only
+    (`cli.command_run`'s per-condition-per-step loop). The `report_by` level
+    call is a separate site with its own pop, covered by the arm below —
+    fix-round 1 found that pop unpinned: a reviewer replaced it with `pass`
+    and this test (and the targeted suite it was run under) stayed green,
+    because a plain run declaring `statistics.resample` never populates a
+    level block's DERIVED metric with a pool unless `report_by` is declared
+    too."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        statistics={"resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _assert_no_pool_leaked(run)
+
+
+def test_a_report_by_levels_run_yaml_never_carries_a_pool(tmp_path, capsys):
+    """The arm fix-round 1 found missing. Modelled on
+    `test_a_report_by_level_resamples_without_joining_the_correction_family`:
+    a `report_by` level's own DERIVED metric resamples unconditionally
+    whenever a seed and a callable exist — `cli.py`'s level call to
+    `summarize_step` never gates that on `resample_columns` the way the
+    recorded-column branch does — so `mean_pred`'s level block carries a real
+    `pool` under a declared `statistics.resample`, and it is `cli.py`'s
+    separate pop at the `report_by` site (not the main/retry site the
+    previous test covers) that strips it before `levels_block[level]` is
+    written into `by`, and so into `run.yaml`.
+
+    Reachable in ordinary use, not a corner: any `report_by` config declaring
+    `statistics.resample` alongside a derived metric hits this path. The
+    reviewer confirmed the leak live — replacing the level pop with `pass`
+    put the pool at
+    `conditions[0].aggregated.step01_summarize_units.by.cohort.a.mean_pred`
+    while a targeted 31-test suite (`-k "report_by or stratum or pool or
+    oracle"`) stayed green, because none of those tests declared BOTH
+    `report_by` and `resample` together — this test is the first to.
+
+    Paired with the same must-be-present check: the level's own `mean_pred`
+    must show a real `percentile_over_units`/`resample_draws` pair, or the
+    absence would hold for the wrong reason."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        aggregate_returns="mean_pred",
+        _starter_step=_METHOD_VARYING_STEP,
+        statistics={
+            "report_by": ["cohort"],
+            "resample": {"method": "bootstrap", "n": 500},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    level = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]["cohort"][
+        "a"
+    ]["mean_pred"]
+    assert level["method"] == "percentile_over_units"
+    assert level["ci95"] is not None
+    assert level["resample_draws"] == 500
+    assert _assert_no_pool_leaked(run)
 
 
 def test_an_unclustered_weighted_contrast_is_unchanged_by_the_cluster_threading(tmp_path, capsys):

@@ -3366,7 +3366,7 @@ def summarize_step(
                     derived_resample.interval,
                     derived_resample.draws_used,
                 )
-                derived_pool = list(derived_resample.pool)
+                derived_pool = derived_resample.pool
             else:
                 derived_interval, draws_used = None, None
                 derived_pool = None
