@@ -141,3 +141,32 @@ confidence level, all-strata-constant), and its clustered sibling has 4 — no c
 A plain miscount in a review, corrected here rather than propagated into the docstring, which is
 what a fix round is for. Costs if wrong: a docstring undercounts a refusal path in one function.
 Task 3: complete (commits 67cf737..b5346f9, 1 fix round, review clean; suite 3536 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
+Task 4: implemented (commits 24d9a9f..0eef18b) — the pool rides inside each metric block and is popped in cli.py before the block is written. One pop site. Review dispatched with the carrier choice as its first question.
+Task 4: review — SPEC ❌ (1 constraint failed), 2 Important, 2 Minor (commits 24d9a9f..0eef18b).
+The reviewer enumerated the four write paths itself, replaced the stratum pop with `pass`, found the
+targeted suite STILL GREEN, then built the missing fixture (report_by + declared resample) and
+watched the pool reach `run.yaml` at three paths. A real, reachable leak with no test guarding it.
+
+Ruling: **the carrier shape is ACCEPTED as-is and not re-opened, and the ledger records why so the
+next reviewer does not relitigate it.** Putting the pool inside the recorded dict makes the no-leak
+guarantee procedural (two pop sites) rather than structural. The reviewer named a better option the
+implementer did not consider — an out-parameter `pools_out: dict | None = None` that `summarize_step`
+fills, which has zero call-site churn AND cannot leak by construction — so the implementer's stated
+"~80 call sites" justification does not hold. I am keeping the shape anyway: tasks 5 and 6 are
+already written against a carrier that exists, the leak is closable by a test rather than by a
+redesign, and re-shaping the seam mid-slice costs more than the invariant it buys at this size.
+**Costs if wrong: a future path that writes a metric block without popping leaks two thousand floats
+into a run record, and only a test stands between.** If G2 gains an eighth task, converting to the
+out-parameter is the first candidate.
+
+Task 4: minor (deferred): `derived_pool = list(...)` copies while the column branch stores the pool
+by reference. No live aliasing bug; the two branches should agree, and `Member.pool` is a tuple.
+Task 4: noted: the Task 1 oracle is NOT an independent check of the leak — it reddens under the same
+mutation, because a leaked pool changes the `run.yaml` it digests. Its independent value is over
+arithmetic. For this invariant, one check twice.
+Task 4: fix round 1/5 (3 addressed, 0 open; commits 0eef18b..8e57ec6). The re-reviewer re-ran the
+stratum-pop mutation itself and reproduced the leak at the same path, verified the new arm pairs its
+absence check with a must-be-present `resample_draws == 500`, and traced by-reference safety: each
+pool is a freshly-constructed local list owned by one `PairedResample`, and nothing appends, sorts
+or truncates it in place between construction and the pop.
+Task 4: complete (commits 24d9a9f..8e57ec6, 1 fix round, review clean; suite 3538 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
