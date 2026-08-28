@@ -4071,6 +4071,13 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             resample_fns_by_key: dict[
                 tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
             ] = {}
+            # One (condition, recording step) -> {metric name: pool}, the
+            # evidence `stats.summarize_step` hands back beside a metric's
+            # interval and this loop pops off before it reaches `aggregated`.
+            # Kept here rather than discarded so a condition's own metric can
+            # later have a `correction.Member` built from the same draws its
+            # raw interval came from — never written to `run.yaml` itself.
+            pools_by_key: dict[tuple[int, str], dict[str, list[float]]] = {}
             for cond in conditions:
                 recording_steps = {
                     r.execution.step_name
@@ -4363,6 +4370,28 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                     else:
                         strata_derived = derived
                         strata_resample = resample_fns
+                    # `stats.summarize_step` hands back a `"pool"` key beside
+                    # `resample_draws`, under the same gate, so a metric's
+                    # corrected bound can later be rebuilt from the same draws
+                    # its raw interval came from (`correction.Member`, task 5).
+                    # It goes NO FURTHER than here: `Member`'s own docstring
+                    # states a pool "may not reach `run.yaml`", and
+                    # `step_summary` is exactly the mapping `aggregated`
+                    # below is built from, so every pool is popped off its
+                    # block — one layer before it would otherwise be dumped —
+                    # into a plain local keyed by metric name. Popped whether
+                    # or not the retry above ran: the parent call's own pools
+                    # were already carried into `step_summary` on the try
+                    # branch, this pop is the one site that strips them either
+                    # way, and the retry's `step_summary` (recorded columns
+                    # only, no `derived`) carries the same key under the same
+                    # gate, so one pop covers both outcomes.
+                    step_pools = {
+                        metric_key: metric.pop("pool")
+                        for metric_key, metric in step_summary.items()
+                        if "pool" in metric
+                    }
+                    pools_by_key[(cond.index, step_name)] = step_pools
                     # `resample_draws: 0` (as opposed to `null`, meaning
                     # resampling was never attempted) is `summarize_step`'s
                     # signal that a callable was supplied and every single
@@ -4722,6 +4751,16 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                                 clusters=clusters,
                                 strata=resample_strata,
                             )
+                            # A stratum is a description, not a comparison
+                            # (`reference.md` § Reporting strata; no `Member` is
+                            # built for one, above), so its pool has no later
+                            # consumer — popped and discarded here rather than
+                            # kept in a `pools_by_key`-shaped cache nothing would
+                            # ever read, and popped regardless so it cannot ride
+                            # into `by_block`/`run.yaml` the way a parent block's
+                            # pool cannot ride into `aggregated`.
+                            for level_metric in level_summary.values():
+                                level_metric.pop("pool", None)
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics
                             # over a table whose every column was non-numeric is

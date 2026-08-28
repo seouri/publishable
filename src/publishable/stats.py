@@ -3114,6 +3114,20 @@ def summarize_step(
     gap filed in `docs/superpowers/spec-defects.md`, not a guarantee this
     docstring is making.
 
+    **`pool` rides beside `resample_draws` under the same gate** (a column
+    under `resample_columns and seed is not None`; a derived metric whenever
+    its own resample was attempted), and travels no further than `cli.py`:
+    `correction.Member`'s own docstring is explicit that a pool "may not
+    reach `run.yaml`", so `cli.py` pops this key off every block before it is
+    written to the record. It is the same pool the interval beside it was
+    read off of — `column_resample.pool` / `derived_resample.pool` — carried
+    out whether or not that resample produced an interval at all: a
+    below-floor `percentile_over_units`/`percentile_of_derived` still returns
+    a (sorted) pool with `interval: None`, and a structural refusal returns
+    an empty one. Both travel the same way a live one does, so a caller
+    building a `Member` from this block decides what a pool with no interval
+    is worth rather than never seeing it.
+
     `null_test`, `labels` and `null_fns` are a DERIVED metric's own p-value
     path, and they never reach a recorded column: decision 7 gives a column no
     null at all, because `mean(column)` over a condition's units is invariant
@@ -3207,8 +3221,17 @@ def summarize_step(
         # makes the cluster the draw while `n.clusters` (set above) still
         # reports the count. Only the interval's construction moves.
         if resample_columns and seed is not None:
-            # Task 4 wires the returned pool into a `correction.Member`; this
-            # task only stops discarding it, so only `.interval` is read here.
+            # Task 4 (this task) carries `.pool` out alongside `.interval`,
+            # under the same `"pool"` key `cli.py` strips before a block
+            # reaches `run.yaml` (`correction.Member`'s own docstring: pool
+            # may not reach the record). Carried whether or not an interval
+            # came back — a below-floor `percentile_over_units` still returns
+            # `pool=sorted(values)` with `interval=None`, and a structural
+            # refusal returns `pool=[]`; either way this function hands the
+            # evidence outward and lets the caller (eventually `Member`)
+            # decide what a pool with no interval is worth, rather than
+            # silently dropping the one below-floor case before it ever
+            # leaves `stats.py`.
             column_resample = (
                 percentile_over_units(
                     values, seed, draws=draws, weights=column_weights, strata=column_strata
@@ -3267,6 +3290,11 @@ def summarize_step(
                 if resample_columns and seed is not None
                 else {}
             ),
+            # Rides beside `resample_draws` under the same gate, and stops at
+            # `cli.py`: `correction.Member`'s pool must never reach `run.yaml`,
+            # so this key exists only to travel one layer out and is popped
+            # off every block before a block is written to the record.
+            **({"pool": column_resample.pool} if resample_columns and seed is not None else {}),
             # `W-STATS-FAMILY` warns the person; this null tells the record. The
             # generated config declares `statistics.correction: holm` by default,
             # so a metric that said nothing here could be misread as corrected —
@@ -3317,6 +3345,15 @@ def summarize_step(
             # supplied a `resample` callable" write the same `run.yaml`.
             derived_interval: Interval | None
             draws_used: int | None
+            # Task 4: `derived_pool` rides beside `derived_interval` the same
+            # way `column_resample.pool` does above, under the `"pool"` key
+            # `cli.py` strips before a block reaches `run.yaml`. Carried
+            # whenever a resample was attempted, whether or not it produced
+            # an interval — `percentile_of_derived`'s below-floor return
+            # (`pool=sorted(values)`, `interval=None`) and its structural
+            # refusal (`pool=[]`) both hand the evidence outward rather than
+            # having it dropped here, the same choice made for a column above.
+            derived_pool: list[float] | None
             if compute is not None and seed is not None:
                 derived_resample = (
                     percentile_of_derived_clustered(
@@ -3329,8 +3366,10 @@ def summarize_step(
                     derived_resample.interval,
                     derived_resample.draws_used,
                 )
+                derived_pool = list(derived_resample.pool)
             else:
                 derived_interval, draws_used = None, None
+                derived_pool = None
             derived_n = {**counts, "completed": len(collapsed)}
             if derived_clusters_n is not None:
                 derived_n["clusters"] = derived_clusters_n
@@ -3352,6 +3391,7 @@ def summarize_step(
                 # built from 200 survivors would otherwise read identically to
                 # a clean 2000-draw one (see `percentile_of_derived`).
                 "resample_draws": draws_used,
+                **({"pool": derived_pool} if derived_pool is not None else {}),
             }
             # Decision 7's other half: a DERIVED metric gets a p-value when a
             # `null_test` is declared and a closure exists for this key — the

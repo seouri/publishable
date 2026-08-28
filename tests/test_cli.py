@@ -13512,6 +13512,48 @@ def test_an_unclustered_resampled_contrast_draws_what_it_always_drew(tmp_path, c
     assert entry["ci95"][1] == pytest.approx(23.025)
 
 
+def test_a_resampled_runs_run_yaml_never_carries_a_pool(tmp_path, capsys):
+    """Task 4 (H5c): `stats.summarize_step` now hands `cli.py` a `"pool"` key
+    beside `resample_draws`, so a condition's own metric can later have a
+    `correction.Member` built from the same draws its raw interval came from
+    (task 5). `correction.Member`'s own docstring is explicit that a pool "may
+    not reach `run.yaml`" — two thousand floats per metric per condition would
+    turn the one file this project promises a person can read into one they
+    cannot — so `cli.py` must pop the key off every block before it lands in
+    `aggregated`.
+
+    Paired with a must-be-present check (`CLAUDE.md`'s "a control asserting
+    only absences" defect): a `run.yaml` where nothing ran, or where no metric
+    was ever resampled, would pass the no-`pool` assertion for a reason that
+    has nothing to do with this task, so the walk also demands at least one
+    `resample_draws` in the record — proof a resample actually happened and
+    still left no pool behind."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        statistics={"resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    found_resample_draws = False
+
+    def _walk(node: Any) -> None:
+        nonlocal found_resample_draws
+        if isinstance(node, dict):
+            assert "pool" not in node, f"a pool reached run.yaml: {node}"
+            if node.get("resample_draws"):
+                found_resample_draws = True
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(run)
+    assert found_resample_draws
+
+
 def test_an_unclustered_weighted_contrast_is_unchanged_by_the_cluster_threading(tmp_path, capsys):
     """H4b-1's output, one slice old. The `clusters` parameter threads through the
     same three signatures its `weights` does, so a weighted contrast is the first
