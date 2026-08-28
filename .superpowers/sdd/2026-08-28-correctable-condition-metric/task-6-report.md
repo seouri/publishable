@@ -37,3 +37,39 @@ Both reverts verified byte-identical via `diff` against a pre-mutation backup, t
 **Verification:** the 5 relevant end-to-end tests pass; `test_task1_bit_stability_oracle_over_the_correction_machinery` passes with its golden literal untouched; `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all clean.
 
 **Concerns:** none — no behavior changed beyond the comment; no run declaring no constant hypothesis is affected.
+
+## Fix round 1
+
+**Finding 1 (spec compliance failure, `docs/reference.md`).** Swept the whole file for the "sole
+exception" framing rather than trusting the three locations named. Found **four** homes carrying the
+false claim, not three: the § Pre-registration passage at the `family implies` sentence (already
+correctly scoped — "wherever the metric's own raw interval exists" — left as-is), the `supported`
+`null` passage naming "three unrelated reasons" (now four, with the no-raw-interval case named
+explicitly), and both § What a hypothesis is tested against passages ("except for a recorded
+column…", "The standing exception is…"). All three rewritten to name both cases: no raw interval at
+all, and weighted+clustered. Also fixed `docs/feasibility-growth-chart-literacy.md` finding #7's
+matching "one standing exception" framing and its undated "as of a later slice" clause (ride-along),
+and added the `metric_key == "by"` skip as a third named path in `hypotheses.py`'s comment
+(ride-along).
+
+**Finding 2 (mutation didn't test the claim).** Added
+`tests/test_hypotheses.py::test_the_by_key_conjunct_is_what_keeps_a_family_dropped_member_off_the_honest_gap`,
+a direct unit test of `evaluate()` with a `Member` present in `by_key` (`ci95=None`, `p_value=None`,
+the pre-existing "dropped by `_family`" case the coordinator ruled out of scope) beside a `hyp` that
+is counted. This is exactly the input shape where `key not in by_key` is `False` and therefore the
+only conjunct that can make the `elif` not fire — `corrected` is already `None` from the `if` branch
+above regardless of this conjunct, since the dropped member is absent from `corrected_for`'s output
+too.
+
+Mutation: deleted `and key not in by_key` from the `elif` (kept `_is_counted(...) and method !=
+"none"`). Before: `1 passed, 50 deselected`. After: `FAILED
+tests/test_hypotheses.py::test_the_by_key_conjunct_is_what_keeps_a_family_dropped_member_off_the_honest_gap`
+— `AssertionError: assert 'ci95_corrected' not in {'value': 0.62, 'ci95': [0.55, 0.69],
+'ci95_corrected': None}` (`1 failed, 50 deselected`). Restored via `cp` from a pre-mutation backup,
+`diff` byte-identical, re-ran green: `51 passed` (full `test_hypotheses.py`).
+
+**Verification re-run:** targeted tests (18 passed), the 5 end-to-end tests (5 passed), Task 1 oracle
+(1 passed, golden untouched), `ruff check` clean, `ruff format --check` clean (101 files), `mypy`
+clean (56 files). Mechanical pass re-run on all four touched `*.md` files: no trailing whitespace, no
+tabs, no new broken anchors (pre-existing slugger false-positives in `reference.md` for `.json`
+headings are unrelated to this edit).

@@ -433,6 +433,11 @@ def evaluate(
             #   combination is reachable here specifically because
             #   `E-DATA-WEIGHT-CLUSTER-CONTRAST` only fires on a contrast, and
             #   a `{to: constant}` hypothesis declares none.
+            # - a metric named `by`: `cli`'s condition-member loop skips that
+            #   key unconditionally, the same rule `_comparison_step_blocks`
+            #   already applies — `by` holds the reporting strata, not a
+            #   metric, so it gets no seat in the correction family whether
+            #   or not this metric is real.
             #
             # Either way this hypothesis is still IN the family (`family_size`
             # counts it, per Decision 2's whole point), read through the same

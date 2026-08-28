@@ -206,3 +206,18 @@ feeding `_evidence_ratio` and the rank. Unreachable today (a block with `ci95` a
 Task 5: minor (deferred): `declaration_index` uniqueness across the two member lists is correct but
 unpinned — no test separates `len(comparison_members) + i` from a colliding `i`.
 Task 5: complete (commits c4ccf02..5570533, review clean, 0 fix rounds; suite 3543 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
+Task 6: implemented (commits a108433..355451b) — reports the corrected_unavailable elif needed NO logic change, only a stale comment; amended spec-defects (scoped to weighted+clustered), the design's Decision 5 (Holm rank shift), reference.md in two sections, and the analysis' findings #2 and #7. Review dispatched with 'needed no logic change' as its first question.
+Task 6: review — SPEC ❌ (reference.md is normative and three rewritten passages are false at HEAD),
+2 Important, 2 Minor (commits a108433..355451b).
+
+Ruling: **"needed no logic change" is ACCEPTED, and the reviewer's qualification is accepted with
+it.** The claim is true, but for the weaker reason: the branch fires only where there is nothing to
+correct GIVEN Task 5's cli policy, not by its own condition — `key not in by_key` is a proxy for
+"no entry in `fields`". The reviewer enumerated four states and found a fifth path (a Member built
+but dropped by `family_members()` when `ci95` and `p_value` are both None) where the branch does NOT
+fire and the raw bound is used silently. **That path is pre-existing, not introduced here**, and
+`cli.py:4470-4478` documents the coupling from the other end. Keeping the condition as-is: rewriting
+it to test `fields` directly is a change to a hot path for a case this slice did not create, and
+Task 7 is the close rather than the place to start one. Costs if wrong: a future cli change that
+builds a member where this slice builds none would make the branch silently wrong, and only the
+coupling comment warns.

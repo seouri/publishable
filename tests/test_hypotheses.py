@@ -1345,6 +1345,74 @@ def test_a_constant_hypothesis_is_corrected_unavailable_on_a_real_correction_met
     assert got["observed"]["ci95_corrected"] is None
 
 
+def test_the_by_key_conjunct_is_what_keeps_a_family_dropped_member_off_the_honest_gap():
+    """Task 6 fix round 1, finding 2: pins the exact conjunct the brief asked
+    to narrow (`key not in by_key`), not merely that the branch is reachable.
+
+    A `Member` can exist in `by_key` — `cli` built one — and still be dropped
+    from the correction family by `correction._family`, which keeps a member
+    only when it carries a `ci95` or a `p_value`; one with neither is real
+    evidence of nothing correctable and is excluded. That is a PRE-EXISTING
+    gap (`correction.family_members`'s own docstring names the exclusion) and
+    this slice did not create it — the coordinator ruled it stays exactly as
+    it behaves today rather than being rewritten to test `fields` directly,
+    since that would be a hot-path change for a case Task 5/6 did not
+    introduce.
+
+    What "stays exactly as it behaves today" MEANS: with `key not in by_key`
+    in the guard, `key in by_key` here is `True`, so the `elif` does not fire,
+    `bounds` and `corrected_unavailable` both stay at their defaults, and
+    `_tested_number` falls through to `obs.block.get("ci95")` — the RAW bound,
+    read silently, exactly as it would be under `correction: none`. Removing
+    the conjunct (the mutation this test is proved against) makes the `elif`
+    fire despite `key in by_key`, flipping this to the honest-gap
+    `supported: null` / `ci95_corrected: null` — a real, different, and (per
+    the ruling) NOT-wanted behaviour change for this pre-existing case.
+
+    So this test does not ask "is the gap good" — it asks "does the conjunct
+    still produce today's answer", and a green run says the conjunct is doing
+    exactly the job the comment now describes.
+    """
+    dropped_member = Member(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        delta=0.62,
+        ci95=None,
+        pool=None,
+        diffs=None,
+        declaration_index=0,
+        # No `p_value` either — `_family` keeps a member with EITHER a `ci95`
+        # or a `p_value`; both absent is what gets it dropped.
+    )
+    hyp = {
+        "id": "above_chance",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[dropped_member],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert got["family_size"] == 1
+    # The raw lower bound (0.55) read silently, not the honest gap: this is
+    # the pre-existing behaviour the ruling keeps, not a null verdict.
+    assert got["observed"]["ci95"] == [0.55, 0.69]
+    assert "ci95_corrected" not in got["observed"]
+    assert got["supported"] is True
+
+
 def test_a_constant_hypothesis_under_no_correction_gets_the_ordinary_absent_field():
     """`method: "none"` means no correction was attempted for anyone in the
     family, constant-referenced or not — the ordinary absent-`ci95_corrected`
