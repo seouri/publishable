@@ -250,3 +250,23 @@ e245d24; 179 tests green.
 Ruling: fixed rather than filed — a comment justifying a live decision with a retired refusal is the
 single most-repeated defect in this repo's record, and the sibling repo is where the next reader
 looks. Cost if wrong: a docstring rewrite in a scratch repo, revertible from one commit.
+
+## Whole-branch review (opus, b5eb0ef..6f4853b) — 3 Important, 3 Minor
+Verdict: the CODE is right and no pool escape route exists beyond the one T4's review closed. Every
+Important finding is a document sentence THIS SLICE INTRODUCED that is false against the build it
+describes — which is the repo's most-repeated defect arriving by its most predictable route: a slice
+that retires a refusal writes the new rule down slightly wider than the code makes it.
+I verified the three underlying code facts myself before dispatching the fix, so they are settled:
+  - `correction.py::_level_for` returns None for `fdr_bh` — no per-comparison level, so no corrected
+    bound for ANY member. The slice's "except in two cases" promise omits it, and the same document
+    still lists `fdr_bh` among the reasons a bound is null. Self-contradictory in one commit.
+  - `cli.py` `corrected_from_pool = is_derived or resample_columns` — a derived metric carries the
+    pool with NO declared `statistics.resample`. Decision 1 row 4's stated CAUSE is therefore false;
+    its conclusion is not. T5's own row-4 test reaches the state via all-degenerate draws, so the
+    test knew what the prose did not.
+  - `pools_by_key` is written and never read; its comment claims the job the `step_pools` local does.
+Ruling: ONE fix wave (opus), then a scoped re-review, per the skill. F2 is fixed in its LIVE homes
+only — `spec-defects.md` and `hypotheses.py`'s comment. The design spec keeps its wrong row and gets
+an appended correction here instead: retro-editing the record would destroy the evidence that the
+slice's own reasoning was wrong at the point it was written, which is the finding worth keeping.
+Cost if wrong: a reader of the spec meets row 4's false cause and must follow the pointer here.
