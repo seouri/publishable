@@ -1015,6 +1015,75 @@ def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
     assert str(repo / "templates" / "broken.py") in rendered
 
 
+ONE_SEGMENT_PARAM_PATH = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("one_segment")
+class OneSegment(BaseTemplate):
+    parameter_spec = {"threshold": Param(str, default="cdc2000")}
+"""
+
+THREE_SEGMENT_PARAM_PATH = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("three_segment")
+class ThreeSegment(BaseTemplate):
+    parameter_spec = {"a.b.c": Param(str, default="cdc2000")}
+"""
+
+
+def test_a_one_segment_parameter_spec_path_is_a_diagnostic_not_a_traceback(tmp_path: Path):
+    """`BaseTemplate.__init_subclass__` rejects a `parameter_spec` path that is
+    not exactly `head.leaf` the moment the class body defining it finishes —
+    before `@register_template` is ever reached, the same place any other
+    class-body raise already leaves no class behind to register. For a
+    project-local template this happens inside `discover_local`'s own import,
+    so it folds into `E-TEMPLATE-LOAD`'s "raises while importing" shape
+    exactly as a `Param` declaring `default=None` without `nullable=True`
+    already does — but the code minted for THIS fault, `E-TEMPLATE-PARAM-PATH`,
+    still travels inside the message, unlike theirs.
+
+    One segment is the realistic case: an author's first wrong guess at
+    `parameter_spec` is a flat name, not an over-nested one — the analysis
+    this task retires made exactly this mistake with `reference_frame`, which
+    is why the raise's own message uses that as its worked example rather than
+    this fixture's path: a fixture path of `reference_frame` would make
+    `assert "reference_frame" in message` pass even with the interpolated path
+    deleted, since the static example text already contains it."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(ONE_SEGMENT_PARAM_PATH)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    message = str(excinfo.value)
+    assert "E-TEMPLATE-PARAM-PATH" in message
+    assert "threshold" in message
+    assert "head.leaf" in message
+
+
+def test_a_three_segment_parameter_spec_path_is_also_refused(tmp_path: Path):
+    """THE OTHER malformed shape `_parameters_block` used to crash on: a path
+    with more than two segments is exactly as unrenderable as one with fewer,
+    and `BaseTemplate.__init_subclass__` does not special-case which side of
+    two a bad count falls on."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(THREE_SEGMENT_PARAM_PATH)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    message = str(excinfo.value)
+    assert "E-TEMPLATE-PARAM-PATH" in message
+    assert "a.b.c" in message
+
+
 CLAIMS_MY_ASSAY = """\
 from publishable import BaseTemplate, register_template
 

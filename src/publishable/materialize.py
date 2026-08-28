@@ -65,8 +65,20 @@ def _parameters_block(spec: dict[str, Param]) -> list[str]:
     """Render dotted paths as nested YAML with each Param's comment.
 
     Assumes every path has exactly two dotted segments — `generic` does. A
-    one-segment or three-segment path would emit broken YAML, so we fail
-    loudly instead of guessing at general nesting.
+    one-segment or three-segment path would emit broken YAML, so this guard
+    fails loudly instead of guessing at general nesting.
+
+    Unreachable for a `parameter_spec` declared as a class attribute, which
+    is every template `reference.md` shows: `BaseTemplate.__init_subclass__`
+    (`templates/base.py`) rejects a malformed path there, as
+    `E-TEMPLATE-PARAM-PATH`, the moment the class is defined — well before
+    `materialize_config` can ever hold an instance of it. **Not unreachable
+    in general** — a template that assigns `self.parameter_spec` inside its
+    own `__init__` (an instance attribute, invisible to
+    `__init_subclass__`, which only ever sees the class) reaches this guard
+    exactly as before; `tests/test_materialize.py`'s own `_OneParamTemplate`
+    fixture is built that way. Left in place rather than deleted for that
+    reason as much as for a future caller building a `spec` some other way.
     """
     tree: dict[str, Any] = {}
     for path, param in spec.items():

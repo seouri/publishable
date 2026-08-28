@@ -395,18 +395,22 @@ def test_generic_keys_that_need_no_quoting_still_emit_bare():
 
 
 def test_a_non_two_segment_parameter_path_fails_loudly():
-    class BadTemplate(BaseTemplate):
-        parameter_spec = {"threshold": Param(int, default=1)}
+    """`BaseTemplate.__init_subclass__` (`E-TEMPLATE-PARAM-PATH`,
+    `tests/test_templates.py`) now rejects a malformed path the moment a
+    template *class* declaring it as a class attribute is defined — well
+    before `materialize_config` or any instance can exist — so
+    `_parameters_block`'s own `ValueError` is unreachable through a
+    class-attribute `parameter_spec` (every template `reference.md` shows)
+    and is exercised here directly instead, against a hand-built `dict` no
+    class ever has to carry. It is NOT unreachable in general: `_OneParamTemplate`
+    above assigns `self.parameter_spec` inside `__init__`, an instance
+    attribute `__init_subclass__` never sees, and still reaches this same
+    guard the old way — see `_parameters_block`'s own docstring for that
+    residual."""
+    from publishable.materialize import _parameters_block
 
     with pytest.raises(ValueError, match="threshold"):
-        materialize_config(
-            template=BadTemplate(),
-            template_name="bad",
-            name="bad-pilot",
-            input_dir="/secure/data",
-            output_dir="/secure/results",
-            entrypoint="bad.experiment:BadExperiment",
-        )
+        _parameters_block({"threshold": Param(int, default=1)})
 
 
 def test_the_plugin_field_carries_what_generate_was_told(tmp_path: Path):
