@@ -6,30 +6,40 @@ decides.
 
 ---
 
-## Decision 1 — a member is built ONLY under a declared `statistics.resample`
+## Decision 1 — a member carries whatever evidence its OWN raw interval was built from
 
-**The pool is the evidence, and where there is no pool there is no member.**
+**CORRECTED 2026-08-28, before any task ran.** The first version of this decision said a member is
+built *only* under a declared `statistics.resample`, and refused every `t`-interval case for want of
+a pool. That was wrong, and it was wrong because it reasoned from `Member.pool` alone instead of
+reading `_corrected_bounds`. What the code actually says (`correction.py:349`): **"What decides the
+construction is which field the member carries, not what kind of metric it is."** A member carrying
+`diffs` re-runs a `t` construction at the smaller α; a member carrying a pool reads a second rank
+pair off it. Both are exact. There was never one privileged form of evidence.
 
-A condition's own derived metric has two possible intervals. Under a declared
-`statistics.resample` it is a percentile read off a pool of draws — that pool is exactly what
-`Member.pool` is documented to hold, *"already sorted ascending"*, and rebuilding a bound at a
-corrected level is reading different ranks off the same pool. Under no declared resample it is a
-`t` interval over the unit table, computed from a mean and a standard error, with no pool anywhere.
+So the rule is the one core already states, applied one surface over:
 
-So the rule is: **a declared resample earns a member; nothing else does.** A `t`-interval metric
-keeps today's `corrected_unavailable` and its honest `supported: null`.
+| A condition's metric | Raw interval | Member carries | Correctable? |
+|---|---|---|---|
+| Recorded column, no `resample` | `t_over_units` over the per-unit values | those values | **yes** |
+| Recorded column, declared `resample` | percentile off a pool | the pool | **yes** |
+| Derived (`aggregate`), declared `resample` | percentile off a pool | the pool | **yes** |
+| Derived, no `resample` | **none at all** — `derived_interval` is `None` | nothing | no, and nothing to correct |
 
-**Refused, and recorded: synthesising a pool for the `t` case.** Core could draw one — it has the
-unit table — but that pool would not be the evidence the *raw* interval came from, and the run would
-publish a `ci95` from a `t` construction beside a `ci95_corrected` from a percentile one. `cli.py`'s
-own comment records that exact defect being caught once, in a column contrast: *"Nothing raises and
-no reader can tell."* Reproducing it deliberately, one surface over, would be the worse half of this
-slice.
+The fourth row is not a refusal this slice makes. A derived metric with no declared resample has no
+raw interval either, so there is no bound to correct and `evaluate_on: ci95_lower` was already
+answerable by nothing. The honest `corrected_unavailable` stays exactly there and nowhere else.
 
-**What a reader gets is therefore two states rather than one**, and both are honest: declare a
-resample and a constant-referenced bound test is answerable; declare none and it comes back `null`
-with the same disclosure it has today. That is a narrower fix than the filing asked for, and the
-narrowing is the point.
+**What the first version got right, and keeps:** the corrected bound must rest on the *same*
+evidence as the raw one. `cli.py:1644` records that defect being caught once in a column contrast —
+a `ci95` from a percentile beside a `ci95_corrected` from a `t`, where *"Nothing raises and no reader
+can tell."* That hazard is real; the mistake was concluding it forbids the `t` case rather than
+requiring each case to carry its own evidence.
+
+**Why this matters beyond tidiness.** Under the first version, E2 — the live config that prompted the
+slice — would have been *fixed by accident*: it declares `statistics.resample`, so it lands in row 3.
+A recorded-column metric with no resample would have kept failing, and the filing would have been
+amended to claim a closure narrower than the one shipped. The slice would have worked and the
+document would have been wrong about why.
 
 ---
 
@@ -66,8 +76,9 @@ reads, in a file whose whole value is that a person can.
 ## Decision 4 — `hypotheses.py` narrows its branch and keeps its three states
 
 The `corrected_unavailable` branch stays; what changes is when it fires. Today it fires for every
-counted hypothesis with no member. After this slice it fires for one with no member *and no pool to
-have built one from* — the `t`-interval case Decision 1 leaves alone.
+counted hypothesis with no member. After this slice it fires for one whose metric **has no raw
+interval to correct** — Decision 1's fourth row, a derived metric with no declared resample, where
+`evaluate_on: ci95_lower` was already answerable by nothing.
 
 **The three states of `supported` do not change**, and neither does the rule that correction reaches
 a verdict only through a bound. A hypothesis on `observed` is unaffected in every case, as it is
@@ -92,7 +103,9 @@ gains a `ci95_corrected` where it had `null`, and its verdict may move from `sup
 
 ## What this design refuses
 
-- **No synthesised pool for a `t` interval.** Decision 1.
+- **No evidence borrowed from a different construction.** A member carries what its own raw
+  interval was built from, and never a pool synthesised to stand in for per-unit values or the
+  reverse. Decision 1.
 - **No change to `_is_counted` or `family_shape`.** The hypothesis is already in the family; this
   makes it correctable, not counted.
 - **No pool in the record.** Decision 3.

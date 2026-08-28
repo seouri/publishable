@@ -5,9 +5,14 @@ against [`G2-SCOPING.md`](../G2-SCOPING.md)'s measurement of `main` at `b3d1d06`
 
 **Baseline to hold against:** `uv run pytest -q` → 3531 passed, 1 skipped, 2 xfailed.
 
-**Two standing rulings every task inherits.** A member is built only under a declared
-`statistics.resample` — a `t`-interval metric keeps `corrected_unavailable`, and no task may
-synthesise a pool for it. And no pool reaches `run.yaml`.
+**Two standing rulings every task inherits.** A member carries the evidence its OWN raw interval
+was built from — per-unit values for a `t` interval, the pool for a percentile — and no task may
+substitute one for the other. And no pool reaches `run.yaml`.
+
+**Decision 1 was corrected before any task ran**, and the correction widens this slice: an earlier
+version refused every `t`-interval case for want of a pool, which would have left a recorded-column
+metric uncorrectable while fixing E2 by accident. Read the design's Decision 1 table before
+starting — it is the authority on which of four cases each task must handle.
 
 ---
 
@@ -59,7 +64,11 @@ At the site that assembles a condition's `aggregated` metric block.
 
 - **Exactly one of `pool`/`diffs`/`sides`**, and it is `pool`. `Member.__post_init__` refuses
   otherwise, which is the guard working — do not loosen it.
-- **Only under a declared `resample`.** Decision 1. A `t`-interval metric builds nothing.
+- **Per Decision 1's table, all three correctable rows.** A recorded column with no declared
+  `resample` carries its per-unit values as `diffs`; anything with a pool carries the pool. Only a
+  derived metric with no resample builds nothing, and that is because it has no raw interval either.
+- **`Member.__post_init__` enforces exactly one of the three fields.** That is the guard, not an
+  obstacle: if a case seems to need two, the case has been misread.
 - `where` must be the same key `hypotheses.py` looks a member up by — read `_comparison_step_blocks`
   and the `(where, step, metric)` tuple before choosing it, rather than inventing a key that looks
   right.

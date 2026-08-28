@@ -61,9 +61,15 @@ contrast forms are separate functions and are not in scope.
   hypothesis is already in the family and already inflates every other member's level. What changes
   is that it becomes correctable rather than only counted.
 - **Not the cross-run family.** That is a separate open entry and stays open.
-- **Not a `t`-interval story.** A condition's own metric under no declared `resample` has a `t`
-  interval and no pool at all. **That case must stay `corrected_unavailable`**, and saying so is
-  half of Decision 1 — a slice that quietly gave it a pool would be inventing evidence.
+- **It IS partly a `t`-interval story, and this scoping first said otherwise.** The bullet here
+  originally read *"a condition's own metric under no declared `resample` has a `t` interval and no
+  pool at all, so that case must stay `corrected_unavailable`"* — reasoned from `Member.pool` without
+  reading `correction.py:349`, whose own docstring says **"What decides the construction is which
+  field the member carries, not what kind of metric it is."** A `t` interval is rebuilt from
+  `diffs`, exactly, at the smaller α. A **recorded column** with no resample therefore has evidence
+  and is correctable; only a **derived** metric with no resample has none — and that one has no raw
+  interval either, so there is nothing to correct. Corrected before any task ran; the design's
+  Decision 1 carries the four-case table.
 
 ## 3. The risk, named
 
