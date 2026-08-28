@@ -15,7 +15,9 @@ of this file's job now, and it changes how three things read:
   twenty-four this bullet used to name were counted before it.
 - **A closed entry is no longer kept here.** On 2026-08-28 every entry whose own text recorded a closing
   disposition was **removed** rather than left struck — **115 sections of the 267 this file held**, leaving
-  152 of which 62 are `OPEN`, and cutting its length by more than half. What went is exactly what said so:
+  152 of which 62 are `OPEN`, and cutting its length by more than half. **Recounted 2026-08-28, later the
+  same day, after Task 11 of the `growth-chart-gaps` slice removed two more entries closed by code:
+  151 of which 61 are `OPEN`.** What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
   full closure marker. **A partial closure, a multi-item review record, and every entry with no disposition
@@ -6430,106 +6432,6 @@ analysis' own anchors.
 
 ---
 
-## OPEN — a `parameter_spec` path that is not exactly two segments crashes `generate experiment` with a traceback — **Owner: unassigned, and no slice follows**
-
-**Found by:** the `growth-chart-literacy` feasibility analysis, 2026-08-28, writing a project-local
-template. **Measured against commit `b0a6c9e`** through the project's own console script.
-
-`materialize._parameters_block` raises rather than diagnosing:
-
-```
-ValueError: _parameters_block only supports two-segment dotted paths (head.leaf); got 'reference_frame'
-ValueError: _parameters_block only supports two-segment dotted paths (head.leaf); got 'a.b.c'
-```
-
-Both reach the user as an unhandled Python traceback out of `publishable generate experiment`, exit
-`1`, with no `E-` code and nothing naming the constraint as a constraint. The one-segment case was
-hit by accident — a template declaring `"reference_frame": Param(...)`, the natural spelling for a
-parameter that belongs to no group — and the three-segment case was probed deliberately afterwards
-with `"a.b.c": Param(int, default=1)`.
-
-**What it contradicts.** `reference.md` § Templates says *"There is no `dict` type: a mapping is what
-nesting the dotted path already expresses"*, which reads as permitting any depth and is the sentence
-a template author designs against. Nothing in that section, in the `Param` constraint table, or in
-the three-states table says a path has exactly two segments, and § Errors `validate` reports carries
-no row for the refusal — so this is [an unbuilt reader of a shipped surface](../../CLAUDE.md#misreadings-this-repo-has-made-more-than-once)
-seen from the other end: a rule the code enforces that no document states.
-
-**Two proposed resolutions, and they are not equivalent.** Either § Templates states the two-segment
-constraint, `Param` renders it, and the refusal becomes a diagnostic with an identifier — cheapest,
-and it makes the single-segment case legible, which is the one a reader will hit; or
-`_parameters_block` materializes at arbitrary depth, which is what the sentence above already
-promises and what a plugin author with a three-level namespace will expect. **The first is the
-smaller claim and the one to take**, since a two-level namespace is enough for every template in
-this repository and the analysis that found this worked around it by renaming one parameter.
-
-**Why open.** The charter is complete and no slice follows, so this is what the project ships with:
-a template author's first wrong guess about `parameter_spec` produces a traceback rather than a
-message, and the document that would have prevented the guess says the opposite.
-
-## OPEN — a `sweep.baseline` fixing a path the `grid` also lists renders that cell twice, and both copies sit in the correction family — **Owner: unassigned, and no slice follows**
-
-**Found by:** the `growth-chart-literacy` feasibility analysis, 2026-08-28, writing a 2 × 2
-counterfactual design the obvious way. **Measured against commit `b0a6c9e`** by calling `expand` and
-`resolve_contrasts` directly, not inferred from labels.
-
-```yaml
-sweep:
-  baseline: {stimulus.physiology: healthy}
-  grid:
-    stimulus.physiology: [healthy, concerning]
-    stimulus.schedule: [sparse, dense]
-```
-
-`validate` reports `✓ config valid` — no error, and no warning. `expand` returns **six** conditions
-for a four-cell design, and two of them hold the same `values` mapping as two others:
-
-```
-0 schedule=sparse__baseline    {'stimulus.schedule': 'sparse', 'stimulus.physiology': 'healthy'}
-2 physiology=healthy__schedule=sparse  {'stimulus.physiology': 'healthy', 'stimulus.schedule': 'sparse'}
-1 schedule=dense__baseline     {'stimulus.schedule': 'dense',  'stimulus.physiology': 'healthy'}
-3 physiology=healthy__schedule=dense   {'stimulus.physiology': 'healthy', 'stimulus.schedule': 'dense'}
-
-duplicate pairs: [(0, 2), (1, 3)]
-```
-
-**The harm is in the family, not only in the bill.** `resolve_contrasts` returns
-`[(2, 0), (3, 1), (4, 0), (5, 1)]` — four comparisons, of which **two compare a condition against a
-condition holding identical parameter values over the same units**. Those two deltas are zero by
-construction, and they occupy half the correction family: Holm runs at α/4 when two comparisons mean
-anything, so every interval a reader acts on is corrected for two numbers that could not have come
-out otherwise. The run also pays twice for two of its cells.
-
-**This is the swept-path sibling of a case already recorded and already routed nowhere.** The
-"Three baseline shapes per-cell expansion makes reachable" entry above closes with task 8's ruling
-that the degenerate sub-case — *"the fixed value equal to the config's own, so the baseline row and
-the product row resolve to the same `parameters_hash`"* — is *"the one worth a diagnostic … routed
-to whoever owns duplicate-condition detection, not minted here."* **Nobody owns duplicate-condition
-detection, and no slice follows to.** What this entry adds is that the case is reachable from a
-*declared swept* path rather than only from a non-swept one, which makes it far commoner: a full
-factorial with a designated reference cell is an ordinary design, and writing it by listing the
-reference value in the `grid` beside a `baseline` naming it is the first thing anyone tries.
-
-**Core already refuses the group-axis form of exactly this.** `E-SWEEP-LEVEL-DUPLICATE` and
-`E-SWEEP-BASELINE-GROUP` both exist under
-[two identical measurements reported as two arms](../experimental-designs.md#mistakes-core-prevents),
-and `E-SWEEP-BASELINE-GROUP`'s own reasoning — *"the baseline row and the axis's own product row are
-the same cell, so `control` is rendered twice … the two conditions hold the same units and the same
-parameters, with directories identical at every artifact"* — is a word-for-word description of what
-happens here on a parameter axis, where nothing is reported at all.
-
-**Proposed resolution.** A `W-` or `E-` on two conditions resolving to the same `values` over the
-same units, whatever mode produced them, rather than a rule about baselines: the group-axis refusals
-are then instances of the general check rather than the only place it is made. A warning is the
-defensible level for the parameter-axis case — the design is expensive and confusing rather than
-unexpressible — and the message should name the working spelling, which § Expansion modes already
-gives: fix the axis under test and leave the stratifying axis free, so the same 2 × 2 comes out as
-four conditions with two per-schedule baselines and no duplication.
-
-**Why open.** The charter is complete and no slice follows, so this is what the project ships with:
-the commonest way to write a factorial with a reference cell validates clean, doubles two of its
-cells, and corrects every interval in the run against two comparisons that are zero by construction.
-
 ## OPEN — a correction family cannot span runs, so a family declared across several runs has no representation anywhere in the record — **Owner: unassigned, and no slice follows**
 
 **Found by:** the `growth-chart-literacy` feasibility analysis, 2026-08-28, expressing a plan whose
@@ -6570,6 +6472,16 @@ records applies against it.
 
 **Why open.** The charter is complete and no slice follows, so this is what the project ships with:
 a multiplicity family that crosses runs is a prose commitment, exactly as it was before the tool.
+
+**AMENDED 2026-08-28 (Task 11, `growth-chart-gaps` slice): closed as a documented limitation, not
+by the mechanism this entry proposed.** `reference.md` § Studies now carries its own subsection, "A
+correction family does not cross a run," stating the boundary this entry found and naming the route
+— the author corrects by hand and declares the family's level in the manuscript, and each run's own
+members still get the within-run family `correction.family_shape` already builds. No `study.yaml`
+block, no computed cross-run level, and no new artifact field exist: the "Proposed resolution" above
+is not built, and nothing in the code changed. A reader who wants the mechanism this entry describes
+should not go looking for it — the gap is closed by naming the limit in prose, exactly the route
+the entry's own "What a study can and cannot say today" section already named as available.
 
 ## OPEN — a `compare: {to: constant}` hypothesis's bound test is never answerable under a declared correction method — **Owner: unassigned, and no slice follows**
 
