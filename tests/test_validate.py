@@ -7512,53 +7512,76 @@ def test_a_repeated_group_level_beside_a_repeated_grid_value_still_fires_on_the_
 def test_the_reported_pair_is_the_first_in_condition_order_not_last_every_or_label_sorted(
     write_config,
 ):
-    """Task 8's adversarial fixture. A two-condition fixture only ever
-    distinguishes two candidate behaviours; this predicate has at least four —
-    report the first duplicated pair in condition order (the spec), report the
-    last one found, report every one found, or report whichever pair sorts
-    first by label — so the fixture needs two duplicate pairs, decoys on both
-    sides of each, and labels engineered so condition order and label-sort
-    order disagree.
+    r"""Task 8's adversarial fixture, round 2. Round 1's two-duplicate-pair
+    fixture (`mmm_first`/`aaa_second`-style labels) let `aaa_second` answer
+    for BOTH scan-last-wins and label-sort-order, because it happened to be
+    the alphabetically-first label AND the physically-last duplicate at once
+    — two of the four candidates were observationally identical, and the
+    docstring's claim that all three wrong candidates disagreed was false.
+    Fixed by using three duplicated values instead of two, chosen so each
+    candidate below lands on a DIFFERENT one:
 
-    `sweep.grid`'s single axis renders nine conditions in this order:
+    `sweep.grid`'s single axis renders 13 conditions in this order:
 
-        0 solo_m1        (decoy, before the first pair)
-        1 zzz_first      -\\_ pair A: earliest in CONDITION order
-        2 solo_between1  (decoy, between)                       )
-        3 zzz_first      -/   ... but LATEST alphabetically (label sorts after
-                                 aaa_second, so a label-sort-order bug would
-                                 skip straight past this pair)
-        4 solo_between2  (decoy, between)
-        5 aaa_second     -\\_ pair B: LATEST in condition order, but sorts
-        6 solo_between3  (decoy, between)                        )
-        7 aaa_second     -/   FIRST alphabetically — a label-sort-order bug
-                               reports this one instead of pair A
-        8 solo_last      (decoy, after the last pair)
+        0  solo_before  (decoy, before everything)
+        1  mmm_first    -\_ pair M: smallest max-index among the three pairs
+        2  solo_b1      (decoy)                    )
+        3  mmm_first    -/  (max-index 3)
+        4  solo_b2      (decoy)
+        5  aaa_mid      -\_ pair A: alphabetically-first LABEL among the three
+        6  solo_b3      (decoy)                    )   (max-index 7 — neither
+        7  aaa_mid      -/                              smallest nor largest)
+        8  solo_b4      (decoy)
+        9  zzz_last     -\_ pair Z: largest max-index among the three pairs
+        10 solo_b5      (decoy)                    )   (max-index 11)
+        11 zzz_last     -/
+        12 solo_after   (decoy, after everything)
 
-    A scan that returns on the first duplicate it finds while walking
-    conditions in order lands on pair A (`zzz_first`) — the checked pair
-    `(i, j) = (1, 3)` is reached at `j = 3`, before `(5, 7)` is ever visited.
-    A scan-last-wins mutant, a report-every-pair mutant, and a
-    label-sort-order mutant each produce a DIFFERENT wrong answer than pair A
-    and than each other, which is what the decoys and the `aaa_`/`zzz_` labels
-    are sized to distinguish — a fixture with only one duplicate pair, or with
-    both pairs' labels sorting the same way as condition order, cannot tell
-    these apart.
+    The real loop (`for j in range(1, len(conditions)): for i in range(j):
+    ... return`) visits `(i, j)` pairs in order of increasing `j`, and stops
+    at the first duplicate — so it reports whichever duplicated pair has the
+    SMALLEST max-index, which is pair M (`j = 3`). A scan-last-wins mutant
+    (iterating `j` downward) stops at the pair with the LARGEST max-index
+    instead — pair Z (`j = 11`). A label-sort-order mutant sorts conditions by
+    `.label` before scanning, which makes every duplicate of the
+    alphabetically-first value adjacent at the front — pair A (`aaa_mid`
+    sorts before `mmm_first`, `solo_*`, and `zzz_last`). A report-every-pair
+    mutant does not change WHICH pair is named in `messages_by_code`'s last
+    write (it still ends on Z, scanning forward), but it is caught on a
+    different axis entirely: three findings instead of one, checked directly
+    against `c.findings` rather than through the message text. All four
+    candidates now land on a distinct observation:
+
+    - correct (first-in-condition-order): 1 finding, naming `mmm_first`
+    - scan-last-wins:                     1 finding, naming `zzz_last`
+    - label-sort-order:                   1 finding, naming `aaa_mid`
+    - report-every-pair:                  3 findings
+
+    A fixture with only two duplicated values cannot separate scan-last-wins
+    from label-sort-order whenever the alphabetically-first label also
+    happens to occur last — which round 1's did, by accident, and the
+    docstring did not check for it. Three duplicated values, with the
+    alphabetically-first one placed in the MIDDLE position rather than at
+    either extreme, is what rules that accident out.
     """
     path = write_config(
         {
             "sweep": {
                 "grid": {
                     "stimulus.schedule": [
-                        "solo_m1",
-                        "zzz_first",
-                        "solo_between1",
-                        "zzz_first",
-                        "solo_between2",
-                        "aaa_second",
-                        "solo_between3",
-                        "aaa_second",
-                        "solo_last",
+                        "solo_before",
+                        "mmm_first",
+                        "solo_b1",
+                        "mmm_first",
+                        "solo_b2",
+                        "aaa_mid",
+                        "solo_b3",
+                        "aaa_mid",
+                        "solo_b4",
+                        "zzz_last",
+                        "solo_b5",
+                        "zzz_last",
+                        "solo_after",
                     ]
                 }
             }
@@ -7569,13 +7592,19 @@ def test_the_reported_pair_is_the_first_in_condition_order_not_last_every_or_lab
     findings = [f for f in c.findings if f.code == "W-SWEEP-CONDITION-DUPLICATE"]
     assert len(findings) == 1  # reported once overall, not once per duplicate pair
     message = findings[0].message
-    assert "zzz_first" in message  # pair A: first in CONDITION order
-    assert "aaa_second" not in message  # pair B: first only in LABEL-sort order
-    assert "solo_m1" not in message
-    assert "solo_between1" not in message
-    assert "solo_between2" not in message
-    assert "solo_between3" not in message
-    assert "solo_last" not in message
+    assert "mmm_first" in message  # pair M: smallest max-index -> first in the real scan
+    assert "aaa_mid" not in message  # pair A: would win under label-sort-order
+    assert "zzz_last" not in message  # pair Z: would win under scan-last-wins
+    for decoy in (
+        "solo_before",
+        "solo_b1",
+        "solo_b2",
+        "solo_b3",
+        "solo_b4",
+        "solo_b5",
+        "solo_after",
+    ):
+        assert decoy not in message
 
 
 def test_the_sharp_group_axis_codes_still_fire_and_this_warning_still_stays_out_of_their_way(

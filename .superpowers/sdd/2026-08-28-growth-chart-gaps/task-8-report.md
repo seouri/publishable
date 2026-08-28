@@ -34,3 +34,49 @@ new test by name (caught before reporting).
 `ruff format --check .`: clean. `mypy`: clean.
 
 Concern: none — predicate untouched, no findings against it to report.
+
+## Fix round 1
+
+Finding: round 1's fixture had two duplicated values (`zzz_first`, `aaa_second`)
+where `aaa_second` was simultaneously the alphabetically-first label and the
+physically-last duplicate, so scan-last-wins and label-sort-order produced the
+same observation. The docstring's claim that all three wrong candidates
+disagreed was false, even though both mutants did redden the test.
+
+Fix: rebuilt the fixture with three duplicated values instead of two —
+`mmm_first` (smallest max-index), `aaa_mid` (alphabetically-first label,
+placed in the middle position, max-index 7), `zzz_last` (largest max-index) —
+with decoys before, between, and after every pair. This separates all four
+candidates:
+
+- correct (first-in-condition-order): 1 finding, names `mmm_first`
+- scan-last-wins: 1 finding, names `zzz_last`
+- label-sort-order: 1 finding, names `aaa_mid`
+- report-every-pair: 3 findings
+
+Mutations re-run against the amended fixture (each from a clean copy of
+`src/publishable/validate.py`, restored and behaviorally re-verified — not
+just `git status` — before the next):
+
+1. `for j in range(len(conditions) - 1, 0, -1)` (scan-last-wins).
+   Command: `uv run pytest tests/test_validate.py -k "duplicate or sharp_group_axis_codes or reported_pair_is_the_first" -q`
+   Output: `3 failed, 7 passed` — new test failed with
+   `assert 'mmm_first' in '...schedule=zzz_last...'`. Restored; re-run gave
+   `10 passed`.
+2. Removed the `return` after `c.warn` (report-every-pair).
+   Same command. Output: `3 failed, 7 passed` — new test failed with
+   `assert 3 == 1` (three findings, not one). Restored; re-run gave
+   `10 passed`.
+3. Sorted `conditions` by `.label` before scanning (label-sort-order).
+   Same command. Output: `1 failed, 9 passed` — only the new test failed,
+   with `assert 'mmm_first' in '...schedule=aaa_mid...'`. Restored; re-run
+   gave `10 passed`.
+
+After the third restore, `diff` against the saved clean copy of
+`validate.py` showed no differences, confirmed by byte-diff before the
+behavioral re-run (which also passed).
+
+`uv run pytest tests/test_validate.py`: 806 passed. `ruff check .`: clean.
+`ruff format --check .`: clean. `mypy`: clean.
+
+Concern: none — predicate untouched, only the fixture and its docstring changed.
