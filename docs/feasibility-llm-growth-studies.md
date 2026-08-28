@@ -2489,6 +2489,14 @@ figure in the table below depends on are **byte-identical** at both commits, by 
 `Node.__setattr__`/`__delattr__`, so it is a step-time contract error that no config declaration can
 reach.
 
+**Both source repositories were re-read for movement, and neither has moved.** `2026-07-01-screening`'s
+last commit is `ce76f9d` (2026-07-24) and `2026-08-03-shorcut`'s is `d20efe4` (2026-08-05), both earlier
+than this analysis; `git log --since=2026-08-08` returns nothing in either. The screening abstract still
+states the 440-patient paired held-out set the cost table is built on. So steps 1 through 8 of the
+[feasibility procedure](../CLAUDE.md) — the goals, the hand-rolled inventory, the nine designs, their
+arithmetic, and every refusal's route — rest on unchanged sources and are **not** re-derived here. What
+is fresh is the build measurement and the plugin.
+
 #### The narrowings this measurement declares
 
 The same three the 2026-08-16 entry declared, plus two new ones, each named rather than left implicit:
