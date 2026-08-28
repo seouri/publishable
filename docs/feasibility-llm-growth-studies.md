@@ -822,7 +822,7 @@ apparatus_facts = ["provider", "model_id", "api_version",
 
 1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys — in the specification; see [§ Executability on this build](#executability-on-this-build) — is a warning, fired wherever a probe runs, plus an `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
 2. **The probe runs before *every* execution.** A hosted deployment re-tuned during the E4 benchmark's 4.4 hours, or the C3 run's 12 hours, fails the run with no policy knob. That is correct — two deployment states are not one dataset — but it is an operational precondition, not a footnote. The ledger keeps both observations, so the evaluable earlier period stays reportable.
-3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. How much of core's apparatus mechanism is built is a build fact that moves — probe dispatch itself has now been exercised, at `dry-run` and not at `validate`, against a real installed probe — see [§ Executability on this build](#executability-on-this-build) for what is true today rather than restating it here, since restating it here is exactly what leaves an undated claim behind for the next slice to falsify.
+3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. How much of core's apparatus mechanism is built is a build fact that moves — see [§ Executability on this build](#executability-on-this-build) for what is true today rather than restating it here, since restating it here is exactly what leaves an undated claim behind for the next slice to falsify.
 
 ### Parameters
 
@@ -2486,8 +2486,10 @@ commits, by `md5`: `validate.py` (`da7b805016671939ae9b67f53d97d5e3`), `stats.py
 `units.py`. `cli.py` did move (+76/−6) — an environment manager measured rather than asserted, and a
 run whose every execution raised now saying so on stderr — and row 1 rests on none of it, having been
 **measured by running** rather than inferred from byte-identity. Exactly
-**one diagnostic code is minted** in that window — `E-CONFIG-IMMUTABLE`, 136 codes in total, by a
-`git grep` of `code="..."` at each commit differenced against the other — and it is raised by
+**one diagnostic code is minted** in that window — `E-CONFIG-IMMUTABLE` — by a `git grep` for the
+`code="..."` spelling in `src/publishable/*.py` at each commit, differenced against the other. That is
+one spelling rather than an enumeration, so it is trustworthy for the **delta**, which is the same
+method at both ends, and not quoted here as a total — and it is raised by
 `Node.__setattr__`/`__delattr__`, so it is a step-time contract error that no config declaration can
 reach.
 
@@ -2526,7 +2528,10 @@ The same three the 2026-08-16 entry declared, plus two new ones, each named rath
 #### Row 1, measured by running: 8 of 8
 
 Every one of the eight transplantable configs validates with **zero errors** under the table
-substitution — the print is `✓ config valid` for each. Two warnings appear and both are fixture
+substitution, which is what row 1 counts. The print is `1 problem (0 errors, 1 warning)` for seven of
+them and `2 problems (0 errors, 2 warnings)` for e5 — not `✓ config valid`, which the tool reserves
+for a config that produces nothing at all, and which no config carrying the fixture's own warning can
+earn. Two warnings appear and both are fixture
 properties rather than design properties: `W-DATA-CLUSTER-UNDECLARED` on `age_band` for all eight
 (the synthetic table's four-band shape), and `W-STATS-FAMILY` on E5 alone, which is an artifact of
 the substitution itself — E5 declares `correction: none` and **no `sweep` block**, and the scaffold's
@@ -2547,8 +2552,8 @@ block that could not fail either way would not be a measurement.
 
 #### Rows 2 and 3 are untouched, and the derivation is the byte-identity above
 
-Row 2 is a step-level call: `io.reuse_from` ships (`artifacts.py:1192`) and six configs still need
-the plugin body to call it. Row 3 is a construction inside `stats.summarize_step`, and `stats.py` is
+Row 2 is a step-level call: `io.reuse_from` ships — `grep -n "def reuse_from" src/publishable/artifacts.py`
+returns a hit — and six configs still need the plugin body to call it. Row 3 is a construction inside `stats.summarize_step`, and `stats.py` is
 byte-identical at both commits, so nothing in this window could move it. Its **character** is the
 one the 2026-08-26 correction settled: a `report_by` level's recorded-column interval stays a
 `t_over_units` one under a declared `resample`, which `reference.md` states as a **documented
@@ -2601,8 +2606,12 @@ assumed away the one core-side blocker that survives the plugin being written.
 | Free of every core-side dependency this analysis can name | **0** | no — **re-derived, not extracted**: a plugin template is `E-TEMPLATE-INSTALLED-UNSUPPORTED`, which E5 earns with the other eight |
 
 **No fifth number is minted, and no single figure is quoted for this analysis' executability** —
-quote the table, or name the dependency. Rows 1, 2 and 3 are the H8a block's, re-derived and
-unchanged; row 4's count moved, and the dependency is the thing to say out loud.
+quote the table, or name the dependency. Rows 1, 2 and 3 carry the H8a block's **counts**, re-derived and
+unchanged, and their **cells are rewritten** rather than extracted — row 1 says it was measured by
+running, row 3 wears the noun the 2026-08-26 correction settled, and no cell names H8a any more,
+because a cell naming a slice that did not produce this measurement is the provenance claim the
+byte-identical convention existed to keep honest. Row 4's count moved, and the dependency is the
+thing to say out loud.
 
 #### How far the written plugin gets against shipped core, measured
 
@@ -2637,8 +2646,9 @@ each measured:
    `report_by: [sex]`, the rest of E1's design intact — grid over
    `objective.false_negative_credit: [0.10, 0.25, 0.50, 0.75]`, `{kind: seed, n: 3}`, a 0.2
    `holdout` stratified on `truth`, `resample: {method: bootstrap, n: 2000, stratify_by: [truth]}` —
-   against a **project-local** template carrying the parameters, with the plugin supplying the
-   resolver. The print is `✓ config valid`. **That is the route: keep the template project-local,
+   against a **project-local** template carrying four of E1's parameter groups — `cohort`,
+   `objective`, `output` and `report`, not its `llm`, `request`, `prompt` or `optimizer` blocks, which
+   this measurement does not put through anything — with the plugin supplying the resolver. The print is `✓ config valid`. **That is the route: keep the template project-local,
    ship the machinery in the plugin**, which is what `docs/tutorial-writing-a-plugin.md` prescribes
    for exactly this refusal. It is the first time in this section's history that a plugin-supplied
    artifact has resolved a roster on a shipped build.
