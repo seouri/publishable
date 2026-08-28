@@ -170,3 +170,39 @@ absence check with a must-be-present `resample_draws == 500`, and traced by-refe
 pool is a freshly-constructed local list owned by one `PairedResample`, and nothing appends, sorts
 or truncates it in place between construction and the pop.
 Task 4: complete (commits 24d9a9f..8e57ec6, 1 fix round, review clean; suite 3538 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
+Task 5: implemented (commits c4ccf02..5570533) — all three correctable Decision 1 rows, row 4 left
+without a member, plus a carve-out the design's table did not anticipate: a column under BOTH
+`weight_by` and `cluster_by` (reachable with no comparison, so `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+never fires) has no paired counterpart construction, so it builds nothing rather than loosening
+`Member.__post_init__`. Oracle reported byte-identical green. Review dispatched on opus with the
+evidence pairing, the `diffs` repurposing, the carve-out and family-size stability as its four
+first questions.
+Task 5: review — SPEC ✅ on all four Decision 1 rows, quality Approved, 2 Important + 2 Minor
+(commits c4ccf02..5570533). Verified by reading: the evidence pairing is percentile-beside-percentile
+and t-beside-t at every branch; `grep '\.diffs\b'` over `src/` returns ONLY `correction.py`, and only
+the guard's `len()` checks and the three `paired_*` calls — no Cohen's dz, no derived `n`, no sign
+convention — so values-as-`diffs` is semantically inert and is now on the record as checked;
+`corrected_fields` still takes `comparison_members` alone, so no family size moves; the oracle is
+byte-identical green with its golden untouched.
+
+Ruling: **the Holm re-ranking is REAL, is more correct than what it replaces, and must be disclosed
+rather than fixed.** `corrected_for` assigns levels by `enumerate(rank_family(family))`, and a
+counted constant hypothesis previously contributed no member — so its co-family hypotheses ranked
+over a shorter list. Now it takes a rank and pushes some of them down, widening their levels and
+NARROWING their corrected bounds. Design Decision 5 says "nothing else may move at all", which is
+now false in this one named way. I am not reverting it: a counted hypothesis that ranks in its own
+family is the correct Holm step-down, and the previous behaviour was the anomaly the slice exists to
+remove. What it needs is a sentence in the record and a test, both of which land in Task 6/7 rather
+than in a fix round here. **Costs if wrong: a run mixing a constant hypothesis with other counted
+ones reports slightly narrower corrected bounds for the others than 0.2.0 did, and only the ledger
+and the amended Decision 5 explain why.**
+
+Task 5: carried to Task 6's dispatch (NOT just this ledger): the residual open case in the
+`spec-defects.md` entry is WEIGHTED+CLUSTERED, not the `t` case — Task 5 closed the `t` case. The
+Task 6 brief's "stays open for the `t` case" is stale and must not be copied forward.
+Task 5: minor (deferred): `delta=summary_block.get("value") or 0.0` swallows a `None` into `0.0`,
+feeding `_evidence_ratio` and the rank. Unreachable today (a block with `ci95` always has a numeric
+`value`); `is None` would say what is meant.
+Task 5: minor (deferred): `declaration_index` uniqueness across the two member lists is correct but
+unpinned — no test separates `len(comparison_members) + i` from a colliding `i`.
+Task 5: complete (commits c4ccf02..5570533, review clean, 0 fix rounds; suite 3543 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
