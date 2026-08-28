@@ -323,3 +323,15 @@ This is CLAUDE.md's own rule — sweep for a distinctive short fragment, assume 
 your last sweep could not have matched — catching a live instance in the slice that quotes it.
 Ruling: F6's stale paragraph DELETED rather than rewritten, its one true half relocated and rescoped.
 Prefer deleting a claim to rewriting it; a rewrite invents, a deletion cannot.
+Fix-wave re-review: clean. All six ADDRESSED with independent evidence — the reviewer read
+§ Statistical reporting itself rather than accepting the fixer's "already true" claim, ran its own
+F2 sweep (three homes, no fourth), re-ran the F5 mutation and confirmed the tie is forced BY
+CONSTRUCTION (both members get the identical 0..39 evidence vector) rather than by a numeric
+coincidence a later edit could break, and found no hedging-into-vagueness.
+Ruling: the workspace is NOT deleted, against the skill's final step. `CLAUDE.md` § The development
+record lists `.superpowers/sdd/<plan>/progress.md` and the task reports as TRACKED records of this
+repo — the skill assumes a git-ignored scratch directory, and here it is the opposite. Deleting it
+would destroy the record the repo exists to keep. Cost if wrong: a tracked directory the skill would
+have cleaned, which is cheap to remove later and impossible to recover if removed now.
+
+SLICE COMPLETE: G2 (correctable condition metric), 7 tasks + 1 fix wave, all on main and pushed.
