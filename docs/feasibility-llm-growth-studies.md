@@ -822,7 +822,7 @@ apparatus_facts = ["provider", "model_id", "api_version",
 
 1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys — in the specification; see [§ Executability on this build](#executability-on-this-build) — is a warning, fired wherever a probe runs, plus an `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
 2. **The probe runs before *every* execution.** A hosted deployment re-tuned during the E4 benchmark's 4.4 hours, or the C3 run's 12 hours, fails the run with no policy knob. That is correct — two deployment states are not one dataset — but it is an operational precondition, not a footnote. The ledger keeps both observations, so the evaluable earlier period stays reportable.
-3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. None of that can be exercised yet, and the reason is worth being precise about: whether core's apparatus mechanism is built, and how much of it, is a build fact that moves — see [§ Executability on this build](#executability-on-this-build) for what is true today rather than restating it here, since restating it here is exactly what leaves an undated claim behind for the next slice to falsify.
+3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. How much of core's apparatus mechanism is built is a build fact that moves — probe dispatch itself has now been exercised, at `dry-run` and not at `validate`, against a real installed probe — see [§ Executability on this build](#executability-on-this-build) for what is true today rather than restating it here, since restating it here is exactly what leaves an undated claim behind for the next slice to falsify.
 
 ### Parameters
 
@@ -935,11 +935,36 @@ Retry ledgers, execution manifests, timestamped run directories, `reproduce` com
 
 ## Gaps this analysis found in the specification
 
-Three, all now closed in the specification. Each is recorded here with the case that surfaced it, because a gap's motivating example is the thing a later reader needs and the fixed text no longer carries.
+Five: three closed in the specification, and two found on 2026-08-27 by installing the plugin this analysis proposes and putting its configs through the shipped tool — both **open**, and open here means what `docs/superpowers/spec-defects.md` says it means, since the charter is complete and no slice follows. Each is recorded with the case that surfaced it, because a gap's motivating example is the thing a later reader needs and the fixed text no longer carries.
 
 1. **`apparatus_facts` conflated "must be yielded" with "gated on change."** A hosted deployment's revision fingerprint is returned on most calls and omitted on some. Declaring it made absence fatal; not declaring it left the change gate ambiguous, and the only safe move was to stop declaring a pin the study depends on. *Resolved* in `reference.md` § The apparatus core can only observe: a declared fact must be supplied as a **key**, `null` is a legal value meaning the apparatus did not answer, the gate compares two *observations* so an absence is never a change, and declaring the fact buys a warning, fired wherever a probe runs, plus an `unobserved` count. Every returned fact is gated whether declared or not, so there is no longer any reason to leave one out.
 2. **`required_env` was static, but a sweep can span providers.** [E6](#e6--compiled-program-transfer) is the case: `validate` would either demand an Azure key from a run that never selects Azure or stay silent about one a later condition needs. *Resolved* by `reference.md` § A credential can belong to a parameter value — `Param(requires_env={...})` keyed by the parameter's `choices`, checked over the conditions the sweep actually resolves. The requirement travels with the decision that creates it, which is the same boundary `apparatus_facts` sits on read from the other side.
 3. **Nothing showed the metered quantity before a run.** `limits.max_executions` warns on an execution count, which is not what a metered run is billed by: 20 executions over a 100,000-unit corpus is cheap by that measure and ruinous in practice. *Resolved* in `reference.md` § Before you spend it — `dry-run` now prints **unit-executions**, the sum of `len(io.units)` over every planned execution. Deliberately *not* resolved with a `limits` field: core has no price list and cannot count tokens, and a threshold in a currency it cannot measure would be the "looks handled and isn't" failure the correction family is held against. A budget that must be pre-registered is a template parameter, hashed with everything else.
+
+4. **The unit table has no importable name, and a plugin has to annotate it.** *Open.* Core's own
+   `BaseTemplate.aggregate` is annotated `units: "UnitTable"`, the class lives in `publishable.stats`,
+   and `reference.md` names it **zero times** — [§ The importable surface](reference.md#the-importable-surface)
+   is the enumerated list and `UnitTable` is not on it. The four operations the table supports are
+   specified; the type is not, so a plugin author writing `def aggregate(self, units: UnitTable, cfg)`
+   invents the import. `publishable-llm-screening` did exactly that, and on the shipped build the
+   package does not import at all: `E-PLUGIN-LOAD`, *"cannot import name 'UnitTable' from
+   'publishable'"* — one line in one shared import, and every artifact the distribution registers is
+   unusable behind it. Two resolutions are available and this analysis names neither as preferred:
+   export the name, or state in § The importable surface that the table is deliberately unnamed and
+   `aggregate` is to be left unannotated. What is not available is silence, because the surface is
+   annotated in core's own signature and copied from there. Measured on 2026-08-27 against commit
+   `dc03ec4` — [§ Executability on this build](#executability-on-this-build) has the run.
+5. **`unit-executions` does not count what a step does through `io.units.train`.** *Open.*
+   [§ Before you spend it](reference.md#before-you-spend-it) defines the figure as the sum of
+   `len(io.units)` over every planned execution and then makes a proportionality claim about it:
+   *"where a step makes one request, one assay, or one simulation per unit, this is the count the bill
+   is proportional to."* Under a declared `holdout` every scope is handed the **test** partition, with
+   `.train` attached beside it, so a condition-scoped step fitting over `io.units.train` does one pass
+   per training unit and contributes the test count. Measured: 48 handed and 192 in `.train` on a
+   240-row roster at `frac: 0.2`. [E1](#e1--metric-calibration) and [E2](#e2--primary-optimization-comparison)
+   are that shape exactly — MIPRO compilation at condition scope over the training half — and it is
+   $380 of E1's $548. The arithmetic is faithful to the definition; the claim the definition is wrapped
+   in is what fails, and it fails silently on the most expensive executions in this analysis.
 
 ---
 
@@ -2444,3 +2469,213 @@ correction family**. That is a stated limit of the design, not a wrong number.
 **Nothing above is retro-edited**, on this section's own convention — the entries are dated measurements and
 say what was measured when. **The four-row table is untouched and no fifth number is minted.** This
 correction changes one word's worth of meaning and leaves every figure where it was.
+
+### Measured on 2026-08-27 against commit `dc03ec4` — a fresh full re-measurement, with the plugin installed for the first time
+
+**The H3c-3 entry says this section will never gain another entry, and that sentence was about
+slices.** Nothing is chartered after H3c-3 and nothing has been; what follows is not a slice entry
+but a **re-measurement at a later commit**, run because 83 commits have landed on `main` since the
+one that sentence was written against and because the plugin this analysis proposes turns out to
+**exist on disk**. The H3c-3 text is left exactly as it stands, on this section's own convention:
+its measurement was sound on its date, and a later measurement is appended rather than folded back
+into it.
+
+**What moved in `src/` since `7ef6846`.** 16 files, +602/−51 — the release work, the plugin
+tutorial's six fix slices (W1–W5), and a whole-project review round. Four of the five modules every
+figure in the table below depends on are **byte-identical** at both commits, by `md5`:
+`validate.py` (`da7b805016671939ae9b67f53d97d5e3`), `stats.py`, `runner.py` and `units.py`. Exactly
+**one diagnostic code is minted** in that window — `E-CONFIG-IMMUTABLE`, 136 codes in total, by a
+`git grep` of `code="..."` at each commit differenced against the other — and it is raised by
+`Node.__setattr__`/`__delattr__`, so it is a step-time contract error that no config declaration can
+reach.
+
+#### The narrowings this measurement declares
+
+The same three the 2026-08-16 entry declared, plus two new ones, each named rather than left implicit:
+
+- **The fixture is a `publishable demo` project**, scaffolded by the command H9d built, with a
+  240-row synthetic `index.csv` outside it carrying every column the nine configs name. Each
+  config's `data.units` and `statistics` blocks were transplanted verbatim onto that project's
+  generated config; `parameters`, `sweep`, `replication` and `hypotheses` were **not** carried over,
+  because the scaffold's entrypoint declares neither the real parameter names nor the
+  `step03_screen`/`step05_agreement` steps the real hypotheses name.
+- **E3 carries no `data`/`statistics` YAML of its own**, so eight configs are transplantable, which
+  is where row 1's denominator comes from.
+- **C2 declares two contrasts and C3 declares four; one stand-in of each was run**, over the
+  scaffold's own axis. That changes the comparison count a message would print and nothing about
+  whether a code fires.
+- **New: the plugin was installed** — `publishable-llm-screening 0.1.0`, at `d47340d`
+  (2026-08-08) — into a scratch venv beside `publishable 0.1.3` built from this commit. It registers
+  `llm_screening`, `llm_prompt_opt` and `shortcut_probe` as `publishable.templates` entry points, a
+  `dspy_examples` resolver, and an `llm_deployment` probe. It is **not** the `publishable-llm` this
+  analysis proposes and its names differ; where a claim below turns on the name, the substitution is
+  printed with it.
+- **New: one `.pth` shim.** The plugin does not import against shipped core at all without it; what
+  the shim is and what it buys is measured below rather than assumed.
+
+#### Row 1, measured by running: 8 of 8
+
+Every one of the eight transplantable configs validates with **zero errors** under the table
+substitution — the print is `✓ config valid` for each. Two warnings appear and both are fixture
+properties rather than design properties: `W-DATA-CLUSTER-UNDECLARED` on `age_band` for all eight
+(the synthetic table's four-band shape), and `W-STATS-FAMILY` on E5 alone, which is an artifact of
+the substitution itself — E5 declares `correction: none` and **no `sweep` block**, and the scaffold's
+own two-comparison sweep is what makes a family for the correction to be absent from.
+
+As declared — `from: {resolver: patient_trajectory}`, the name the analysis uses — all eight earn
+`E-RESOLVER-UNKNOWN`, whose message reads *"names `patient_trajectory`, which no installed
+distribution registers in the `publishable.resolvers` entry-point group (registered: none
+installed)"*. That is the plugin-not-installed answer, not a refusal of the declaration:
+`E-DATA-RESOLVER-UNSUPPORTED` stays retired, as H7b Part B left it.
+
+**Two discriminating mutations, both run, both quoted from what the command printed.** Setting
+`holdout.frac: 0` on E1's otherwise-clean block produces `E-DATA-HOLDOUT-FRAC` — *"is 0, and a test
+fraction is strictly between 0 and 1"* — and restoring the field returns the file byte-for-byte
+(`diff` empty) and the result to one warning, zero errors. Setting C2's `weight_by` to a column the
+roster does not carry produces `E-DATA-WEIGHT-UNKNOWN`, and reverting restores the clean result. A
+block that could not fail either way would not be a measurement.
+
+#### Rows 2 and 3 are untouched, and the derivation is the byte-identity above
+
+Row 2 is a step-level call: `io.reuse_from` ships (`artifacts.py:1192`) and six configs still need
+the plugin body to call it. Row 3 is a construction inside `stats.summarize_step`, and `stats.py` is
+byte-identical at both commits, so nothing in this window could move it. Its **character** is the
+one the 2026-08-26 correction settled: a `report_by` level's recorded-column interval stays a
+`t_over_units` one under a declared `resample`, which `reference.md` states as a **documented
+limitation** — self-disclosing, and outside every correction family — not a gap. The count of seven
+stands; the noun does not.
+
+#### Row 4 is falsified by this measurement, and it is re-derived rather than extracted
+
+Row 4 reads *"free of every core-side dependency this analysis can name — 1 — E5, and only with the
+plugin written and installed."* **The plugin is now written and installed, and under that row's own
+condition the count is zero.** The byte-identical extraction the last five entries performed was
+never a rule to preserve a figure the derivation contradicts — it held because the derivation kept
+landing on the same numbers, and here it does not.
+
+**The dependency has a name: `E-TEMPLATE-INSTALLED-UNSUPPORTED`.** A config whose `experiment_type`
+names a template an installed distribution registers is refused, in full:
+
+```
+error   E-TEMPLATE-INSTALLED-UNSUPPORTED experiment_type
+        names `llm_screening`, which publishable-llm-screening 0.1.0 registers as a
+        `publishable.templates` entry point — but core resolves an installed template's name
+        without importing its package, and loading one is not implemented in this build;
+        installed templates will be honored in a later slice. Use a project-local `templates/`
+        file or a core template for now
+```
+
+`publishable list-templates` says the same thing from the other side: all three of the plugin's
+templates are listed as installed, each with *"its parameter spec is **not readable in this
+build**."*
+
+**The link to all nine is an inference, and it is printed rather than asserted as a measurement.**
+What was run names `llm_screening`, the installed plugin's own template. The nine configs name
+`llm_screen`, and [§ Package](#package) registers it in
+`[project.entry-points."publishable.templates"]` — an entry-point template, which is exactly the
+shape this build refuses. So: every one of the nine, written as this analysis writes them, is
+refused by core today for a reason no dated entry above has ever named, and E5 — the config row 4
+counts — is refused with the rest.
+
+**This is not a regression and nothing about it is new.** The code is present at `7ef6846` too; it
+is in both code sets the diff above compares. What is new is that this analysis can **name** it,
+because a plugin registering these artifacts now exists to install. Every entry above took the
+stance *"the plugin assumed to exist, and only core declarations judged"* — and that assumption
+assumed away the one core-side blocker that survives the plugin being written.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see, and measured by running at this commit |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method ships, and six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` **documented limitation** | **7** | no — a construction chosen inside `summarize_step`; live on E1, E2, E4, E6, C1, C2, C3, and `stats.py` is byte-identical to H3c-3's commit |
+| Free of every core-side dependency this analysis can name | **0** | no — **re-derived, not extracted**: a plugin template is `E-TEMPLATE-INSTALLED-UNSUPPORTED`, which E5 earns with the other eight |
+
+**No fifth number is minted, and no single figure is quoted for this analysis' executability** —
+quote the table, or name the dependency. Rows 1, 2 and 3 are the H8a block's, re-derived and
+unchanged; row 4's count moved, and the dependency is the thing to say out loud.
+
+#### How far the written plugin gets against shipped core, measured
+
+The plugin was built against the specification at `55ddaea`/`277388c` with a `stubs/publishable`
+standing in for a core that had not shipped. Core has shipped. What happens when the two meet is
+the sharpest evidence this analysis has ever had, and it is a sequence of four contract mismatches,
+each measured:
+
+1. **It does not import.** Resolving `{resolver: dspy_examples}` reports `E-PLUGIN-LOAD`: *"the
+   entry point `dspy_examples` … raised while importing and registers nothing usable:
+   ImportError(\"cannot import name 'UnitTable' from 'publishable'\")"*. Core's own
+   `BaseTemplate.aggregate` is annotated with `UnitTable`, the class lives in `publishable.stats`,
+   and `publishable.__all__` does not carry it — so a plugin annotating the same signature must
+   invent the name, and the invented name is the import that fails. This is [gap 4](#gaps-this-analysis-found-in-the-specification).
+2. **Its resolver reads the input as text.** With a one-line `.pth` shim binding
+   `publishable.UnitTable` to `publishable.stats.UnitTable` — the substitution declared above, and
+   everything from here down sits behind it — resolution reaches the plugin's own code and raises
+   `E-RESOLVER-RAISED`: *"AttributeError: 'list' object has no attribute 'splitlines'"*. The plugin
+   calls `io.read_input(...).splitlines()` and parses each line itself; core's reader dispatches on
+   the suffix, and `reference.md` § Steps and artifacts says `.jsonl` comes back as **rows as
+   mappings**. That is a plugin misreading a documented rule, not a gap — worth recording because
+   the rule is evidently easy to misread from the resolver's side, where the file is a benchmark
+   serialization rather than a table.
+3. **Its resolver yields four attributes, and the designs declare seven.** Pointed at a suffix core
+   does not parse, resolution runs and reports `E-UNITS-ATTR-MISSING` on `age_band`: *"a resolver
+   has no columns beyond the attributes it yields."* `dspy_jsonl._attributes` yields `truth`, and
+   `sex`/`split`/`n_visits` where present — so `visit_density`, `span_days`, `dx_family`,
+   `record_source` and `age_band`, which E1 through E6 declare and `report_by` reads, are not
+   available from the plugin as written. The analysis and the implementation were written from the
+   same protocol and disagree about the roster's columns; running them together is what surfaced it.
+4. **Narrowed to what it yields, an E1-shaped config validates clean.** `attributes: [truth, sex]`,
+   `report_by: [sex]`, the rest of E1's design intact — grid over
+   `objective.false_negative_credit: [0.10, 0.25, 0.50, 0.75]`, `{kind: seed, n: 3}`, a 0.2
+   `holdout` stratified on `truth`, `resample: {method: bootstrap, n: 2000, stratify_by: [truth]}` —
+   against a **project-local** template carrying the parameters, with the plugin supplying the
+   resolver. The print is `✓ config valid`. **That is the route: keep the template project-local,
+   ship the machinery in the plugin**, which is what `docs/tutorial-writing-a-plugin.md` prescribes
+   for exactly this refusal. It is the first time in this section's history that a plugin-supplied
+   artifact has resolved a roster on a shipped build.
+
+**And the probe fires where the specification says it does.** With `apparatus_probe =
+"llm_deployment"` declared on that local template, `validate` prints `✓ config valid` and runs
+nothing, while `dry-run` reports `E-APPARATUS-RAISED` — *"probe `llm_deployment` raised
+ModuleNotFoundError"*, the plugin's provider module being deliberately absent. Probe **dispatch**
+is built and sited exactly as [§ The apparatus probe](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk)
+describes: at `dry-run`, never at `validate`. That paragraph's *"none of that can be exercised yet"*
+is what this falsifies, and the body sentence is corrected rather than left standing.
+
+**The plan E1's shape resolves to, printed.** With the probe removed, `dry-run` prints
+`sweep: 4 conditions (grid) × 3 repeats = 12 executions` and
+`scale:  576 unit-executions (12 executions × 48 units handed to each)` — the 4 × 3 structure
+[§ E1](#e1--metric-calibration) states, over the 48-unit test partition of a 240-row stand-in
+roster. The real design's held-out set is 88 of 440; the structure is the thing this confirms, not
+the size.
+
+#### The metered figure does not count what a compile step does
+
+`dry-run`'s `unit-executions` counts `len(io.units)` per planned execution, and under a declared
+`holdout` **every** scope is handed the test partition. Measured on the fixture, by a condition-scope
+step returning both numbers, from `executions.jsonl`:
+
+```
+{"step": "step02_fit_model", "scope": "condition", ..., "returned": {"n_units": 48, "n_train": 192}}
+```
+
+and the same run's `dry-run` printed `scale:  912 unit-executions (19 executions × 48 units handed
+to each)`. So a condition-scoped step working over `io.units.train` does 192 unit-passes and
+contributes 48 to the figure. **E1 and E2's MIPRO compilation is exactly that step** — $380 of E1's
+$548 by [§ Cost and execution summary](#cost-and-execution-summary)'s own anchors — so the line a
+reader is told to check before spending is silent about the expensive half of these two designs.
+This is [gap 5](#gaps-this-analysis-found-in-the-specification), and it is a gap in the
+proportionality claim rather than in the arithmetic: the printed number is faithful to its stated
+definition.
+
+#### What newly stops and what newly warns, for these nine
+
+**Nothing, from the code.** One code is minted in this window (`E-CONFIG-IMMUTABLE`) and no config
+declaration reaches it; no code is retired; no exit code moves. What changes is what this analysis
+**knows**, and that came from installing a plugin rather than from a slice: row 4 is zero, and the
+dependency is `E-TEMPLATE-INSTALLED-UNSUPPORTED`.
+
+**One shipped sentence is stale and is filed rather than patched here.** That refusal's message ends
+*"installed templates will be honored in a later slice"*, and `CLAUDE.md` states there is no later
+slice — the charter is complete. `reference.md` and the plugin tutorial carry the same promise in
+their own words. The document changes first, so this is recorded in `docs/superpowers/spec-defects.md`
+and left for a reader to decide, not edited into `validate.py` from here.
