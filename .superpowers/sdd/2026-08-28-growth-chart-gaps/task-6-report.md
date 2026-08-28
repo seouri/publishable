@@ -60,3 +60,56 @@ byte-identical, both green.
 
 `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all pass;
 `tests/test_validate.py` (802 tests) passes.
+
+## Fix round 2
+
+Finding 1, still open after round 1: fixed. The axis/level-scoped exclusion still
+excused every pair merely touching an already-erred axis, not just the specific pair
+each sharp code names. Rebuilt `_group_axes_already_erred`/`_warn_duplicate_conditions`
+to a pair-scoped predicate: the baseline shape now requires the SAME fixed axis, the
+SAME fixed value, AND exactly one side `is_baseline` (not "any pair sharing the axis");
+the level-duplicate shape is now gated OFF entirely whenever any `sweep.grid` axis
+independently repeats a value, because `expand`'s output cannot disambiguate which
+duplicate pair came from the repeated level vs. the repeated grid value in that case —
+over-reporting (a pair also named by `E-SWEEP-LEVEL-DUPLICATE`) is accepted since the
+direction that matters is never suppressing a true positive.
+
+Measured, as requested:
+- **F** (`baseline:{arm:control}` + `groups[control,treatment]` + `grid[pearson,pearson]`):
+  6 conditions; pairs (0,1) and (4,5) are pure grid repeats, (0,2)/(0,3)/(1,2)/(1,3) are the
+  real baseline-vs-product-row collisions `E-SWEEP-BASELINE-GROUP` already names, (2,3) is a
+  third, unrelated pure-grid repeat on the `control` product row. New code fires on (0,1) —
+  confirmed via direct `_warn_duplicate_conditions` call.
+- **J** (`groups[c,c]` + `grid[pearson,pearson]`): all 4 conditions collapse to identical
+  `values`; `duplicated_levels` is empty (grid repeats), so every pair is live and the check
+  fires on (0,1) — confirmed directly.
+- **Ablate + baseline-fixes-group-axis, no parameter axis** (`ablate: {override:[...]}`,
+  `baseline:{arm:control}`, `groups[control,treatment]`): `expand` renders only 2 conditions
+  (crossed branch suppresses the bare product row entirely) — zero duplicate pairs, so no
+  exclusion is ever exercised here regardless of which code names it.
+- **Ablate + baseline-fixes-group-axis + a grid axis** (the `E-SWEEP-ABLATE-CROSSED`-refused
+  shape, `validate` collects rather than aborting so `expand` still runs): DOES render
+  baseline-vs-product duplicate pairs, and the sharp code that fires is
+  `E-SWEEP-ABLATE-BASELINE-GROUP`, not `E-SWEEP-BASELINE-GROUP` — confirmed via `expand` +
+  reading `_check_sweep`'s branch. `baseline_fixed_axis` is unconditional on `ablate` (both
+  codes report the identical `fixed_levels[0]` fact, just under different names depending on
+  `ablate`), and `reference.md`/the docstring now name both codes rather than only one.
+- **`fixed_levels[0]` only**: confirmed `E-SWEEP-BASELINE-GROUP`/`E-SWEEP-ABLATE-BASELINE-GROUP`
+  both index `fixed_levels[0]` in their message; `baseline_fixed_axis` is now a single name,
+  not the former `baseline_fixed_axes` set, so a second `sweep.baseline`-fixed axis (never
+  reported by either sharp code) is no longer excused either.
+
+Fixed the ride-along docstring in
+`test_a_group_axis_duplicate_that_is_not_the_sharp_codes_own_shape_still_warns`
+("this checks the first" implied more than one finding is emitted) to state the measured
+fact — exactly one `W-SWEEP-CONDITION-DUPLICATE` finding, pinned with an explicit count
+assertion over the raw `Collector`, not just `messages_by_code`'s last-wins dict.
+
+Added `test_baseline_fixing_a_group_level_beside_a_repeated_grid_value_still_fires_on_the_grid_pair`
+(F) and `test_a_repeated_group_level_beside_a_repeated_grid_value_still_fires_on_the_grid_pair`
+(J). Mutation: reverted `_already_erred` to `return True` (any shared group axis excuses the
+pair — round 1's bug) — both new tests failed red; restored from a pre-mutation backup,
+confirmed byte-identical, both green again.
+
+`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all pass;
+`tests/test_validate.py` (804 tests) passes.

@@ -7380,9 +7380,11 @@ def test_a_group_axis_duplicate_that_is_not_the_sharp_codes_own_shape_still_warn
     same arm, same method, same units, same parameters, two directories.
     Neither group-axis code reaches this shape, so an exclusion keyed on "a
     group axis is involved" rather than on "this exact pair is one of the two
-    sharp codes' own findings" silences a real duplicate. `validate` reports
-    two such pairs (`arm=control` twice and `arm=treatment` twice); this
-    checks the first."""
+    sharp codes' own findings" silences a real duplicate. Two duplicate pairs
+    exist in this config (`arm=control` twice and `arm=treatment` twice), but
+    `_warn_duplicate_conditions` early-returns after the first one it finds —
+    measured: exactly ONE `W-SWEEP-CONDITION-DUPLICATE` finding is emitted,
+    for `arm=control`, never two."""
     found = messages_by_code(
         write_config(
             {
@@ -7398,6 +7400,18 @@ def test_a_group_axis_duplicate_that_is_not_the_sharp_codes_own_shape_still_warn
     assert "W-SWEEP-CONDITION-DUPLICATE" in found
     message = found["W-SWEEP-CONDITION-DUPLICATE"]
     assert message.count("arm=control__method=pearson") == 2
+
+    path = write_config(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "pearson"]},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    assert sum(1 for f in c.findings if f.code == "W-SWEEP-CONDITION-DUPLICATE") == 1
 
 
 def test_a_baseline_and_group_axis_together_still_report_the_unrelated_grid_duplicate(
@@ -7428,6 +7442,70 @@ def test_a_baseline_and_group_axis_together_still_report_the_unrelated_grid_dupl
     message = found["W-SWEEP-CONDITION-DUPLICATE"]
     assert "arm=control__baseline" in message
     assert "arm=control__method=pearson" in message
+
+
+def test_baseline_fixing_a_group_level_beside_a_repeated_grid_value_still_fires_on_the_grid_pair(
+    write_config,
+):
+    """Round 2's Finding F, verbatim. `sweep.baseline` fixes `arm: control` —
+    `E-SWEEP-BASELINE-GROUP` fires, and DOES cover the baseline-vs-`control`-
+    product-row pairs. But `grid.analysis.method` ALSO independently repeats
+    `pearson`, so the baseline row is itself rendered twice
+    (`method=pearson__baseline` at index 0 and 1, both `arm: control`) — a
+    pure `grid` duplicate `E-SWEEP-BASELINE-GROUP` never names, since that
+    code is about a baseline row colliding with ITS AXIS'S product row, not
+    about two baseline rows colliding with each other. An exclusion scoped to
+    "this axis is baseline-fixed" rather than "this pair is the baseline row
+    against its matching product row" silences this pair; the pair-scoped
+    predicate (same `axis`, same fixed value, exactly one `is_baseline`) does
+    not."""
+    found = messages_by_code(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"arm": "control"},
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-GROUP" in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    message = found["W-SWEEP-CONDITION-DUPLICATE"]
+    # The first duplicate pair in condition order is the two baseline rows
+    # themselves (both `arm: control`, both `method: pearson`) — a pure grid
+    # repeat, not the baseline/product-row pair `E-SWEEP-BASELINE-GROUP` names.
+    assert message.count("method=pearson__baseline") == 2
+
+
+def test_a_repeated_group_level_beside_a_repeated_grid_value_still_fires_on_the_grid_pair(
+    write_config,
+):
+    """Round 2's Finding J, verbatim. `groups` repeats the level `c` twice —
+    `E-SWEEP-LEVEL-DUPLICATE` fires — and `grid.analysis.method` ALSO
+    independently repeats `pearson`, so all four rendered conditions
+    (`arm=c__method=pearson`, crossed two ways over each axis) resolve to
+    identical `values`. `duplicated_levels` is gated to declarations with NO
+    `grid` repeat precisely because `expand`'s output here cannot say which
+    duplicate pair came from the repeated level and which from the repeated
+    grid value — `Condition.values` never records which `levels` list entry
+    produced it — so every pair among the four is reported rather than
+    silently assumed to be `E-SWEEP-LEVEL-DUPLICATE`'s own."""
+    found = messages_by_code(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "arm", "levels": ["c", "c"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-LEVEL-DUPLICATE" in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    message = found["W-SWEEP-CONDITION-DUPLICATE"]
+    assert message.count("arm=c__method=pearson") == 2
 
 
 _UNITS_WITH_DX = {"from": "index.csv", "key": "patient_id", "attributes": ["dx_family"]}
