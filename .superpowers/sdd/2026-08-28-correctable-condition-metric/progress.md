@@ -115,3 +115,29 @@ Task 2: the report under-counted call sites (21 claimed, 26 actual: 2 in `stats.
 `test_stats.py`). All updated, mypy clean, zero tuple-unpacks remain — a miscount in prose, not a
 missed site.
 Task 2: complete (commits 1abc3df..98cd061, review clean; suite 3534 passed, 1 skipped, 2 xfailed)
+Task 3: implemented (commits 67cf737..e6a916f) — percentile_over_units and its clustered sibling return PairedResample; a pre-existing test pinning the 'stays bare' decision was rewritten, which the review is judging. Review dispatched.
+Task 3: review — SPEC ✅, quality Issues: 1 Important, 1 Minor (commits 67cf737..e6a916f).
+
+Ruling: **the rewritten test is ACCEPTED, on the reviewer's reading rather than the implementer's.**
+The deleted `test_percentile_over_units_still_returns_a_bare_interval` did pin a deliberate decision
+— but its stated reason was about refusing to CLAIM SURVIVORS ("a survivor filter would count a nan
+draw as a survivor and report the same false claim with an extra field"), not about refusing a
+wrapper. Task 3 keeps that refusal: `draws_used` is `len(means)` == the requested `draws` on every
+success path, never a survivor count, and the new docstring restates decision 2 explicitly. The
+reason still holds and is honoured. Costs if wrong: a prior slice's judgment was reversed on a
+reading of its intent rather than its letter.
+
+Task 3: minor (deferred): the new docstring says `draws_used` "is always the REQUESTED n", which is
+false on the five refusal paths that return 0 — consistent with its siblings, but a guarantee the
+code does not provide.
+Task 3: fix round 1/5 (2 addressed, 0 open; commits e6a916f..b5346f9). The re-reviewer re-ran the
+seed mutation itself and reproduced both reds; the diff is one docstring paragraph and two `.interval`
+insertions, with `tests/test_cli.py` untouched and the oracle green.
+
+Ruling: **on the refusal-path count, the IMPLEMENTER was right and the first reviewer was wrong.**
+The round-1 finding said five; the corrected docstring says three. The re-reviewer counted the code:
+`percentile_over_units` has exactly 3 `draws_used=0` returns (too few values, too few draws for the
+confidence level, all-strata-constant), and its clustered sibling has 4 — no combination yields 5.
+A plain miscount in a review, corrected here rather than propagated into the docstring, which is
+what a fix round is for. Costs if wrong: a docstring undercounts a refusal path in one function.
+Task 3: complete (commits 67cf737..b5346f9, 1 fix round, review clean; suite 3536 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
