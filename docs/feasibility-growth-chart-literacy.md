@@ -336,8 +336,8 @@ replication:
 statistics:
   correction: holm
   resample: {method: bootstrap, n: 2000}
-  contrasts:
-    - {id: kappa_gap, of: "visit_tertile=high", against: "visit_tertile=low"}
+  # No `contrasts` entry for the tertile gap, and its absence is the design —
+  # see the paragraph below this YAML.
   report_by: [sex]
 
 limits:
@@ -352,12 +352,33 @@ hypotheses:
   - id: h1
     kind: confirmatory
     statement: "Clinician-label agreement is lower in the high-visit stratum than in the low-visit stratum."
-    metric: step02_score.kappa
-    compare: {contrast: kappa_gap}
+    metric: step03_compare.kappa_gap   # a `summary`-step `Estimate`, so no `compare`
     direction: less
     threshold: -0.15
     evaluate_on: ci95_upper
 ```
+
+**The gap is a `summary`-step `Estimate`, and the reason is the one refusal this
+design cannot route around.** The obvious spelling is a declared contrast between the
+two tertiles on the template's derived `kappa`, and it was this document's spelling
+until E1 was executed. It computes nothing. `visit_tertile` is a
+[`groups`](reference.md#expansion-modes) axis, so the two strata share no units and
+there is no paired difference to take; and `kappa` is *derived* from a whole stratum
+at once rather than recorded per unit, so there is no column for core's unpaired
+constructions to close over. Core reports
+[`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports) and records
+`delta: null` — the correct refusal, since recomputing a derived metric per side would
+need `aggregate` evaluated on two independently drawn tables.
+
+So the quantity is computed in `step03_compare` and returned as an `Estimate`, over an
+unpaired bootstrap that resamples **each stratum over its own patients at its own
+size** and differences per draw. Drawing one index for both sides would invent a
+pairing between patients who are in one tertile precisely because they are not in the
+other. The declared contrast is removed rather than left in place: it backed no
+hypothesis and warned on every run, and a warning a reader learns to ignore is worse
+than no warning. What the route costs is stated in the record rather than hidden —
+`reported: true`, outside the correction family, never recomputed, and the verdict
+records `verdict_rests_on: reported` rather than `computed`.
 
 
 ### E2 — the utilization baseline
@@ -1955,9 +1976,9 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-28 against `publishable` commit `e300bd8`
+### Measured on 2026-08-28 against `publishable` commit `6a71507`
 
-Also pinned: `2026-08-28-gcl-measurement@233cda7` and `publishable-growth-chart@64bde4d`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@e9723c9` and `publishable-growth-chart@64bde4d`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
@@ -1968,10 +1989,10 @@ version number, and take `0.2.1` as the floor for the corrected bound and **`0.2
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
-one `src/growth_chart/` package (2,830 lines over eight modules, seven step bodies and three prompt
-files) with 2,338 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
+one `src/growth_chart/` package (2,985 lines over eight modules, seven step bodies and three prompt
+files) with 2,467 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
 `publishable plugin new` (390 lines, 526 of tests) installed as an editable dependency — registering
-one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **202 passed**
+one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **210 passed**
 in the measurement repository, **30** in the plugin. Every command below was run through the project's
 own console script.
 
@@ -2015,15 +2036,19 @@ arm that can run without a deployment, and it does: `status: completed`, three c
 where [gaps 8 and 9](#gaps-this-analysis-found-in-the-specification) came from — neither was visible to
 `validate`, to `dry-run`, or to 202 unit tests.
 
-**E1's own hypothesis is unanswerable as configured**, and since
-[gap 9](#gaps-this-analysis-found-in-the-specification) closed, the run says so in words rather than
-only in nulls. The `kappa_gap` contrast records `delta: null`, `method: null`, `paired: false`,
-`n_of: 66`, `n_against: 67`, the verdict is `supported: null` with `verdict_rests_on: computed`, and
-the run reports `W-STATS-CONTRAST-UNPAIRED-DERIVED` twice — once for `kappa` and once for
-`agreement_raw`, the two metrics `growth_label.aggregate` derives on that contrast, which is the
-"once per (comparison, step, metric)" the row specifies. The remedy is the one every other refusal in
-this analysis takes — a `summary`-step `Estimate` computing the between-stratum kappa difference over
-a bootstrap — and it is a change to E1's design, not to core.
+**E1's hypothesis was unanswerable as first written, and now resolves.** The original spelling —
+a declared contrast on the template's derived `kappa` — recorded `delta: null` and
+`supported: null`, and once [gap 9](#gaps-this-analysis-found-in-the-specification) closed it also
+reported `W-STATS-CONTRAST-UNPAIRED-DERIVED` twice, once per metric
+`growth_label.aggregate` derives on that contrast, which is the "once per (comparison, step, metric)"
+the row specifies. [E1](#e1--the-reference-standard-gate) now carries the gap as a `summary`-step
+`Estimate` instead, and the contrast declaration is gone with it. Measured on the synthetic roster:
+kappa **0.614** in the low-visit stratum and **0.430** in the high, a gap of **−0.184** with a
+percentile `ci95` of [−0.487, 0.143] over 133 patients, `reported: true`. The verdict is
+`supported: false` on `ci95_upper` against a threshold of −0.15, with
+`verdict_rests_on: reported` — the disclosure that is the price of the number existing at all.
+**The numbers are the fixture's and mean nothing**; what is measured here is that the route works
+end to end and that a confirmatory hypothesis reaches a verdict rather than a null.
 
 **`publishable dry-run` on each is where every execution count in this document comes from.** It
 expands the sweep, builds the input manifest, probes the apparatus, and prints the step directories,
