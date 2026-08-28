@@ -7509,6 +7509,105 @@ def test_a_repeated_group_level_beside_a_repeated_grid_value_still_fires_on_the_
     assert message.count("arm=c__method=pearson") == 2
 
 
+def test_the_reported_pair_is_the_first_in_condition_order_not_last_every_or_label_sorted(
+    write_config,
+):
+    """Task 8's adversarial fixture. A two-condition fixture only ever
+    distinguishes two candidate behaviours; this predicate has at least four —
+    report the first duplicated pair in condition order (the spec), report the
+    last one found, report every one found, or report whichever pair sorts
+    first by label — so the fixture needs two duplicate pairs, decoys on both
+    sides of each, and labels engineered so condition order and label-sort
+    order disagree.
+
+    `sweep.grid`'s single axis renders nine conditions in this order:
+
+        0 solo_m1        (decoy, before the first pair)
+        1 zzz_first      -\\_ pair A: earliest in CONDITION order
+        2 solo_between1  (decoy, between)                       )
+        3 zzz_first      -/   ... but LATEST alphabetically (label sorts after
+                                 aaa_second, so a label-sort-order bug would
+                                 skip straight past this pair)
+        4 solo_between2  (decoy, between)
+        5 aaa_second     -\\_ pair B: LATEST in condition order, but sorts
+        6 solo_between3  (decoy, between)                        )
+        7 aaa_second     -/   FIRST alphabetically — a label-sort-order bug
+                               reports this one instead of pair A
+        8 solo_last      (decoy, after the last pair)
+
+    A scan that returns on the first duplicate it finds while walking
+    conditions in order lands on pair A (`zzz_first`) — the checked pair
+    `(i, j) = (1, 3)` is reached at `j = 3`, before `(5, 7)` is ever visited.
+    A scan-last-wins mutant, a report-every-pair mutant, and a
+    label-sort-order mutant each produce a DIFFERENT wrong answer than pair A
+    and than each other, which is what the decoys and the `aaa_`/`zzz_` labels
+    are sized to distinguish — a fixture with only one duplicate pair, or with
+    both pairs' labels sorting the same way as condition order, cannot tell
+    these apart.
+    """
+    path = write_config(
+        {
+            "sweep": {
+                "grid": {
+                    "stimulus.schedule": [
+                        "solo_m1",
+                        "zzz_first",
+                        "solo_between1",
+                        "zzz_first",
+                        "solo_between2",
+                        "aaa_second",
+                        "solo_between3",
+                        "aaa_second",
+                        "solo_last",
+                    ]
+                }
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    findings = [f for f in c.findings if f.code == "W-SWEEP-CONDITION-DUPLICATE"]
+    assert len(findings) == 1  # reported once overall, not once per duplicate pair
+    message = findings[0].message
+    assert "zzz_first" in message  # pair A: first in CONDITION order
+    assert "aaa_second" not in message  # pair B: first only in LABEL-sort order
+    assert "solo_m1" not in message
+    assert "solo_between1" not in message
+    assert "solo_between2" not in message
+    assert "solo_between3" not in message
+    assert "solo_last" not in message
+
+
+def test_the_sharp_group_axis_codes_still_fire_and_this_warning_still_stays_out_of_their_way(
+    write_config,
+):
+    """Pairs the two absence checks that already exist
+    (`test_a_group_axis_duplicate_level_is_not_this_warning` and
+    `test_a_baseline_fixing_a_group_level_is_not_this_warning_either`) with an
+    assertion that something DID fire, in one config that exercises both sharp
+    codes at once plus an unrelated real duplicate this check must still
+    catch. `E-SWEEP-LEVEL-DUPLICATE` and `E-SWEEP-BASELINE-GROUP` are `exact`
+    codes read off `codes()` — a set built from the collector's own findings,
+    never a substring test over one blob of text — so an absence check here
+    cannot pass merely because nothing ran at all: the same config also forces
+    `W-SWEEP-CONDITION-DUPLICATE` to fire, on the pure `grid` repeat neither
+    sharp code names."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"arm": "control"},
+                    "groups": [{"by": "arm", "levels": ["control", "treatment", "control"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-LEVEL-DUPLICATE" in found
+    assert "E-SWEEP-BASELINE-GROUP" in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+
+
 _UNITS_WITH_DX = {"from": "index.csv", "key": "patient_id", "attributes": ["dx_family"]}
 
 
