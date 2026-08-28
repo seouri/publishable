@@ -38,6 +38,20 @@ class Observation:
     metric: str
     block: dict[str, Any] | None
     rests_on: str
+    #: Why there is no block, or `None` when there is one. Two values, and they
+    #: are what is left after `validate` has refused everything the declarations
+    #: alone can show — an unknown step (`E-HYPOTHESIS-METRIC`), an unknown
+    #: contrast (`E-HYPOTHESIS-CONTRAST`) and an unknown condition label
+    #: (`E-HYPOTHESIS-CONDITION`) never reach a run:
+    #:
+    #: - `metric_absent` — the observation site resolved and the named metric is
+    #:   not in it. Core cannot see this before the run: which keys an
+    #:   `aggregate` or a `summary` step returns is user Python, and reading it
+    #:   would cross the greenfield line.
+    #: - `condition_unresolved` — `to: constant` with no `compare.condition` on a
+    #:   run whose sweep resolved several, so there is no single condition whose
+    #:   value the constant would be compared against.
+    reason: str | None = None
 
 
 def resolve(
@@ -99,6 +113,7 @@ def resolve(
             metric=metric,
             block=block if isinstance(block, dict) else None,
             rests_on="reported",
+            reason=None if isinstance(block, dict) else "metric_absent",
         )
 
     # `to: constant` is checked before `contrast`: `validate` refuses the two
@@ -120,7 +135,12 @@ def resolve(
             index = next(iter(agg)) if len(agg) == 1 else None
         if index is None:
             return Observation(
-                where=None, step=step, metric=metric, block=None, rests_on="computed"
+                where=None,
+                step=step,
+                metric=metric,
+                block=None,
+                rests_on="computed",
+                reason="condition_unresolved",
             )
         found = (aggregated or {}).get(index, {}).get(step, {}).get(metric)
         return Observation(
@@ -128,6 +148,7 @@ def resolve(
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
+            reason=None if isinstance(found, dict) else "metric_absent",
             rests_on="computed",
         )
 
@@ -144,18 +165,27 @@ def resolve(
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
+            reason=None if isinstance(found, dict) else "metric_absent",
             rests_on="computed",
         )
 
     index = label_to_index.get(str(compare.get("condition")))
     if index is None:
-        return Observation(where=None, step=step, metric=metric, block=None, rests_on="computed")
+        return Observation(
+            where=None,
+            step=step,
+            metric=metric,
+            block=None,
+            rests_on="computed",
+            reason="condition_unresolved",
+        )
     found = (vs_baseline or {}).get(index, {}).get(step, {}).get(metric)
     return Observation(
         where=f"cond:{index}",
         step=step,
         metric=metric,
         block=found if isinstance(found, dict) else None,
+        reason=None if isinstance(found, dict) else "metric_absent",
         rests_on="computed",
     )
 
@@ -453,6 +483,16 @@ def evaluate(
             # member gets too, not a gap specific to this one.
             corrected_unavailable = True
         entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable, p_value_corrected))
+        # **Absent when there is a block, never `null`** — the same rule
+        # `weighted_by` follows, and for the same reason: a key that is present
+        # and empty reads as "this was considered and came back nothing", which
+        # is exactly what it is not. `observed: null` alone cannot say WHY a
+        # pre-registered hypothesis has no verdict, and it covers two faults
+        # with different remedies; this names which. It is not a second copy of
+        # anything the record already holds — the two are indistinguishable in
+        # `observed`.
+        if obs.reason is not None:
+            entry["unevaluable"] = obs.reason
         if _is_counted(hyp, obs):
             entry["family_size"] = size
             entry["family"] = {"hypotheses": size}

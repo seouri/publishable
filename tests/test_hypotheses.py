@@ -1525,3 +1525,129 @@ def test_a_reported_summary_hypothesis_is_unaffected_by_corrected_unavailable():
     assert got["verdict_rests_on"] == "reported"
     # ci95_lower: 0.9931 > 0.99, raw bound — never corrected, but not null either
     assert got["supported"] is True
+
+
+# --- why a pre-registered hypothesis has no verdict --------------------------
+
+
+def _unevaluable(hyp, **over):
+    kwargs = dict(
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={"step03_compare": {"auroc_baseline": {"value": 0.43}}},
+        aggregated={0: {"step02_score": {"auroc": {"value": 0.6, "ci95": [0.5, 0.7]}}}},
+        members=[],
+        method="none",
+        parameters_hash="sha256:1a2b",
+    )
+    kwargs.update(over)
+    return evaluate([hyp], **kwargs)[0]
+
+
+def test_a_hypothesis_naming_a_metric_no_step_produced_says_so_in_the_record():
+    """`observed: null` alone cannot say why, and the two causes have different
+    remedies. This is the one a real config hit twice: a `summary` step keyed its
+    `Estimate` after the condition label, so `auroc_count_only` never existed."""
+    entry = _unevaluable(
+        {
+            "id": "h1",
+            "kind": "confirmatory",
+            "metric": "step03_compare.auroc_count_only",
+            "direction": "greater",
+            "threshold": 0.5,
+            "evaluate_on": "ci95_lower",
+        }
+    )
+    assert entry["observed"] is None
+    assert entry["supported"] is None
+    assert entry["unevaluable"] == "metric_absent"
+
+
+def test_a_constant_comparison_with_no_condition_on_a_swept_run_says_which_fault():
+    """The other cause, and it must not be reported as the first: naming a
+    condition fixes this one, and nothing about the metric is wrong."""
+    entry = _unevaluable(
+        {
+            "id": "h2",
+            "kind": "confirmatory",
+            "metric": "step02_score.auroc",
+            "compare": {"to": "constant", "value": 0.5},
+            "direction": "greater",
+            "threshold": 0.5,
+            "evaluate_on": "ci95_lower",
+        },
+        aggregated={
+            0: {"step02_score": {"auroc": {"value": 0.6, "ci95": [0.5, 0.7]}}},
+            1: {"step02_score": {"auroc": {"value": 0.7, "ci95": [0.6, 0.8]}}},
+        },
+    )
+    assert entry["observed"] is None
+    assert entry["unevaluable"] == "condition_unresolved"
+
+
+def test_the_same_hypothesis_resolves_when_the_run_has_one_condition():
+    """The control for the case above, and it asserts a VERDICT rather than an
+    absence: with a single condition the constant resolves against it, so the
+    field must be gone — not present-and-empty."""
+    entry = _unevaluable(
+        {
+            "id": "h2",
+            "kind": "confirmatory",
+            "metric": "step02_score.auroc",
+            "compare": {"to": "constant", "value": 0.5},
+            # The constant is subtracted from the tested number, so `ci95_lower`
+            # 0.5 becomes 0.0 — the threshold has to sit below that for the control
+            # to assert a real `True` rather than pass on a null.
+            "direction": "greater",
+            "threshold": -0.05,
+            "evaluate_on": "ci95_lower",
+        }
+    )
+    assert entry["observed"] is not None
+    assert entry["supported"] is True
+    assert "unevaluable" not in entry
+
+
+def test_a_hypothesis_with_a_verdict_carries_no_unevaluable_key_at_all():
+    """**Absent, not null** — the rule `weighted_by` follows. A key present and
+    empty reads as "considered, came back nothing", which is what it is not."""
+    entry = _unevaluable(
+        {
+            "id": "h3",
+            "kind": "confirmatory",
+            "metric": "step03_compare.auroc_baseline",
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        }
+    )
+    assert entry["supported"] is True
+    assert "unevaluable" not in entry
+    assert None not in entry.values() or entry.get("unevaluable", "absent") == "absent"
+
+
+def test_the_reason_travels_on_the_observation_not_recomputed_downstream():
+    """One authority. `resolve` decides it; `evaluate` copies it; `cli` renders a
+    warning FROM it. A second derivation anywhere would be a second answer."""
+    obs = resolve(
+        {"metric": "step03_compare.nope"},
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={"step03_compare": {"real": {"value": 1.0}}},
+        aggregated=None,
+    )
+    assert obs.block is None
+    assert obs.reason == "metric_absent"
+
+    present = resolve(
+        {"metric": "step03_compare.real"},
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={"step03_compare": {"real": {"value": 1.0}}},
+        aggregated=None,
+    )
+    assert present.block is not None
+    assert present.reason is None

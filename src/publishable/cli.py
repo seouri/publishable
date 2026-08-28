@@ -890,6 +890,31 @@ def _make_null_fn(
     return null_fn
 
 
+def _recorded_metric_names(
+    step_name: str,
+    aggregated: dict[int, dict[str, dict[str, Any]]] | None,
+    results: list[Any],
+) -> set[str]:
+    """Every metric key this run recorded for one step, across both places one
+    can land: a condition's `aggregated` block and a `summary` step's return.
+
+    Named for the warning's benefit rather than for any decision — the reason a
+    verdict is missing is already settled by then. Its job is to turn *this
+    metric is absent* into *and here is what was there instead*, which is the
+    difference between a reader knowing there is a problem and knowing where the
+    typo is.
+    """
+    names: set[str] = set()
+    for by_step in (aggregated or {}).values():
+        block = by_step.get(step_name)
+        if isinstance(block, dict):
+            names |= {k for k in block if k != "by"}
+    for r in results:
+        if r.execution.scope == "summary" and r.execution.step_name == step_name:
+            names |= set(summary_values(r.returned) or {})
+    return names
+
+
 def _comparison_step_blocks(
     comp: "Comparison",
     *,
@@ -5107,6 +5132,49 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             method=correction_method,
             parameters_hash=ph,
         )
+        # **Rendered FROM the record, never computed a second time.** The reason
+        # a verdict is missing is decided once, in `hypotheses.resolve`, and
+        # written to the entry as `unevaluable`; this loop only reads it back.
+        # A warning that re-derived the answer would be a second authority on
+        # the same question, and the two would eventually disagree.
+        #
+        # A warning as well as the field, because they reach different readers:
+        # the field is what a co-author or a reviewer sees months later in
+        # `run.yaml`, and this is what the person who can still fix the config
+        # sees while the run is in front of them. Neither substitutes for the
+        # other — run-time findings are not written to the record at all.
+        for entry in hypothesis_verdicts:
+            reason = entry.get("unevaluable")
+            if reason is None:
+                continue
+            hyp_id = entry.get("id")
+            declared_metric = ""
+            for h in doc.get("hypotheses") or []:
+                if isinstance(h, dict) and h.get("id") == hyp_id:
+                    declared_metric = str(h.get("metric", ""))
+                    break
+            step_name, _, metric_key = declared_metric.partition(".")
+            if reason == "condition_unresolved":
+                detail = (
+                    "`compare.to: constant` names no `condition` and this run resolved "
+                    "several, so there is no single condition whose value the constant "
+                    "would be compared against — name one in `compare.condition`"
+                )
+            else:
+                produced = sorted(_recorded_metric_names(step_name, aggregated, results))
+                detail = (
+                    f"this run produced no metric {metric_key!r} from step "
+                    f"{step_name!r}; it recorded "
+                    + (", ".join(repr(k) for k in produced) if produced else "nothing")
+                    + ". A metric name is only checked against the steps a config "
+                    "declares — which keys a template's `aggregate` or a `summary` "
+                    "step returns is your Python, which core does not read"
+                )
+            aggregate_c.warn(
+                "W-HYPOTHESIS-UNEVALUABLE",
+                f"hypotheses[{hyp_id}]",
+                f"hypothesis {hyp_id!r} has no verdict: {detail}",
+            )
         # Outside `if roster is not None:` on purpose: `aggregate_c` is created
         # above that block precisely so a `summary` step's `W-STEP-ESTIMATE-N`
         # still prints in a run with no roster at all, where none of the

@@ -29726,3 +29726,52 @@ def test_a_paired_derived_contrast_does_not_draw_the_unpaired_warning():
     assert entry["n_paired"] == 0
     assert entry["delta"] is None
     assert not [f for f in findings.findings if f.code == "W-STATS-CONTRAST-UNPAIRED-DERIVED"]
+
+
+def test_the_unevaluable_warning_names_what_the_step_did_record():
+    """`W-HYPOTHESIS-UNEVALUABLE`'s message is the actionable half.
+
+    Knowing a metric is absent is not the same as knowing the typo. `e02` named
+    `auroc_count_only` while its summary step keyed the `Estimate` after the
+    condition label, and the fix is visible only once the run says which names it
+    actually produced."""
+    from publishable.cli import _recorded_metric_names
+
+    class Exec:
+        scope = "summary"
+        step_name = "step03_compare"
+
+    class Result:
+        execution = Exec()
+        returned = {"auroc_count_only": 0.43, "auroc_difference": 0.01}
+
+    names = _recorded_metric_names(
+        "step03_compare",
+        {0: {"step03_compare": {"kappa": {"value": 0.6}, "by": {"sex": {}}}}},
+        [Result()],
+    )
+    assert "auroc_count_only" in names
+    assert "auroc_difference" in names
+    # Both places a metric can land are read — the condition block as well as
+    # the summary return — because a hypothesis may name either.
+    assert "kappa" in names
+    # `by` holds the reporting strata rather than a metric, the same skip
+    # `cli`'s condition-member loop already applies.
+    assert "by" not in names
+
+
+def test_the_unevaluable_warning_reads_the_record_rather_than_re_deriving_it():
+    """One authority for why a verdict is missing.
+
+    The reason is decided in `hypotheses.resolve` and written to the entry; the
+    warning loop only reads `entry["unevaluable"]` back. If it recomputed the
+    answer there would be two, and they would eventually disagree — so an entry
+    carrying no reason must produce no warning even when its `observed` is null.
+    """
+    import inspect
+
+    from publishable import cli
+
+    src = inspect.getsource(cli._execute_prepared)
+    assert 'entry.get("unevaluable")' in src
+    assert "W-HYPOTHESIS-UNEVALUABLE" in src
