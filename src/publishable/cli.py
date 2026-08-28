@@ -3794,6 +3794,15 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # not there is a roster — a `reported` hypothesis names a `summary`
         # step's `Estimate`, which is reachable with no `data.units` at all.
         comparison_members: list[Member] = []
+        # The hypothesis family's other raw material (G2 task 5): one member per
+        # condition metric, for a `compare: {to: constant}` hypothesis that names
+        # a condition's own number rather than a delta. Declared out here for the
+        # same reason `comparison_members` is — `evaluate_hypotheses` runs whether
+        # or not there is a roster — and kept SEPARATE from it because
+        # `corrected_fields` reads that list and only that list: the sweep
+        # family is comparisons × metrics over the comparisons, and these are
+        # not comparisons.
+        condition_members: list[Member] = []
         # Bound once and read twice — the sweep family below and the hypothesis
         # family after it are corrected by the *same* declared method, and two
         # spellings of one default is how they would come to disagree.
@@ -4392,6 +4401,142 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                         if "pool" in metric
                     }
                     pools_by_key[(cond.index, step_name)] = step_pools
+                    # G2 task 5: one `Member` per condition metric, so a
+                    # `compare: {to: constant}` hypothesis's bound test is
+                    # answerable at the hypothesis family's own level instead of
+                    # returning `supported: null` through
+                    # `hypotheses.evaluate`'s `corrected_unavailable` branch.
+                    # `where` is `const:<index>` — the string `hypotheses.resolve`
+                    # gives that observation, deliberately distinct from `cond:`
+                    # so a condition carrying both a `vs_baseline` delta and a
+                    # constant-referenced hypothesis on its own value cannot
+                    # collide in `by_key`.
+                    #
+                    # **These members go to `evaluate_hypotheses` and NOWHERE
+                    # else.** `corrected_fields(comparison_members, ...)` above
+                    # is the sweep family, whose size is `comparisons ×
+                    # metrics` over its own member list; adding a condition's
+                    # own metric there would widen that product and shift every
+                    # corrected bound in the run. The hypothesis family's size
+                    # is `len(counted)` — the declared hypotheses, not the
+                    # members — so passing these along changes no family size
+                    # anywhere. `_is_counted` is untouched: this hypothesis was
+                    # already counted and already inflating every other
+                    # member's level; this makes it CORRECTABLE, not counted.
+                    #
+                    # Which evidence each member carries is decided by the
+                    # construction its OWN raw interval came from, never by
+                    # what kind of metric it is (`correction._corrected_bounds`:
+                    # "What decides the construction is which field the member
+                    # carries"). `summarize_step`'s column branch is the
+                    # authority being mirrored:
+                    #
+                    # - a pool came back → the raw interval is a percentile off
+                    #   those very draws, so the member carries the POOL and
+                    #   `interval_at` reads a second rank pair off it. This is
+                    #   both a resampled recorded column and every derived
+                    #   metric that was resampled at all.
+                    # - no pool, and the key is a numeric recorded column → the
+                    #   raw interval is `t_over_units` (or its weighted /
+                    #   clustered form) over the per-unit values, so the member
+                    #   carries THOSE VALUES as `diffs`.
+                    #   `paired_t_over_units` delegates to `t_over_units` and
+                    #   rewrites only the `method`, and its weighted and
+                    #   clustered siblings delegate the same way, so the
+                    #   corrected bound is the same arithmetic at a smaller α
+                    #   rather than a counterpart in name only.
+                    # - anything else — a derived metric that was never
+                    #   resampled — has no raw interval either (`ci95: null`),
+                    #   so there is nothing to correct and the honest
+                    #   `corrected_unavailable` stays exactly there.
+                    #
+                    # The key question is asked directly rather than through
+                    # `metric_key in derived`: a derived key is one with no
+                    # per-unit column in `collapsed`, and that is the fact the
+                    # `diffs` branch actually needs. The proxy would also
+                    # misread the containment retry's path, where a colliding
+                    # name is in `derived` and in `step_summary` as a column.
+                    for metric_key, summary_block in step_summary.items():
+                        # `by` holds the reporting strata, not a metric, and a
+                        # recorded column of that name is disclosed by
+                        # `W-STATS-STRATUM-SHADOWED` below as getting "no seat
+                        # in the correction family" —
+                        # `_comparison_step_blocks` drops it unconditionally
+                        # and this is the same rule one surface over.
+                        if metric_key == "by":
+                            continue
+                        raw = summary_block.get("ci95")
+                        # No raw interval, nothing to correct. Building a
+                        # member here would be worse than building none: it
+                        # would enter `by_key`, so `evaluate`'s
+                        # `key not in by_key` arm could not fire, and
+                        # `ci95_corrected` would go from `null` ("a level was
+                        # demanded and could not be built") to ABSENT ("no
+                        # correction was attempted"), which is a different
+                        # claim about the same run.
+                        if not raw:
+                            continue
+                        pool = step_pools.get(metric_key)
+                        if pool is not None:
+                            member_evidence: dict[str, Any] = {"pool": tuple(pool)}
+                        else:
+                            carried = [
+                                (key, cols[metric_key])
+                                for key, cols in collapsed.items()
+                                if metric_key in cols and _is_numeric(cols[metric_key])
+                            ]
+                            if not carried:
+                                continue
+                            if weights is not None and clusters is not None:
+                                # A weighted clustered column's raw interval is
+                                # `weighted_t_over_units_clustered`, and this
+                                # build has no paired counterpart of it — the
+                                # very absence `E-DATA-WEIGHT-CLUSTER-CONTRAST`
+                                # refuses a comparison over. That code fires
+                                # only where the run resolves a comparison, so
+                                # a single-condition run declaring both reaches
+                                # here legitimately. Carrying both modifiers is
+                                # refused by `Member.__post_init__`, and
+                                # carrying either alone would publish a
+                                # corrected bound from a construction the other
+                                # declaration contradicts — narrower or wider
+                                # by construction rather than by evidence, with
+                                # no reader of `run.yaml` able to tell. So no
+                                # member, and `corrected_unavailable` says so.
+                                continue
+                            column_keys = [key for key, _ in carried]
+                            member_evidence = {
+                                "diffs": tuple(float(v) for _, v in carried),
+                                "weights": (
+                                    None
+                                    if weights is None
+                                    else tuple(weights[k] for k in column_keys)
+                                ),
+                                "clusters": (
+                                    None
+                                    if clusters is None
+                                    else tuple(clusters[k] for k in column_keys)
+                                ),
+                            }
+                        condition_members.append(
+                            Member(
+                                where=f"const:{cond.index}",
+                                step=step_name,
+                                metric=metric_key,
+                                delta=summary_block.get("value") or 0.0,
+                                ci95=(float(raw[0]), float(raw[1])),
+                                pool=member_evidence.get("pool"),
+                                diffs=member_evidence.get("diffs"),
+                                weights=member_evidence.get("weights"),
+                                clusters=member_evidence.get("clusters"),
+                                # Placeholder, exactly as
+                                # `_comparison_step_blocks` uses one: the index
+                                # is reassigned where the whole hypothesis
+                                # member list exists as one sequence, which is
+                                # the only place it can be unique across it.
+                                declaration_index=0,
+                            )
+                        )
                     # `resample_draws: 0` (as opposed to `null`, meaning
                     # resampling was never attempted) is `summarize_step`'s
                     # signal that a callable was supplied and every single
@@ -4920,7 +5065,21 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 if r.execution.scope == "summary"
             },
             aggregated=aggregated,
-            members=comparison_members,
+            # The comparisons plus the condition metrics, and the indices
+            # continue rather than restart: `rank_family` breaks ties on
+            # `declaration_index`, so two members sharing one index would let
+            # the sort decide a correction level. This is the one point where
+            # the whole hypothesis-side member list exists as a single
+            # sequence, for the same reason the sweep family's reassignment
+            # sits where it does. Adding these changes no family size:
+            # `evaluate`'s `size` is `len(counted)` over the declared
+            # hypotheses, and its `family_members_` picks only the keys those
+            # hypotheses resolved to.
+            members=comparison_members
+            + [
+                dataclasses.replace(m, declaration_index=len(comparison_members) + i)
+                for i, m in enumerate(condition_members)
+            ],
             method=correction_method,
             parameters_hash=ph,
         )

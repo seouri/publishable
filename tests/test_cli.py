@@ -29182,3 +29182,360 @@ def test_task1_bit_stability_oracle_over_the_correction_machinery(tmp_path: Path
     family_sizes = [v for p, v in leaves if p.endswith("family_size")]
     assert family_sizes and max(family_sizes) > 1
     assert leaves == _TASK1_ORACLE_GOLDEN
+
+
+def _constant_hypothesis(hyp_id: str, label: str, metric: str) -> dict[str, Any]:
+    """One `compare: {to: constant}` hypothesis on a condition's OWN metric,
+    evaluated on the lower bound.
+
+    `evaluate_on: ci95_lower` is the whole point: `reference.md` says
+    "correction reaches a verdict only through a bound", so a hypothesis on
+    `observed` never touches the correction machinery at all and would go on
+    passing whether or not G2 task 5 built anything. `value: 0` keeps
+    `verdict_for`'s constant shift out of the arithmetic under test —
+    `threshold`/`direction` are what decide the verdict here, and the number
+    being compared is the corrected lower bound itself.
+    """
+    return {
+        "id": hyp_id,
+        "kind": "confirmatory",
+        "statement": f"{label}'s own {metric} clears zero at the corrected level",
+        "metric": f"step01_summarize_units.{metric}",
+        "compare": {"condition": label, "to": "constant", "value": 0},
+        "direction": "greater",
+        "threshold": 0,
+        "evaluate_on": "ci95_lower",
+    }
+
+
+def test_an_unresampled_condition_metric_corrects_off_its_own_per_unit_values(
+    tmp_path, capsys, monkeypatch
+):
+    """Decision 1's FIRST row, end to end: a recorded column with no declared
+    `statistics.resample` has a `t_over_units` raw interval, so its
+    `correction.Member` carries the per-unit VALUES as `diffs` and the
+    corrected bound is the same *t* construction at the smaller α.
+
+    Before G2 task 5 there was no member for a `compare: {to: constant}`
+    observation at all, so both verdicts below came back `supported: null`
+    beside `ci95_corrected: null` — `hypotheses.evaluate`'s
+    `key not in by_key` arm, which this slice narrows to Decision 1's fourth
+    row (covered by
+    `test_a_condition_metric_with_no_raw_interval_still_gets_no_member`).
+
+    **Both bounds are computed here from `stats.t_over_units` rather than
+    pinned as literals**, which is what makes this a check on the
+    construction rather than on a number: `_AGGREGATE_STEP` records
+    `pred = float(i)` for `i` in `0..39`, identically in both conditions, so
+    the test knows the exact vector the member must be carrying. A member
+    carrying anything else — a pool, the other condition's values, a
+    resampled draw sequence — cannot land on both of these to
+    `pytest.approx`. Two confirmatory hypotheses, not one, because Holm at
+    `family_size: 1` gives `α/(1−1+1) = 0.05`, so the corrected interval
+    would equal the raw one and every wrong construction that happens to
+    agree at 95 % would pass; at size 2 the ranks take α = 0.025 and α = 0.05
+    and the two verdicts must show *different* intervals.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.stats import t_over_units
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            _constant_hypothesis("pearson_positive", "baseline", "pred"),
+            _constant_hypothesis("spearman_positive", "method=spearman", "pred"),
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    assert set(verdicts) == {"pearson_positive", "spearman_positive"}
+    # The raw interval this member's evidence has to reproduce: no `resample`
+    # is declared, so the block's own construction is the unresampled one.
+    for verdict in verdicts.values():
+        assert verdict["family_size"] == 2
+        assert verdict["observed"]["method"] == "t_over_units"
+        assert verdict["supported"] is True
+    values = [float(i) for i in range(40)]
+    raw = t_over_units(values)
+    assert raw is not None
+    tighter = t_over_units(values, confidence=1.0 - 0.05 / 2)
+    assert tighter is not None
+    # Holm hands rank 1 α/2 and rank 2 α, and the two members are numerically
+    # identical here, so which id takes which rank is `declaration_index`'s
+    # tie-break — a fact about condition order, not about this construction.
+    # Asserted as a SET of the two intervals for that reason: pinning them to
+    # ids would be pinning the tie-break, and both orders are correct.
+    got = sorted(tuple(v["observed"]["ci95_corrected"]) for v in verdicts.values())
+    expected = sorted([(raw.low, raw.high), (tighter.low, tighter.high)])
+    assert got[0] == pytest.approx(expected[0])
+    assert got[1] == pytest.approx(expected[1])
+    # And the raw interval is untouched — a corrected bound is a second number
+    # beside the raw one, never a replacement for it.
+    for verdict in verdicts.values():
+        assert tuple(verdict["observed"]["ci95"]) == pytest.approx((raw.low, raw.high))
+
+
+def test_a_resampled_condition_metric_corrects_off_its_own_draw_pool(tmp_path, capsys, monkeypatch):
+    """Decision 1's SECOND row: the same recorded column under a declared
+    `statistics.resample` has a PERCENTILE raw interval, so its member carries
+    the POOL and the corrected bound is a second rank pair read off the same
+    draws.
+
+    This is the row `cli.py`'s own comment (at the column-contrast `Member`)
+    records being got wrong once: "a `ci95` from a percentile beside a
+    `ci95_corrected` from a `t`, where nothing raises and no reader can tell."
+    So the discriminating assertion is not that a corrected bound exists — the
+    `diffs` branch would produce one too — but that it is NOT the *t* one. The
+    *t* interval over these same 40 values at α/2 is computed here and
+    asserted absent, which is exactly the mutation this test was proved
+    against.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.stats import t_over_units
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"resample": {"method": "bootstrap", "n": 2000}},
+        hypotheses=[
+            _constant_hypothesis("pearson_positive", "baseline", "pred"),
+            _constant_hypothesis("spearman_positive", "method=spearman", "pred"),
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    # The declaration really took effect: `resample_draws` is present (and the
+    # requested count) only under a declared `statistics.resample`, which is
+    # what puts this metric in Decision 1's second row rather than its first.
+    for condition in run["results"]["conditions"]:
+        assert condition["aggregated"]["step01_summarize_units"]["pred"]["resample_draws"] == 2000
+    values = [float(i) for i in range(40)]
+    t_raw = t_over_units(values)
+    t_tighter = t_over_units(values, confidence=1.0 - 0.05 / 2)
+    assert t_raw is not None and t_tighter is not None
+    for verdict in verdicts.values():
+        assert verdict["family_size"] == 2
+        observed = verdict["observed"]
+        # The raw interval really is the percentile one, so a corrected bound
+        # built from per-unit values would be a construction mismatch rather
+        # than a rounding difference.
+        assert observed["method"] == "percentile_over_units"
+        assert observed["ci95_corrected"] is not None
+        assert verdict["supported"] is True
+        corrected = tuple(observed["ci95_corrected"])
+        # Neither of the two *t* constructions this member must NOT have used.
+        assert corrected != pytest.approx((t_raw.low, t_raw.high))
+        assert corrected != pytest.approx((t_tighter.low, t_tighter.high))
+        # A percentile bound is a DRAW, so both endpoints are attainable
+        # bootstrap means of the recorded values — inside the data's own range,
+        # unlike a *t* bound, which is a mean ± a critical value.
+        assert min(values) < corrected[0] < corrected[1] < max(values)
+    # Holm gave the two ranks different levels, so the two corrected intervals
+    # must differ — reading one rank's level for both is a real defect this
+    # would otherwise miss.
+    intervals = {tuple(v["observed"]["ci95_corrected"]) for v in verdicts.values()}
+    assert len(intervals) == 2
+    # And the corrected interval at the tighter level is the WIDER of the two:
+    # a smaller α is a bigger interval, and a corrected bound narrower than its
+    # raw one is precisely the number a reader cannot tell is wrong.
+    for verdict in verdicts.values():
+        raw = tuple(verdict["observed"]["ci95"])
+        corrected = tuple(verdict["observed"]["ci95_corrected"])
+        assert corrected[0] <= raw[0] and corrected[1] >= raw[1]
+    assert _assert_no_pool_leaked(run)
+
+
+def test_a_derived_condition_metric_corrects_off_its_own_draw_pool(tmp_path, capsys, monkeypatch):
+    """Decision 1's THIRD row: a derived (`aggregate`-computed) metric's raw
+    interval is a percentile off `percentile_of_derived`'s pool, and its member
+    carries that pool.
+
+    A derived metric has no per-unit column to fall back on — `stats.py`'s own
+    asymmetry — so the `diffs` branch is not merely wrong here, it is
+    unavailable, and before this slice a `compare: {to: constant}` hypothesis
+    naming one was unanswerable at any level. One hypothesis, so
+    `family_size: 1` and Holm's level is α itself; the pin that the pool was
+    used is the same one the row above rests on (the endpoints are attainable
+    means of the recorded values, and neither *t* construction's).
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.stats import t_over_units
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="mean_pred",
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"resample": {"method": "bootstrap", "n": 2000}},
+        hypotheses=[_constant_hypothesis("mean_is_positive", "method=spearman", "mean_pred")],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdict = run["results"]["hypotheses"][0]
+    observed = verdict["observed"]
+    assert verdict["family_size"] == 1
+    assert observed["method"] == "percentile_over_units"
+    assert observed["ci95_corrected"] is not None
+    assert verdict["supported"] is True
+    assert verdict["verdict_evaluated_on"] == "ci95_lower"
+    corrected = tuple(observed["ci95_corrected"])
+    values = [float(i) for i in range(40)]
+    t_raw = t_over_units(values)
+    assert t_raw is not None
+    assert corrected != pytest.approx((t_raw.low, t_raw.high))
+    assert min(values) < corrected[0] < corrected[1] < max(values)
+    # At `family_size: 1` Holm's level IS α, so the corrected interval is the
+    # raw one rebuilt from the same pool — equal, not merely close, because
+    # `interval_at` reads the same two ranks off the same sorted draws. That
+    # equality is the strongest available statement that the corrected bound
+    # rests on the same evidence as the raw one.
+    assert corrected == pytest.approx(tuple(observed["ci95"]))
+    assert _assert_no_pool_leaked(run)
+
+
+def test_a_condition_metric_with_no_raw_interval_still_gets_no_member(
+    tmp_path, capsys, monkeypatch
+):
+    """Decision 1's FOURTH row, the one this slice does NOT make correctable:
+    a metric with no raw interval has no bound to correct, so no `Member` is
+    built and the honest `corrected_unavailable` stays exactly there.
+
+    The template's `aggregate` returns a real number over the whole table and
+    `None` over any table whose `pred` values are not all distinct, so the
+    point estimate is an ordinary float while **every** bootstrap draw is
+    degenerate — a draw with replacement over 40 units repeats one with
+    probability `1 − 40!/40**40`, which is 1 to within 1e-16. That is
+    `stats.percentile_of_derived`'s documented all-degenerate return:
+    `resample_draws: 0` and `ci95: null`, disclosed by
+    `W-STATS-AGGREGATE-FAILED`. It is the reachable end-to-end shape of the
+    row — a derived metric with a value and no interval — and the design's own
+    wording is what these assertions say: "there is no bound to correct and
+    `evaluate_on: ci95_lower` was already answerable by nothing."
+
+    The control the row needs is the `ci95_corrected` key being PRESENT and
+    `null` rather than absent: absent means no correction was attempted, and a
+    member built here (rather than skipped) would produce exactly that, since
+    it would enter `evaluate`'s `by_key` and stop the `key not in by_key` arm
+    from firing. Asserting only `supported is None` would pass under that
+    defect, since a member with `ci95=None` is dropped from the family by
+    `correction.family_members` and yields no bound either way.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _distinct_only(self, units, cfg):
+        values = list(units.pred)
+        return {"mean_pred": sum(values) / len(values) if len(set(values)) == 40 else None}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _distinct_only)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[_constant_hypothesis("mean_is_positive", "method=spearman", "mean_pred")],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["results"]["conditions"][1]["aggregated"]["step01_summarize_units"]["mean_pred"]
+    # The row really is the no-interval one, and for the stated reason.
+    assert block["value"] == pytest.approx(19.5)
+    assert block["ci95"] is None
+    assert block["resample_draws"] == 0
+    verdict = run["results"]["hypotheses"][0]
+    observed = verdict["observed"]
+    assert verdict["family_size"] == 1
+    assert observed["ci95"] is None
+    assert "ci95_corrected" in observed
+    assert observed["ci95_corrected"] is None
+    assert verdict["supported"] is None
+    assert verdict["verdict_rests_on"] == "computed"
+    assert _assert_no_pool_leaked(run) is False
+
+
+def test_a_weighted_clustered_condition_metric_gets_no_member(tmp_path, capsys, monkeypatch):
+    """The one sub-case of Decision 1's first row that carries no member, and
+    the reason is that its corrected counterpart does not exist in this build.
+
+    A recorded column under both `weight_by` and `cluster_by` takes
+    `weighted_t_over_units_clustered` — § Weighted samples has the cluster
+    decide the draw when both are declared — and there is no
+    `weighted_paired_t_over_units_clustered` to rebuild it at a smaller α.
+    That absence is exactly what `E-DATA-WEIGHT-CLUSTER-CONTRAST` refuses a
+    comparison over, and that code reads the RESOLVED comparison family, so a
+    run with no sweep and no baseline declares both legitimately and reaches
+    this branch with a validated config — which is why the branch exists at
+    all rather than being unreachable bookkeeping.
+
+    `Member.__post_init__` refuses `weights` and `clusters` together, and
+    carrying either one alone would publish a corrected bound from a
+    construction the other declaration contradicts — no reader of `run.yaml`
+    could tell. So no member, and `ci95_corrected: null` says the level was
+    demanded and could not be built.
+
+    Both halves are asserted: the block really is the weighted clustered one
+    (`weighted_t_over_units_clustered`, with `effective` and `clusters` in
+    `n`), or the absence below would hold for some unrelated reason.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=(
+            "patient_id,sampling_weight,site\n"
+            + "".join(f"p{i},{1 + i % 3},s{i // 2}\n" for i in range(8))
+        ),
+        units_overrides={
+            "attributes": ["sampling_weight", "site"],
+            "weight_by": "sampling_weight",
+            "cluster_by": "site",
+        },
+        hypotheses=[
+            {
+                "id": "mean_is_positive",
+                "kind": "confirmatory",
+                "statement": "the sole condition's own mean clears zero",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"to": "constant", "value": 0},
+                "direction": "greater",
+                "threshold": 0,
+                "evaluate_on": "ci95_lower",
+            }
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["pred"]
+    assert block["method"] == "weighted_t_over_units_clustered"
+    assert block["ci95"] is not None
+    assert block["n"]["clusters"] == 4
+    assert block["weighted_by"] == "sampling_weight"
+    verdict = run["results"]["hypotheses"][0]
+    observed = verdict["observed"]
+    assert verdict["family_size"] == 1
+    assert observed["ci95"] is not None
+    assert "ci95_corrected" in observed
+    assert observed["ci95_corrected"] is None
+    assert verdict["supported"] is None
