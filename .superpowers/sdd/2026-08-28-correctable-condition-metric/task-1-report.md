@@ -1,6 +1,6 @@
 # Task 1 report — the bit-stability oracle
 
-Status: done. Commit: (recorded below after commit).
+Status: done. Commit: 2ddcacb.
 
 Added `test_task1_bit_stability_oracle_over_the_correction_machinery` to
 `tests/test_cli.py`, following the H9a/H9b golden-record idiom
