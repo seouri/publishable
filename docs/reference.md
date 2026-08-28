@@ -752,7 +752,7 @@ provenance:
       code_hash: sha256:71c9...
       parameters_hash: sha256:aa03...
       used: ["step01_load_cohort/cohort.parquet"]
-  publishable_version: "0.2.0"
+  publishable_version: "0.2.1"
   plugin_versions: {}                          # {distribution: version} for the resolver this
                                                #   run resolved through; empty for a table source
 
