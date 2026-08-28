@@ -2748,6 +2748,33 @@ three surfaces, on the same nine configs, for the same reason. What a reader mee
 and the price instead of a promise, and the price is the paragraph above: one `templates/` copy per
 repository, inside each repository's own `code_hash`.
 
+#### The four-row table after the reclassification, re-measured 2026-08-27 against commit `7bb5f5b`
+
+**No count moves, and that is the finding rather than a formality.** The reclassification is four
+documentation-and-message edits with zero behaviour change, so a table of counts had better be unmoved by
+it — and a table restated *without* re-measuring would be the carried claim this section records a dozen
+times. Re-measured on the reclassified build, through the same fixture: the eight transplantable configs
+print `1 problem (0 errors, 1 warning)` each, e5 `2 problems (0 errors, 2 warnings)`; the config naming a
+plugin template still earns `E-TEMPLATE-INSTALLED-UNSUPPORTED`; and the local-template route still prints
+`✓ config valid`.
+
+**Row 4's cell changes and its count does not**, which is exactly row 3's own history — the 2026-08-26
+correction moved *gap* to *documented limitation* and left **7** where it was. Here the dependency stops
+being a build state a reader might wait out and becomes a documented, permanent refusal with a row in
+`reference.md` § Errors. Rows 1, 2 and 3 are unchanged in count and in cell.
+
+| Figure | Count | Visible to `validate`? |
+|---|---|---|
+| Transplantable configs validating with zero errors | **8 of 8** | yes — the only figure `validate` can see, and measured by running at this commit |
+| Blocked on `io.reuse_from` | **0** | no — a step-level call; the method ships, and six configs (E3, E4, E6, C1, C2, C3) still need the plugin body to *call* it |
+| Meet the `report_by`-under-`resample` **documented limitation** | **7** | no — a construction chosen inside `summarize_step`; live on E1, E2, E4, E6, C1, C2, C3, and `stats.py` is byte-identical to H3c-3's commit |
+| Free of every core-side dependency this analysis can name | **0** | no — a plugin template is `E-TEMPLATE-INSTALLED-UNSUPPORTED`, which E5 earns with the other eight. **A permanent, documented refusal since 2026-08-27**, rowed in `reference.md` § Errors and no longer describing itself as a slice away — so this zero is the number to plan around rather than one to wait out, and the route that changes it is the analyst's (template project-local) rather than core's |
+
+**This is the table to quote, and the one in the entry above stays where it is**: that one records what was
+measured at `dc03ec4`, before the reclassification, and a dated measurement is not retro-edited. **No fifth
+number is minted** — four rows, three of them untouched — and the standing rule holds unchanged: quote the
+table, or name the dependency.
+
 Full local gates at this commit, run rather than assumed: `3485 passed, 1 skipped, 2 xfailed in
 418.90s`, `ruff check .` *All checks passed!*, `mypy` *no issues found in 56 source files*. Nothing this
 measurement did touches them — every run above happened in a scratch project outside this repository —
