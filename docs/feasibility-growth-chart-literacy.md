@@ -1978,7 +1978,7 @@ where a superseded reading belongs.
 
 ### Measured on 2026-08-28 against `publishable` commit `6a71507`
 
-Also pinned: `2026-08-28-gcl-measurement@e9723c9` and `publishable-growth-chart@64bde4d`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@0af6d2e` and `publishable-growth-chart@64bde4d`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
@@ -1989,10 +1989,10 @@ version number, and take `0.2.1` as the floor for the corrected bound and **`0.2
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
-one `src/growth_chart/` package (2,985 lines over eight modules, seven step bodies and three prompt
-files) with 2,467 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
+one `src/growth_chart/` package (3,041 lines over eight modules, seven step bodies and three prompt
+files) with 2,550 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
 `publishable plugin new` (390 lines, 526 of tests) installed as an editable dependency — registering
-one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **210 passed**
+one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **212 passed**
 in the measurement repository, **30** in the plugin. Every command below was run through the project's
 own console script.
 
@@ -2029,12 +2029,23 @@ warnings are the false positive [gap 4's retraction](#gaps-this-analysis-found-i
 explains. Every config's `data.units.attributes` now also names the label columns its own pipeline
 reads — see [gap 8](#gaps-this-analysis-found-in-the-specification), which is why they have to.
 
-**One config has executed.** [E1](#e1--the-reference-standard-gate) contains no LLM, so it is the one
-arm that can run without a deployment, and it does: `status: completed`, three conditions, and a
-`kappa` of **0.614** with a percentile `ci95` of [0.393, 0.801] over 2,000 draws, `basis: units`,
-`method: percentile_over_units`. That is the first end-to-end execution of this pipeline and it is
-where [gaps 8 and 9](#gaps-this-analysis-found-in-the-specification) came from — neither was visible to
-`validate`, to `dry-run`, or to 202 unit tests.
+**Three configs have executed, and all three reach a verdict.** E1, E2 and E6 are the
+[`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
+without a deployment — and each now completes:
+
+| | Verdict | Rests on |
+|---|---|---|
+| [E1](#e1--the-reference-standard-gate) | `kappa` 0.614 low / 0.430 high, gap **−0.184**, `ci95` [−0.487, 0.143] over 133 patients; `supported: false` | `reported` — a `summary`-step `Estimate` |
+| [E2](#e2--the-utilization-baseline) | `auroc_count_only` **0.432**, `ci95` [0.394, 0.468] over 1,000 patients; `supported: false` on `ci95_lower` against 0.5 | `reported` |
+| [E6](#e6--the-non-llm-comparator) | delta **−0.0062**, `ci95` [−0.0147, 0.0021], `method: paired_percentile_over_units_clustered`, with a `ci95_corrected` | `computed` — core built the contrast |
+
+**The numbers are the synthetic fixture's and mean nothing.** What is measured is that the routes work:
+E6 in particular is core computing a paired, clustered, Holm-corrected contrast on a template-derived
+metric end to end, which is the machinery every LLM arm will rest on once a deployment exists.
+
+Executing them is also where [gaps 8 and 9](#gaps-this-analysis-found-in-the-specification) came from,
+and where the two defects below were found — none of it visible to `validate`, to `dry-run`, or to the
+unit suite.
 
 **E1's hypothesis was unanswerable as first written, and now resolves.** The original spelling —
 a declared contrast on the template's derived `kappa` — recorded `delta: null` and
@@ -2102,7 +2113,7 @@ layout rather than a hope. And a `sweep.baseline` duplicating a `grid` cell vali
 `W-SWEEP-CONDITION-DUPLICATE` now reporting the pair, which is
 [gap 3](#gaps-this-analysis-found-in-the-specification), found by running and not by reading.
 
-**What writing the pipeline found.** Five things the configs alone could not surface, because a config
+**What writing and running the pipeline found.** Seven things the configs alone could not surface, because a config
 exercises declarations and a step body exercises the runtime:
 
 **1. A metric a config declares and a template never derives is invisible to `validate`.** This is the
@@ -2134,13 +2145,35 @@ AUROC over patients, which is the quantity E2 claims, where the template's is pe
 as written takes the first route. See [gap 7](#gaps-this-analysis-found-in-the-specification) for what
 still comes back `supported: null` on a bound, and why `fdr_bh` is not an instance of it.
 
-**4. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
+**4. A `run`-scoped step may not read `io.units` when any `fold` is declared, and this pipeline's did.**
+`step01_summarize_units` built its truth and feature maps by iterating the roster. E2 and E6 declare
+`{kind: fold}` repeats, and core raises `E-STEP-UNITS-UNAVAILABLE` for `io.units` at `run` and
+`condition` scope whenever a fold exists — "it declines to hand over a list that could only be the
+wrong one". The first execution of E2 failed 11 of its 12 executions on it. The step now reads
+`index.csv` directly, which is exactly what
+[§ A fold repeat puts the units out of reach](reference.md#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes)
+says a wider step may do — load a shared file. What it publishes is keyed over every row of the
+extract rather than the resolved roster, which is a superset lookup and not a second answer to *which
+units are in this run*: each downstream step indexes it by keys from its own `io.units`.
+
+**5. A `summary`-step metric named after the condition label is a metric no config can name.**
+`e02` fixes its only `grid` axis with `sweep.baseline`, so that condition renders as the bare word
+`baseline` — there is no `key=value` body left. A label-derived `Estimate` key was therefore
+`auroc_baseline`, while the config's hypothesis names `auroc_count_only`: a metric nothing produced,
+resolving to `supported: null` with no diagnostic anywhere. This is [finding 1](#executability-on-this-build)
+again from the other end — core cannot know which keys a step returns — and the fix is to name the
+metric after the **resolved arm**, written by the `repeat`-scoped step that had it. A summary step
+cannot recover it itself: reading a path the sweep varies
+[raises there](reference.md#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes), since no
+single condition's value applies.
+
+**6. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
 quantities the configs declare are ratios of means over a paired table and the third is a rank
 correlation; none needs a likelihood optimiser. `statsmodels` stays declined until an arm genuinely
 needs a random-intercept fit — E3's format × derivation interaction is the first — because a plugin's
 dependency lands in the lockfile `reproduce` restores.
 
-**5. The shortcut reliance index is undefined where the plan most needs it, and says so.** OI-17
+**7. The shortcut reliance index is undefined where the plan most needs it, and says so.** OI-17
 records this and the implementation honours it: when the physiology main effect is zero — which is
 E4's H0 holding, a model that cannot see the curve at all — the index returns nothing rather than a
 ratio with no meaning.
@@ -2158,7 +2191,7 @@ experiment *directory* rather than its `config.yaml` — reports `E-IO-FAILED  I
 [§ CLI reference](reference.md#cli-reference) documents the argument as a config file path and every
 example writes one, so this is a thin diagnostic rather than a contradiction.
 
-**What is still not measured.** Fourteen of the fifteen have not executed, because they need a
+**What is still not measured.** Twelve of the fifteen have not executed, because they need a
 deployment: `draft`, `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised,
 the `.transcript.jsonl` writer has never been driven by a write, and every cost figure below is
 arithmetic rather than an anchor. What blocks that is not code: **OI-7's cohort definition** and
