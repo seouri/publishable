@@ -7258,6 +7258,109 @@ def test_a_single_axis_sweep_is_never_confounded(write_config):
     assert "W-SWEEP-BASELINE-CONFOUNDED" not in found
 
 
+def test_a_baseline_colliding_with_its_own_grid_cell_warns_once(write_config):
+    """`W-SWEEP-CONDITION-DUPLICATE` — Decision 3's own worked example:
+    `sweep.baseline` fixes `stimulus.physiology: healthy`, which the `grid` also
+    lists, crossed with a second free axis. `expand` renders six conditions for
+    the four-cell design, and the baseline row and the `physiology=healthy`
+    product row resolve to identical `values` over identical units — two
+    directories for one measurement.
+
+    The check runs over `expand`'s output rather than over the declaration, so
+    it is blind to which mode produced either condition; nothing here special-
+    cases `baseline`."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"stimulus.physiology": "healthy"},
+                "grid": {
+                    "stimulus.physiology": ["healthy", "concerning"],
+                    "stimulus.schedule": ["sparse", "dense"],
+                },
+            }
+        }
+    )
+    found = messages_by_code(path)
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    message = found["W-SWEEP-CONDITION-DUPLICATE"]
+    # Reported once, for the FIRST duplicated pair in condition order — indices
+    # (0, 2) — not the second pair at (1, 3).
+    assert "physiology=healthy__schedule=sparse" in message
+    assert "schedule=sparse__baseline" in message
+    assert "schedule=dense" not in message
+    # The remedy is the working spelling `W-SWEEP-BASELINE-CONFOUNDED` already
+    # quotes, copied with its containment (a semicolon-joined clause, not a
+    # fresh capitalized sentence).
+    assert (
+        "fix the axis you are measuring and leave the ones you are stratifying "
+        "over free, and each cell gets its own baseline" in message
+    )
+
+
+def test_a_normal_baseline_plus_grid_config_has_no_duplicate_condition(write_config):
+    """The negative control: a baseline whose fixed value is not among the
+    grid's own axis values never collides, so no two conditions can resolve to
+    the same `values`."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
+            }
+        )
+    )
+    assert "W-SWEEP-CONDITION-DUPLICATE" not in found
+
+
+def test_a_repeated_grid_value_is_the_soft_case_this_warning_reaches(write_config):
+    """`test_a_group_axis_repeating_a_level_is_refused` pins
+    `grid: {analysis.method: [pearson, pearson]}` as a config
+    `E-SWEEP-LEVEL-DUPLICATE` does not reach — a deliberate gap on that code's
+    own row, since a parameter axis repeating a value is not a claim about
+    which units. Decision 3 is what closes it, as a warning rather than an
+    error: the two `method=pearson` conditions resolve to identical `values`
+    over identical units, which is exactly this check's predicate."""
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": ["pearson", "pearson"]}}}))
+    assert "W-SWEEP-CONDITION-DUPLICATE" in found
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in found  # a different code; untouched
+
+
+def test_a_group_axis_duplicate_level_is_not_this_warning(write_config):
+    """Same units is part of the predicate, not an assumption: a `groups` axis's
+    two arms hold DISJOINT units by construction, so a level rendered twice by
+    `levels: [c, t, c]` is `E-SWEEP-LEVEL-DUPLICATE`'s own shape, not this
+    warning's — the two conditions never resolve to the same `values` because
+    the axis that names the arm differs (or, here, matches only because the
+    label collides, which is exactly what the other code is for). This must
+    stay untouched by the new check."""
+    found = codes(write_config({"sweep": {"groups": [{"by": "arm", "levels": ["c", "t", "c"]}]}}))
+    assert "E-SWEEP-LEVEL-DUPLICATE" in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" not in found
+
+
+def test_a_baseline_fixing_a_group_level_is_not_this_warning_either(write_config):
+    """The sibling group-axis code, `E-SWEEP-BASELINE-GROUP`: a baseline
+    designating a group level duplicates that level's own product row too, but
+    it is refused outright by its own check before this one would ever see it,
+    and — independent of ordering — the two conditions still hold DIFFERENT
+    units from every other level, so this warning's predicate is about a
+    different fault than either group-axis code covers."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"arm": "control"},
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-GROUP" in found
+    assert "W-SWEEP-CONDITION-DUPLICATE" not in found
+
+
 _UNITS_WITH_DX = {"from": "index.csv", "key": "patient_id", "attributes": ["dx_family"]}
 
 

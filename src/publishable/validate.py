@@ -9,7 +9,12 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import crossed_group_axes, resolve_contrasts, units_matching
+from publishable.contrasts import (
+    crossed_group_axes,
+    differing_axes,
+    resolve_contrasts,
+    units_matching,
+)
 from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
@@ -4203,6 +4208,68 @@ def _check_sampled_values(
             break
 
 
+def _warn_duplicate_conditions(conditions: list[Any], c: Collector) -> None:
+    """`W-SWEEP-CONDITION-DUPLICATE` — two conditions resolving to the same
+    `values` over the same units.
+
+    Decision 3 (`docs/superpowers/specs/2026-08-28-growth-chart-gaps-design.md`):
+    the check asks the direct question rather than a proxy phrased over
+    `sweep.baseline`. "A `baseline` may not fix a path the `grid` also lists"
+    names one route to the fault, misses the others (two `grid` cells can
+    collide on their own, through an unrelated axis fixed elsewhere), and would
+    refuse a shape that is fine whenever the baseline's value is not among the
+    grid's. So this runs over `expand`'s own output — a fact about the rendered
+    conditions — and is blind to which mode produced either one.
+
+    `contrasts.differing_axes` gives "same `values`" over the union of both
+    sides' keys, which is sufficient for "same units" whenever NEITHER
+    condition carries a group axis: a `grid`/`paired`/`ablate`/parameter-
+    `baseline` path only ever sets a parameter, never selects a unit, so equal
+    `values` there is equal units by construction. It is NOT sufficient once a
+    `sweep.groups` axis is involved — measured against `E-SWEEP-LEVEL-
+    DUPLICATE`'s own giant comment: two conditions carrying the identical
+    level render byte-identical units under `assign.method: by_attribute`, but
+    a `random` draw overwrites and a `blocked` draw accumulates, so whether
+    the units actually collide depends on an assignment method `validate`
+    cannot see the outcome of at this point. `Condition.selectors` marks
+    exactly the paths a group axis produced (`expand`'s own answer to "which
+    mode produced this cell"), so this check is gated on **neither** condition
+    carrying one — which is what keeps `E-SWEEP-LEVEL-DUPLICATE`'s repeated
+    level and `E-SWEEP-BASELINE-GROUP`'s baseline-fixes-a-level shape (both
+    measured: `expand` renders equal `values` for both) out of this warning.
+    Those two codes already have the sharper, assignment-independent answer
+    for their own shapes; this one is deliberately narrower and does not
+    duplicate them.
+
+    Reported **once**, for the first duplicated pair in condition order, on
+    `W-DATA-CLUSTER-UNDECLARED`'s own shape — the remedy is one sentence
+    whichever pair a reader looks at. A warning, not an error, on three
+    grounds the design doc states: the design is expensive and confusing
+    rather than unexpressible, a refusal would be a new way for a
+    yesterday-valid config to stop validating, and the two group-axis
+    refusals above stay exactly as they are rather than being folded in.
+    Core reports; it does not deduplicate — dropping a condition would change
+    what executed without the record saying so.
+    """
+    for j in range(1, len(conditions)):
+        for i in range(j):
+            if conditions[i].selectors or conditions[j].selectors:
+                continue  # a group axis is involved — `E-SWEEP-LEVEL-DUPLICATE` /
+                # `E-SWEEP-BASELINE-GROUP`'s own shapes, not this warning's
+            if differing_axes(conditions[i], conditions[j]):
+                continue
+            c.warn(
+                "W-SWEEP-CONDITION-DUPLICATE",
+                "sweep",
+                f"condition `{conditions[j].label}` resolves to the same parameters "
+                f"over the same units as `{conditions[i].label}` — the same "
+                "measurement, run twice under two labels, in two directories; fix "
+                "the axis you are measuring and leave the ones you are stratifying "
+                "over free, and each cell gets its own baseline",
+            )
+            return
+
+
 def _check_sweep(
     doc: dict[str, Any], template: Any, c: Collector, *, fold_basis: int | None = None
 ) -> None:
@@ -4880,6 +4947,7 @@ def _check_sweep(
                 "`sweep` entirely",
             )
         _check_sampled_values(sample, spec, conditions, c)
+        _warn_duplicate_conditions(conditions, c)
 
     # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
     # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
