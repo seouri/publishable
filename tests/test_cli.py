@@ -28524,3 +28524,116 @@ def test_m2_a_resume_after_a_bare_touch_is_no_longer_refused(tmp_path: Path, cap
     assert "E-RESUME-INPUT-MOVED" not in printed.out + printed.err
     assert code == EXIT_OK, printed.out + printed.err
     assert (crashed / "run.yaml").is_file()
+
+
+# --- W-STEP-RETURN-DISCARDED: a wide step's return has nowhere to land --------
+#
+# `reference.md` § Step scope has always said a `run`- or `condition`-scoped
+# step's return is discarded, and gives the reason. What it did not do was tell
+# the author it had happened: before this warning the record was
+# indistinguishable from one where the step returned `{}`, at exit 0. The
+# refusal is a STATISTICAL guard by its own closing line — "a number with no
+# denominator in the record is the mistake this refusal exists to prevent" — so
+# a silent one teaches nothing.
+
+_CONDITION_RETURNS_A_METRIC = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        # A metric a wide scope has nowhere to put. Core discards it either
+        # way; the question this pins is whether it says so.
+        return {{"accuracy": 0.97, "n_seen": len(io.units)}}
+"""
+
+_CONDITION_RETURNS_NOTHING = """\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        io.write("fitted.json", {{"ok": True}})
+        return {{}}
+"""
+
+
+def test_a_condition_scoped_step_returning_a_metric_warns(tmp_path, capsys):
+    """The value is still discarded — that behaviour is specified and unchanged.
+    What changes is that the author is told, and told which keys went."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["fit"],
+        extra_step_source=_CONDITION_RETURNS_A_METRIC,
+    )
+    assert "W-STEP-RETURN-DISCARDED" in doc["stdout"]
+    # Names BOTH dropped keys, not just the first: a message naming one of two
+    # sends its reader looking for the other.
+    assert "accuracy" in doc["stdout"]
+    assert "n_seen" in doc["stdout"]
+    # And the behaviour it warns about is genuinely unchanged. Scoped to THIS
+    # step's own key rather than to an empty `per_repeat`: the starter step is
+    # repeat-scoped and records there legitimately, so asserting the whole block
+    # is empty would be asserting something false about a different step.
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    per_repeat = run["results"]["conditions"][0]["per_repeat"]
+    assert "step02_fit" not in per_repeat, "a condition-scoped return reached per_repeat"
+    assert "accuracy" not in (doc["run_dir"] / "run.yaml").read_text()
+
+
+def test_a_condition_scoped_step_returning_nothing_is_silent(tmp_path, capsys):
+    """The other half, and the one that decides whether the warning is usable:
+    an empty mapping is the honest "nothing to report" and is what every correct
+    wide step already returns. A warning firing on it would fire on every
+    pipeline in existence and teach a reader to skip the channel."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["fit"],
+        extra_step_source=_CONDITION_RETURNS_NOTHING,
+    )
+    assert "W-STEP-RETURN-DISCARDED" not in doc["stdout"]
+    # Paired with something that must be present: an absence assertion alone
+    # passes identically if the run never happened.
+    assert (doc["run_dir"] / "run.yaml").exists()
+    assert "✓" in doc["stdout"] or "run.yaml" in doc["stdout"]
+
+
+def test_a_repeat_scoped_step_returning_a_metric_is_silent(tmp_path, capsys):
+    """A repeat-scoped return IS recorded, in `per_repeat`. Warning there would
+    be false: the value landed exactly where the documents say it lands."""
+    doc = run_a_project(tmp_path, capsys=capsys, units=10)
+    assert "W-STEP-RETURN-DISCARDED" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    per_repeat = run["results"]["conditions"][0]["per_repeat"]
+    assert per_repeat, "the starter step's return should be recorded at repeat scope"
+
+
+def test_the_warning_reports_once_per_step_not_once_per_condition(tmp_path, capsys):
+    """A condition-scoped step runs once per condition, so a three-condition
+    sweep discards three times for ONE mistake. Three identical warnings is the
+    noise that teaches a reader to skip the whole channel — the same
+    report-once shape `W-DATA-CLUSTER-UNDECLARED` already takes.
+
+    The sweep is what makes this observable: with one condition the
+    once-per-execution and once-per-step readings agree, so a fixture without a
+    sweep would pass under either and pin neither.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["fit"],
+        extra_step_source=_CONDITION_RETURNS_A_METRIC,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+    )
+    assert doc["stdout"].count("W-STEP-RETURN-DISCARDED") == 1

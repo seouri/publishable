@@ -3835,6 +3835,44 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                         "denominator is the disclosure risk `limits.min_reported_n` "
                         "exists to catch, and `study add` cannot check what it cannot see",
                     )
+        # A `run`- or `condition`-scoped step's return has nowhere to land, and
+        # § Step scope says so — but core knows at the moment it discards one,
+        # and said nothing. That silence is the defect this warning closes: the
+        # refusal is a STATISTICAL guard ("a number with no denominator in the
+        # record is the mistake this refusal exists to prevent"), and a
+        # statistical guard that fires without saying so leaves an author
+        # believing a value was recorded when the record is indistinguishable
+        # from one where the step returned `{}`.
+        #
+        # **Non-empty only.** An empty mapping is the honest "nothing to
+        # report" and is what a wide step that means it already returns, so
+        # warning on it would fire on every correct pipeline in existence. The
+        # distinction needs nothing from the author: a value they computed and
+        # core dropped is exactly a non-empty return at these two scopes.
+        #
+        # Reported once per (step, scope) rather than once per execution: a
+        # condition-scoped step returns once per condition, and nine identical
+        # warnings for one mistake is the noise that teaches a reader to skip
+        # the whole channel. The keys are unioned across those executions so
+        # the message names everything dropped, not whatever the first one held.
+        discarded: dict[tuple[str, str], list[str]] = {}
+        for r in results:
+            if r.execution.scope not in ("run", "condition") or not r.returned:
+                continue
+            seen = discarded.setdefault((r.execution.step_name, r.execution.scope), [])
+            for key in r.returned:
+                if key not in seen:
+                    seen.append(key)
+        for (step_name, scope), dropped_keys in discarded.items():
+            aggregate_c.warn(
+                "W-STEP-RETURN-DISCARDED",
+                step_name,
+                f"is `{scope}`-scoped and returned {', '.join(dropped_keys)}, which core "
+                f"discards: a metric is keyed by unit or reported per repeat, and "
+                f"`{scope}` scope has neither. Use `io.write` for what a wide step "
+                f"produces, and let a narrower step record what it measures; return "
+                f"`{{}}` if the value was not meant for the record",
+            )
         if roster is not None:
             # Already checked once, before `execute_plan`, where a failure
             # would still cost nothing run. Restated here only for the type
