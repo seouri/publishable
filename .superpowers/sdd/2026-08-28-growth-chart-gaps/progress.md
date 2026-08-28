@@ -115,3 +115,25 @@ findings do not enter the loop, but it is one line in the same row round 2 must 
 leaving a mechanical find/replace artifact in a normative table is worse than the round it costs.
 Costs if wrong: a trivially larger round-2 diff.
 Task 4: fix round 2/5 (1 addressed + ride-along, 1 open — a SIXTH home in validate.py, missed because its wording is 'call is reached'/'runs' rather than 'ever reached'; commits e5d2816..eaa1de9)
+Task 4: fix round 3/5 (1 addressed; commits eaa1de9..48e9ea4)
+
+Ruling: **Finding 3 is ADDRESSED, and round 3's re-review is overruled on its two new homes.** It
+flagged `reference.md:4274`, `tests/test_plugins.py:526` and (by the same shape) `plugins.py:350` as
+the false mechanism claim. Read whole, they are not. Each says a class body finishes running before
+its own `@register_template` **registers the class**, so a file raising *after* that point still
+leaves a class core can read `required_env` off — an ordering claim about registration that is TRUE,
+and the argument it supports is correct. The false claim was the opposite one: that a raise *inside*
+a class body happens before the decorator line is "reached". The same paragraph at 4274 carries both,
+and its second sentence is the corrected wording round 2 landed — the two do not contradict, they
+cover a raise after the class exists and a raise inside the body.
+
+That is the identical judgment round 3's own reviewer made about the `test_cli.py` match, applied
+inconsistently to three siblings. A pattern-based sweep cannot separate "finishes before the
+decorator is APPLIED" (true) from "reaches the decorator line" (false); only reading can, which is
+why this is adjudicated here rather than sent to a fourth round. Costs if wrong: three true
+sentences keep a loose word.
+
+Task 4: minor (deferred): those three homes say "before its own `@register_template` call" where
+*application* or *registration* is meant. The claim is true; the word "call" is what keeps drawing
+false positives, and sharpening it would stop the next sweep re-finding them.
+Task 4: complete (commits e40b9e2..48e9ea4, 3 fix rounds, review clean after adjudication; suite 3488 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
