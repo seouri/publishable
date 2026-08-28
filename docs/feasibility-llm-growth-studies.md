@@ -2738,6 +2738,16 @@ no row in the normative registry and its only per-code documentation in a tutori
 authoritative over nothing; and two documents recommend the installed template without saying it cannot be
 used.
 
+**Closed the same day, and the refusal is unchanged.** The reclassification landed as four edits and no
+behaviour change: the message states the limit without a date and names the `templates/` route; the code
+carries a row in `reference.md` § Errors, the family's exemption narrowed to genuinely temporary refusals
+of unbuilt blocks; `reference.md` § Templates and the tutorial's three-homes table both say the installed
+home is refused; and `CLAUDE.md`'s § Misreadings row now reads the suffix as a claim about the feature
+rather than about a schedule. **Every measurement in this entry stands** — the refusal fires at the same
+three surfaces, on the same nine configs, for the same reason. What a reader meeting it gets is the route
+and the price instead of a promise, and the price is the paragraph above: one `templates/` copy per
+repository, inside each repository's own `code_hash`.
+
 Full local gates at this commit, run rather than assumed: `3485 passed, 1 skipped, 2 xfailed in
 418.90s`, `ruff check .` *All checks passed!*, `mypy` *no issues found in 56 source files*. Nothing this
 measurement did touches them — every run above happened in a scratch project outside this repository —

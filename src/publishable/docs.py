@@ -320,8 +320,8 @@ def _unreadable_reason(name: str, template_name: str | None, claim: "Claim | Non
         )
     return (
         f"`{name}` — its template `{template_name}` is installed "
-        f"({claim.provider}), so its `required_env` is not readable in this "
-        "build (`E-TEMPLATE-INSTALLED-UNSUPPORTED`)"
+        f"({claim.provider}), so its `required_env` is not readable "
+        "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`)"
     )
 
 
@@ -419,7 +419,7 @@ TEMPLATES_EMPTY_LINE = "_(none yet — add one with `publishable generate templa
 #: mean importing it here — making this the one surface in the build that loads
 #: what every other one refuses to load.
 INSTALLED_SPEC_UNREADABLE = (
-    "its parameter spec is **not readable in this build** "
+    "its parameter spec is **not readable** "
     "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed "
     "template's name from package metadata without importing the package, so "
     "there is no class here to read a `parameter_spec` off"

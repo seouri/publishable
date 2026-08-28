@@ -2606,26 +2606,40 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
 
 
-def test_every_unsupported_message_defers_rather_than_scolds(installed, write_config):
-    """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
-    'your config is wrong'. Every message in this family must say so explicitly, or a
-    user has no way to tell a refusal from a validation error. `allocation: between`,
-    `assign`, `data.units.holdout`, `data.units.from.resolver` and, as of H4d task 25,
-    `statistics.null_test` have each left this family in turn — every one now draws a
-    real, behavior-specific finding instead (`E-DATA-ALLOCATION-NO-ARMS`,
-    `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`, the five `E-STATS-NULLTEST-*` codes,
-    and so on, or validates clean), not a deferral.
+def test_the_surviving_unsupported_message_states_a_permanent_limit_and_names_the_route(
+    installed, write_config
+):
+    """The `-UNSUPPORTED` family exists so a refusal reads as 'not built', not as
+    'your config is wrong'. `allocation: between`, `assign`, `data.units.holdout`,
+    `data.units.from.resolver` and, as of H4d task 25, `statistics.null_test` have each
+    left the family in turn — every one now draws a real, behavior-specific finding
+    instead (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, `E-RESOLVER-UNKNOWN`,
+    the five `E-STATS-NULLTEST-*` codes, and so on, or validates clean), not a deferral.
 
-    `E-TEMPLATE-INSTALLED-UNSUPPORTED` is what remains of the family — reparametrized
-    onto it rather than left with an empty `parametrize` or a permanently red
-    assertion, on the scoping's own confirmation that `installed_template_message`
-    contains this exact phrase."""
+    **`E-TEMPLATE-INSTALLED-UNSUPPORTED` is what remains, and until 2026-08-27 this test
+    required its message to say `later slice`.** That requirement was the family's
+    temporariness asserted onto its one member that is NOT temporary: the charter is
+    complete, no slice loads an installed template, and the message told a plugin author
+    to wait for something nobody is building. What the message owes now is the pair
+    below — a limit stated without a date, and the route out — which is what
+    `reference.md` § Errors' row for it and both three-homes tables say in prose.
+
+    Both halves can fail: dropping the `templates/` clause fails the second assertion,
+    and restoring the deferral fails the first. Asserting only one would pass against a
+    message that refuses and strands the reader, which is the failure the original test
+    was written against and this one keeps.
+    """
     installed("dist-one", "1.0", {"publishable.templates": {"vendor_assay": "no_one:T"}})
     found = messages_by_code(write_config({"experiment_type": "vendor_assay"}))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
     assert unsupported, "expected an -UNSUPPORTED finding for an installed-only template name"
     for code, message in unsupported.items():
-        assert "later slice" in message, f"{code} message does not defer: {message!r}"
+        assert "later slice" not in message, (
+            f"{code} defers to a slice that does not exist: {message!r}"
+        )
+        assert "`templates/`" in message, (
+            f"{code} refuses without naming the route out: {message!r}"
+        )
 
 
 def test_a_resolver_source_is_no_longer_refused_wholesale(

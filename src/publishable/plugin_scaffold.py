@@ -181,16 +181,16 @@ broken: mistype the entry point's class name and both tests fail; delete
 What it replaces was `assert get_template(...) is not None or True`, which
 **cannot fail** — and which reached `publishable.templates.registry` for a
 `get_template` the import root does not export. The registry question it was
-reaching for (does core resolve this name?) is `E-TEMPLATE-INSTALLED-UNSUPPORTED`
-today; when loading an installed template lands, this file gains a case rather
-than being replaced.
+reaching for (does core resolve this name?) is `E-TEMPLATE-INSTALLED-UNSUPPORTED`,
+which is what this project ships rather than a stage it passes through — so the
+class is tested here, directly, and core never loads it.
 
 **What it does not cover, measured rather than assumed:** removing
 `@register_template` entirely leaves both tests green, because loading an entry
 point yields the class whether or not the decorator ran. That agreement is
 `check_registration`'s (`E-PLUGIN-DECORATOR`), which runs wherever core loads the
 object behind a key — for a resolver or a probe that is `validate` and `run`, and
-for an installed template it is nowhere yet, which is the same refusal again.
+for an installed template it is nowhere, which is the same refusal again.
 """
 
 # One target module per group, keyed by the group core reads it under. The

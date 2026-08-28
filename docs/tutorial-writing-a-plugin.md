@@ -30,7 +30,7 @@ It answers three questions in order: **why** plugins exist, **when** you actuall
 | A plugin's **resolver** | Dispatches at `validate` and at `run` |
 | A plugin's **apparatus probe** | Dispatches, and its facts land in `provenance.apparatus` |
 | A plugin's **writer / reader** | Dispatches: the suffix resolves from the claim, and only the winning distribution is loaded |
-| A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and does not load the class behind it |
+| A plugin's **template** | Refused — `E-TEMPLATE-INSTALLED-UNSUPPORTED`. Core resolves the name from package metadata and never loads the class behind it, and that is what the project ships rather than a stage it passes through |
 
 That last row shapes the rest of this tutorial. A plugin is worth building for its **machinery** — resolvers, probes, writers — while the template that names your parameters stays in your own repo. [Route A](#route-a-a-project-local-template-end-to-end) builds that template; [Route B](#route-b-packaging-the-machinery-as-a-plugin) packages the machinery around it.
 
@@ -63,11 +63,11 @@ A template can live in three places, and [where it lives decides how it is pinne
 |---|---|---|---|
 | Core | core itself | `publishable`'s own version | `generic` is enough |
 | Your repo's `templates/*.py` | its `@register_template` argument, discovered by path | [`code_hash`](reference.md#three-hashes), which covers `templates/**` | the experiment type is **this project's** |
-| An installed distribution | a `publishable.templates` entry point | `uv.lock` | two or more projects share the experiment type |
+| An installed distribution | a `publishable.templates` entry point | `uv.lock` | **never — this home is refused**, so two projects sharing an experiment type keep a `templates/` copy each |
 
 **Start local.** `publishable generate template <name>` writes a file into `templates/`, and it is a real template in every way that matters — `init` materializes from it, `validate` enforces it, `aggregate` derives from it, `list-templates` prints its spec, `docs` renders its parameter table. Its cost and its benefit are the same fact: it is inside `code_hash`, so editing it moves the run identity, exactly as editing a step does.
 
-**Package it when a second project needs it**, or when the domain work is machinery rather than parameters — walking a DICOM archive, probing an instrument, encoding a domain file format. That machinery is also the part core genuinely cannot supply: what is required *of* a unit is identical across every field, and *how* units are found is not.
+**Package the machinery when a second project needs it** — the template itself stays local either way, since the installed home is refused — or when the domain work is machinery rather than parameters — walking a DICOM archive, probing an instrument, encoding a domain file format. That machinery is also the part core genuinely cannot supply: what is required *of* a unit is identical across every field, and *how* units are found is not.
 
 ---
 
@@ -430,7 +430,9 @@ The same config through `uv run publishable validate` prints `Installed 1 packag
 Core resolves an installed template's name from package metadata and does not load the class behind it, so naming one in a config is refused — at `init` and at `validate`:
 
 ```
-  error   E-TEMPLATE-INSTALLED-UNSUPPORTED names `plate_assay`, which publishable-plate-assay 0.1.0 registers as a `publishable.templates` entry point — but core resolves an installed template's name without importing its package, and loading one is not implemented in this build; installed templates will be honored in a later slice. Use a project-local `templates/` file or a core template for now
+  error   E-TEMPLATE-INSTALLED-UNSUPPORTED experiment_type
+          names `plate_assay`, which publishable-plate-assay 0.1.0 registers as a `publishable.templates` entry point — but core resolves an installed template's name from package metadata without importing its package, and never loads the class behind it. That is what this project ships rather than a gap waiting on a slice: keep the template in your own `templates/`, where path discovery finds it and `code_hash` covers it, and let the plugin carry the machinery — its resolvers, probes, writers and readers all dispatch from an install
+1 problem (1 error, 0 warnings)
 ```
 
 `list-templates` says the same thing where it would otherwise print a spec:
@@ -438,12 +440,12 @@ Core resolves an installed template's name from package metadata and does not lo
 ```
 ### `plate_assay`
 
-Installed, provided by `publishable-plate-assay 0.1.0` — its parameter spec is **not readable in this
-build** (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed template's name from package
+Installed, provided by `publishable-plate-assay 0.1.0` — its parameter spec is **not readable**
+(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) — core resolves an installed template's name from package
 metadata without importing the package, so there is no class here to read a `parameter_spec` off.
 ```
 
-So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway: it is testable without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does, and it is the artifact that becomes usable if that refusal is ever lifted.
+So keep the template project-local and let the plugin carry the machinery. Keep the class in the plugin anyway: it is testable without core loading it at all, which is what [Testing a plugin](#testing-a-plugin) does, and a local template that imports it is three lines. **Do not keep it waiting for the refusal to lift** — `reference.md` § Errors' row for the code states the refusal as permanent, and the price it names is the one to plan around: a template inside `code_hash` is pinned by each repository that runs it, so two repositories sharing an experiment type keep two copies and share no template identity.
 
 **A name is claimed once**, so promoting a local template to a plugin means deleting the local file. A local template beside an installed one of the same name is refused, with both providers named:
 
@@ -639,7 +641,7 @@ Restored, `3 passed`. The third test is what makes the second one mean something
 
 | Code | When | What to do |
 |---|---|---|
-| `E-TEMPLATE-INSTALLED-UNSUPPORTED` | a config's `experiment_type` names an installed plugin's template | keep the template project-local in `templates/`; ship machinery in the plugin |
+| `E-TEMPLATE-INSTALLED-UNSUPPORTED` | a config's `experiment_type` names an installed plugin's template — permanent, and [rowed in `reference.md` § Errors](reference.md#errors-validate-reports) | keep the template project-local in `templates/`; ship machinery in the plugin |
 | `E-TEMPLATE-COLLISION` | one template name claimed twice — two installs, or a local file beside an install | rename yours; when promoting a local template, delete the local file |
 | `E-PLUGIN-COLLISION` | two installs claim one resolver/probe/writer/reader name, or a writer claims a core suffix | claim a suffix or a name of your own |
 | `E-PLUGIN-DECORATOR` | a `@register_*` argument disagrees with the entry-point key that named it | make the two agree |

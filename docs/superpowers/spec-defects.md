@@ -11615,7 +11615,7 @@ analysis' own anchors.
 
 ---
 
-## OPEN — `E-TEMPLATE-INSTALLED-UNSUPPORTED` is a permanent refusal wearing the temporary family's name, its message, and its registry exemption — **Owner: unassigned, and no slice follows**
+## ~~OPEN — `E-TEMPLATE-INSTALLED-UNSUPPORTED` is a permanent refusal wearing the temporary family's name, its message, and its registry exemption~~ — **CLOSED, struck 2026-08-27 by the reclassification, which is four edits and no behaviour change**
 
 **Found 2026-08-27 by the same re-measurement, measured against `dc03ec4`.**
 
@@ -11701,3 +11701,44 @@ three documents describe it as available.
 documented in one non-normative place, but because a permanent refusal is described as temporary in the
 tool's own output, exempted from the normative error registry by a justification that has expired, and
 recommended as the right choice by two documents that never say it cannot be taken.
+
+**CLOSED 2026-08-27. The refusal is unchanged; what changed is every place that described it as temporary.**
+Four edits, each answering one of the four disagreements above, and the suite is green at 3485 passed with
+`ruff` and `mypy` clean:
+
+1. **The message.** `templates.registry.installed_template_message` — the one wording all three emit sites
+   read — states the limit without a date and names the route: *"core resolves an installed template's name
+   from package metadata without importing its package, and never loads the class behind it. That is what
+   this project ships rather than a gap waiting on a slice: keep the template in your own `templates/`,
+   where path discovery finds it and `code_hash` covers it, and let the plugin carry the machinery — its
+   resolvers, probes, writers and readers all dispatch from an install."* Measured through the real console
+   script against an installed `publishable-plate-assay 0.1.0` and an installed
+   `publishable-llm-screening 0.1.0`.
+2. **The registry row.** `reference.md` § Errors `validate` reports carries a row for the code, in the
+   table's own alphabetical position between `E-TEMPLATE-COLLISION` and `E-TEMPLATE-LOAD`, stating the
+   condition, the three surfaces, the route, and the price the route charges. The family's exemption is
+   **narrowed rather than deleted**: it still covers a temporary refusal of an unbuilt *block*, and the
+   section now says no member is temporary today. § The one config file's sentence claiming the code has no
+   row is corrected in place.
+3. **The two documents that recommended the refused home.** `reference.md` § Templates' three-places
+   paragraph and the tutorial's three-homes table both say it is refused, and the tutorial's *"use it when
+   two or more projects share the experiment type"* becomes *"never — this home is refused, so two projects
+   sharing an experiment type keep a `templates/` copy each."*
+4. **The suffix's meaning, in `CLAUDE.md`.** The § Misreadings row no longer reads the suffix as the
+   temporary family: it says to read the suffix as a claim about the feature and never about the schedule,
+   and names this code as the permanent, documented, rowed member.
+
+**The test that required the deferral is replaced by one that forbids it.**
+`test_every_unsupported_message_defers_rather_than_scolds` asserted `"later slice" in message`, which is
+the family's temporariness asserted onto its one non-temporary member.
+`test_the_surviving_unsupported_message_states_a_permanent_limit_and_names_the_route` asserts the pair
+instead — no deferral, and the `templates/` route named. **Both arms were proven able to fail**: restoring
+the deferral fails the first assertion, and deleting the route clause fails the second, each measured as
+`1 failed` with the restored message measured as `1 passed`.
+
+**Not done, and deliberately.** The identifier is unchanged — renaming it would break every pin that
+survives a wording change, which is what a stable `E-` identifier is for, and *unsupported* is true of the
+feature whatever the schedule. The tutorial's transcripts were **re-measured rather than hand-edited**: a
+`plugin new publishable-plate-assay`, installed, named in a config, and the printed output pasted back,
+which also corrected a pre-existing abridgement — the block had dropped the `experiment_type` field and the
+`1 problem (1 error, 0 warnings)` line that every sibling transcript in that file shows.

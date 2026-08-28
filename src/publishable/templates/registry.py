@@ -149,11 +149,20 @@ def template_provenance(name: str, repo_root: Path | None = None) -> str | None:
 
 def installed_template_message(name: str, claim: Claim) -> str:
     """The one wording for a name only an installed distribution's entry point
-    claims — `validate`'s finding and `generate_experiment`'s raise both read
-    this rather than each keeping its own copy, for the same reason
-    `unknown_template_message` is shared: two hard-coded literals would
-    eventually drift, and `E-TEMPLATE-UNKNOWN`'s own history (`CLAUDE.md` §
-    Misreadings) is what a second, uncoordinated emit site costs.
+    claims — `validate`'s finding, `freeze`'s refusal and
+    `generate_experiment`'s raise all read this rather than each keeping its
+    own copy, for the same reason `unknown_template_message` is shared: two
+    hard-coded literals would eventually drift, and `E-TEMPLATE-UNKNOWN`'s own
+    history (`CLAUDE.md` § Misreadings) is what a second, uncoordinated emit
+    site costs.
+
+    **It states a permanent limit and names the route, and it promised a later
+    slice until 2026-08-27.** The charter is complete, so there is no slice to
+    defer to, and a message deferring to one told a plugin author to wait for
+    something nobody is building. The refusal itself is unchanged and correct;
+    what changed is that the message, `reference.md` § Errors' registry and the
+    two three-homes tables now describe it as what it is. `docs/reference.md`
+    § Errors `validate` reports carries the row.
 
     Takes the already-resolved `claim` rather than a repo root, so building the
     message costs no second discovery — the caller has just merged, and has it
@@ -162,10 +171,12 @@ def installed_template_message(name: str, claim: Claim) -> str:
     return (
         f"names `{name}`, which {claim.provider} registers as a "
         "`publishable.templates` entry point — but core resolves an installed "
-        "template's name without importing its package, and loading one is not "
-        "implemented in this build; installed templates will be honored in a "
-        "later slice. Use a project-local `templates/` file or a core template "
-        "for now"
+        "template's name from package metadata without importing its package, "
+        "and never loads the class behind it. That is what this project ships "
+        "rather than a gap waiting on a slice: keep the template in your own "
+        "`templates/`, where path discovery finds it and `code_hash` covers "
+        "it, and let the plugin carry the machinery — its resolvers, probes, "
+        "writers and readers all dispatch from an install"
     )
 
 

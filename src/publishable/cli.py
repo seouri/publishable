@@ -5788,8 +5788,9 @@ def command_list_templates() -> int:
     Printing its spec would mean importing the package here, making this the
     one surface in the build that loads what every other one refuses to load —
     and resolving, for a listing, a name a config naming it is refused for. So
-    it prints the provider and one line saying the spec is not readable in this
-    build, citing `E-TEMPLATE-INSTALLED-UNSUPPORTED`.
+    it prints the provider and one line saying the spec is not readable, citing
+    `E-TEMPLATE-INSTALLED-UNSUPPORTED` — a permanent refusal as this project
+    ships, which is why that line names no slice.
 
     **Ruling FF rejects `H9-SCOPING.md` § 7.2's own preferred answer** —
     narrowing this to the installed set and never a project-local template.

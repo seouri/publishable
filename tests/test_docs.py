@@ -529,8 +529,8 @@ def test_an_experiment_whose_template_is_installed_contributes_a_row_saying_so(
     assert "| `ALPHA_TOKEN` | `exp-one` |" in body
     assert (
         "| _(unknown)_ | `exp-far` — its template `far_assay` is installed "
-        "(dist-assay 0.3.1), so its `required_env` is not readable in this "
-        "build (`E-TEMPLATE-INSTALLED-UNSUPPORTED`) |"
+        "(dist-assay 0.3.1), so its `required_env` is not readable "
+        "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) |"
     ) in body
 
 
@@ -1512,7 +1512,7 @@ def test_docs_writes_an_installed_claims_named_absence_into_the_FILE(
     assert "| `aaa.n` | integer | `3` | >= 1 | how many |" in templates
     assert (
         "| _(unknown)_ | `exp-far` — its template `mmm_installed` is installed "
-        "(dist-assay 0.3.1), so its `required_env` is not readable in this build "
+        "(dist-assay 0.3.1), so its `required_env` is not readable "
         "(`E-TEMPLATE-INSTALLED-UNSUPPORTED`) |"
     ) in body_of(text, "credentials")
     # And the provider written into this committed file is a DISTRIBUTION name
