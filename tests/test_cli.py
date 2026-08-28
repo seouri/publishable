@@ -7953,6 +7953,53 @@ def test_a_declared_hypothesis_gets_a_verdict(tmp_path, capsys, monkeypatch):
     assert verdict["family_size"] == 1
 
 
+def test_a_constant_hypothesis_resolves_through_a_real_run(tmp_path, capsys, monkeypatch):
+    """The end-to-end pin `cli.py`'s new `aggregated=aggregated` argument to
+    `evaluate_hypotheses` needs: `aggregated` is a required keyword with no
+    default, so a caller forgetting to pass it is a `TypeError` — but passing
+    `aggregated=None` explicitly is mypy-clean and would leave every
+    `compare: {to: constant}` hypothesis silently resolving to no observation,
+    which no other test in this file would catch, since none of them declare
+    this compare form through the real console script.
+
+    `step01_summarize_units.pred`'s per-unit value is `i + shift + extra`
+    (`_METHOD_VARYING_STEP`), so the spearman condition's own mean is
+    comfortably above 15 regardless of the exact per-unit collapse — `value:
+    10, threshold: 5` leaves a wide margin either side of the true mean so the
+    assertion is robust to that arithmetic without hand-deriving it exactly."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            {
+                "id": "above_reference",
+                "kind": "confirmatory",
+                "statement": "spearman's own mean clears a fixed reference",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "constant", "value": 10},
+                "direction": "greater",
+                "threshold": 5,
+                "evaluate_on": "observed",
+            }
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdict = run["results"]["hypotheses"][0]
+    assert verdict["id"] == "above_reference"
+    assert verdict["verdict_rests_on"] == "computed"
+    assert verdict["observed"] is not None  # `aggregated=None` resolves this to `null`
+    assert verdict["supported"] is True
+    assert verdict["family_size"] == 1
+
+
 def test_a_run_with_no_hypotheses_has_no_hypotheses_block(tmp_path, capsys, monkeypatch):
     """Absent, not empty — the rule `vs_baseline` and `contrasts` already follow."""
     import publishable.generators.experiment as experiment_gen

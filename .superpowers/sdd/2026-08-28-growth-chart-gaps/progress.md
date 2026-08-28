@@ -174,3 +174,10 @@ Task 8: review found 1 Important (fixture distinguishes 3 of 4 candidates while 
 Task 8: fix round 1/5 (1 addressed, 0 open — all four candidate behaviours now observationally
 distinct, verified by independent derivation; commits 4492018..59297df)
 Task 8: complete (commits fddf329..59297df, review clean)
+
+Task 9: review found 2 Critical, 3 Important, 2 Minor (commits ae21f78..80a4c37)
+Task 9: minor (deferred): `test_a_constant_hypothesis_where_clashes_with_no_vs_baseline_member`
+names a `by_key` collision pin but never calls `evaluate` or builds a member, and its `!= "cond:1"`
+assertion is implied by `== "const:1"` in the same test.
+Task 9: minor (deferred): `test_a_compare_to_constant_with_a_numeric_value_is_not_flagged` asserts
+only absences — it can fail, but it should be paired with something that must report.

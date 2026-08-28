@@ -387,6 +387,22 @@ def evaluate(
             else:
                 corrected_unavailable = True
             p_value_corrected = corrected.get("p_value_corrected")
+        elif _is_counted(hyp, obs) and method != "none" and key not in by_key:
+            # A counted hypothesis with no matching `Member` — today, only a
+            # `compare: {to: constant}` observation, since core builds one for
+            # every `vs_baseline`/contrast comparison but none for a constant
+            # reference. Under a real correction method this hypothesis is
+            # still IN the family (`family_size` counts it, per Decision 2's
+            # whole point) but there is no evidence here to rebuild a bound
+            # from at this family's level — the same honest gap
+            # `W-STATS-CORRECTED-THIN` reports for a family too large for its
+            # resample's draws, read through the same `corrected_unavailable`
+            # path rather than a silent fall-back to the raw, uncorrected
+            # bound. `method == "none"` is excluded: there no correction was
+            # attempted for *anyone* in the family, which is the ordinary
+            # absent-`ci95_corrected` case every other member gets too, not a
+            # gap specific to this one.
+            corrected_unavailable = True
         entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable, p_value_corrected))
         if _is_counted(hyp, obs):
             entry["family_size"] = size

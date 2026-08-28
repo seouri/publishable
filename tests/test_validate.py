@@ -6455,8 +6455,9 @@ def test_a_compare_to_constant_with_a_numeric_value_is_not_flagged(write_config_
 def test_a_compare_to_constant_with_no_value_is_refused(write_config_two_scopes):
     """`value` is required exactly when `to: constant` — its absence is the same
     kind of silent-guess hazard `E-HYPOTHESIS-THRESHOLD` refuses for `threshold`:
-    without this check the hypothesis validates clean and comes back
-    `supported: null` after the whole run is spent."""
+    without this check `verdict_for` silently treats it as no constant at all
+    and decides on the metric's raw value instead of the declared reference,
+    with nothing in the record to say the constant was never applied."""
     found = codes(
         write_config_two_scopes(
             {
@@ -6658,6 +6659,36 @@ def test_a_hypothesis_naming_the_baseline_itself_is_refused(write_config_two_sco
         )
     )
     assert "E-HYPOTHESIS-CONDITION" in found
+
+
+def test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged(
+    write_config_two_scopes,
+):
+    """Finding 3's fix: `vs_baseline` has no entry for the baseline against
+    itself, but `to: constant` never reads `vs_baseline` — `hypotheses.resolve`
+    reads `aggregated`, which holds the baseline's own index like any other
+    condition's. "The baseline arm's AUROC exceeds chance" is a real,
+    resolvable claim and must not be refused the way its `to: baseline`
+    sibling above correctly is."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "baseline", "to": "constant", "value": 0.5},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-CONDITION" not in found
+    assert "E-HYPOTHESIS-BASELINE" not in found
 
 
 def test_a_hypothesis_naming_a_declared_condition_is_not_flagged(write_config_two_scopes):

@@ -5855,9 +5855,13 @@ def _check_hypotheses(
     **`compare.condition` is resolved against the declared labels**, the job
     `_check_contrasts` already does for `of`/`against` with the same `expand(doc)`
     machinery. A typo'd label validated clean and came back `observed: null,
-    supported: null`; so did naming the baseline's own label, which
-    `vs_baseline` has no entry for by construction. Both are
-    `E-HYPOTHESIS-CONDITION`.
+    supported: null`; so did naming the baseline's own label under `to: baseline`,
+    which `vs_baseline` has no entry for by construction. Both are
+    `E-HYPOTHESIS-CONDITION` — **except naming the baseline's own label under
+    `to: constant`**, which is a real, resolvable claim ("the baseline arm's
+    AUROC exceeds chance"): `hypotheses.resolve` reads `aggregated` for that
+    form, not `vs_baseline`, and `aggregated` holds the baseline's own index
+    exactly as it holds every other condition's.
     """
     entries = doc.get("hypotheses")
     if not isinstance(entries, list) or not entries:
@@ -5969,10 +5973,12 @@ def _check_hypotheses(
                         "E-HYPOTHESIS-COMPARE-VALUE",
                         f"hypotheses[{i}].compare.value",
                         f"is `{value}`; `to: constant` names a fixed reference and needs a "
-                        "number to compare against — `hypotheses.resolve` reads it as the "
-                        "constant the metric's own value is tested against, and a missing or "
-                        "non-numeric value leaves the verdict `supported: null` after the "
-                        "whole run is spent, with nothing in the record saying why",
+                        "number to compare against — `hypotheses.verdict_for` subtracts it "
+                        "from the tested number before comparing to `threshold`, and its "
+                        "guard against a missing or non-numeric value is defensive rather "
+                        "than a diagnostic: left unrefused, the comparison silently runs "
+                        "against the metric's raw value instead of the declared reference, "
+                        "with nothing in the record saying the constant was never applied",
                     )
             # `to: baseline` is the ordinary spelling, but `hypotheses.resolve`
             # reads `compare.condition` as a baseline comparison whether or not
@@ -6027,7 +6033,15 @@ def _check_hypotheses(
                         "null` after the whole run is spent, exactly the unresolvable-label "
                         "class `E-STATS-CONTRAST-UNKNOWN` refuses for a contrast's sides",
                     )
-                elif named in baseline_labels:
+                elif named in baseline_labels and compare_to != "constant":
+                    # `vs_baseline` holds one entry per *other* condition, so
+                    # naming the baseline against itself resolves to no
+                    # observation under `to: baseline` — but `to: constant`
+                    # never reads `vs_baseline` at all. `hypotheses.resolve`
+                    # reads `aggregated`, which holds every condition's own
+                    # value INCLUDING the baseline's, so "the baseline arm's
+                    # AUROC exceeds chance" is a real, resolvable claim this
+                    # exclusion is what makes writable.
                     c.error(
                         "E-HYPOTHESIS-CONDITION",
                         f"hypotheses[{i}].compare.condition",

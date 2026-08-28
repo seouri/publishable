@@ -60,3 +60,64 @@ formatted); `uv run mypy` (no issues, 56 files).
    it silently.
 2. Did not add a design-time guard forbidding `compare.condition` + `compare.contrast` together for
    the constant form — same permissive precedent as the existing baseline/contrast forms.
+
+---
+
+## Fix round 1 of 5
+
+**Status:** done, all five findings addressed.
+
+**Finding 1 (Critical, counted but never corrected).** Chose the sanctioned fallback: no `Member`
+exists for a constant-referenced observation, so `hypotheses.evaluate` now sets
+`corrected_unavailable=True` for any counted hypothesis whose `(where, step, metric)` key is absent
+from `by_key`, whenever `method != "none"`. Under `correction: none` the entry is unchanged (absent
+`ci95_corrected`, matching every other uncorrected member); under a real method a bound test now
+reads `supported: null` / `ci95_corrected: null` instead of the raw, uncorrected bound.
+Rebuilding a real `Member` from the condition's own resample pool was not attempted: `stats.py`'s
+per-condition intervals (`t_over_units`/`percentile_of_derived`) don't retain their draws past
+`summarize_step`, so building one would mean plumbing raw per-unit or resample state through to
+`hypotheses.evaluate` — out of scope for this fix round. Updated the one existing test that had
+pinned the old (now-acknowledged-wrong) behavior
+(`test_a_counted_hypothesis_with_no_matching_member_is_corrected_unavailable`, renamed) and added
+`test_a_constant_hypothesis_is_corrected_unavailable_on_a_real_correction_method` /
+`..._under_no_correction_gets_the_ordinary_absent_field`.
+
+**Finding 2 (Critical, doc over-promise).** Fixed the general sentence at reference.md ~3612 to carve
+out the constant form's exception, changed the `above_chance` example's `evaluate_on` to `observed`
+(the only evaluate_on that isn't gated by the missing-Member fallback), and added a paragraph after
+the worked example spelling out exactly when a constant hypothesis reads `null` under correction.
+
+**Finding 3 (Important, baseline arm unwritable).** `E-HYPOTHESIS-CONDITION`'s "names the baseline
+itself" branch now excludes `compare_to == "constant"` — `resolve` never reads `vs_baseline` for that
+form, so the baseline's own `aggregated` entry is a real observation. Updated the docstring, the §
+Errors row, and added `test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged`
+(validate.py) and `test_a_constant_hypothesis_can_name_the_baseline_arm` (hypotheses.py).
+
+**Finding 4 (Important, wrong message).** `E-HYPOTHESIS-COMPARE-VALUE`'s message no longer claims
+`supported: null`; it now says what actually happens — `verdict_for` silently treats a bad `value` as
+no constant at all and compares the metric's raw value instead. Fixed the matching test docstring too.
+
+**Finding 5 (Important, thin coverage).** Replaced both bound tests with fixtures where `observed`,
+`ci95_lower` and `ci95_upper` disagree (added a fourth test, `..._on_observed_disagrees_with_its_own_bounds`,
+making the three-way disagreement explicit), and added
+`test_the_briefs_own_worked_example_auroc_exceeds_0_5_by_at_least_0_02` instantiating the brief's own
+`value: 0.5, threshold: 0.02` example. Added the end-to-end pin
+`test_a_constant_hypothesis_resolves_through_a_real_run` (test_cli.py) running a real `run` through
+the console script.
+
+**Mutation evidence (all: backup → mutate → red → restore from backup → re-run to confirm green,
+never `git status`):**
+- Removed the Finding-1 `elif` branch entirely → `test_a_counted_hypothesis_with_no_matching_member_is_corrected_unavailable`, `..._still_reports_observed`, and `test_a_constant_hypothesis_is_corrected_unavailable_on_a_real_correction_method` all failed (40/43 passed) → restored → 43/43 green.
+- Reverted Finding 3's `compare_to != "constant"` exclusion → `test_a_hypothesis_naming_the_baseline_itself_under_to_constant_is_not_flagged` failed → restored → green.
+- **The exact mutant the reviewer named**: gated the `value`-subtraction in `verdict_for` on `evaluate_on == "observed"` → `test_a_constant_hypothesis_on_ci95_lower_is_superiority` and `..._on_ci95_upper_is_non_inferiority` both failed (43/45 passed) → restored → 45/45 green. (Confirms the earlier fixtures were blind to exactly this bug, as Finding 5 said, and the new ones are not.)
+- Mutated `cli.py:4845`'s `aggregated=aggregated` to `aggregated=None` → `test_a_constant_hypothesis_resolves_through_a_real_run` failed (`verdict["observed"]` was `None`) → restored → green.
+
+**Verification:** `uv run pytest tests/test_hypotheses.py tests/test_validate.py` (857 passed),
+`tests/test_cli.py -k hypothes` (8 passed); `uv run ruff check .` (all checks passed);
+`uv run ruff format --check .` (101 files formatted); `uv run mypy` (no issues, 56 files).
+
+**Concerns:** Finding 1's fallback means a constant-referenced hypothesis's bound is *never*
+correctable today (not just occasionally) — every such hypothesis under a real correction method and
+a bound `evaluate_on` reads `null`. That is honest but means `evaluate_on: observed` is, in practice,
+the only usable form under `correction: holm`/`bonferroni`/`fdr_bh`; a future slice building a real
+resample-backed `Member` for the constant form would be the way to lift this.

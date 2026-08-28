@@ -696,12 +696,19 @@ def test_an_unresolvable_confirmatory_hypothesis_is_not_counted():
     assert by_id["missing"]["supported"] is None
 
 
-def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
+def test_a_counted_hypothesis_with_no_matching_member_is_corrected_unavailable():
     """`members` is the caller's own bookkeeping and may not carry an entry for
-    every counted, computed hypothesis (a bookkeeping mismatch between how
-    `cli` built `members` and what a hypothesis names). The hypothesis is still
-    judged, on its raw bound rather than a corrected one it has no evidence to
-    rebuild."""
+    every counted, computed hypothesis — a bookkeeping mismatch between how
+    `cli` built `members` and what a hypothesis names, or (as of the
+    `compare: {to: constant}` form) a hypothesis kind that never gets a
+    `Member` built for it at all. Under a real correction method the
+    hypothesis is still IN the family (`family_size` counts it) but there is
+    no evidence to rebuild a bound at this family's level, so a bound test
+    reads `supported: null` and `ci95_corrected: null` — the same honest gap a
+    too-thin family reports — rather than silently deciding on the raw,
+    uncorrected bound at a level nobody asked for. Reading `supported: true`
+    here (the previous behaviour) was over-support: a verdict that looks
+    corrected and is not."""
     hyp = {
         "id": "orphan",
         "kind": "confirmatory",
@@ -723,8 +730,39 @@ def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
         parameters_hash="sha256:1a2b",
     )
     assert got[0]["family_size"] == 1
+    assert got[0]["supported"] is None
+    assert got[0]["observed"]["ci95_corrected"] is None
+
+
+def test_a_counted_hypothesis_with_no_matching_member_still_reports_observed():
+    """The `corrected_unavailable` gate is bound-specific: `_tested_number`
+    only refuses a non-`observed` `evaluate_on` under it, so the same orphaned
+    hypothesis evaluated on the point estimate is still a real, uncorrected-
+    but-honest verdict — correction only ever tightens a bound, never the
+    point estimate a `verdict_evaluated_on: observed` hypothesis reads."""
+    hyp = {
+        "id": "orphan",
+        "kind": "confirmatory",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
+        summary={},
+        aggregated=None,
+        members=[],
+        method="bonferroni",
+        parameters_hash="sha256:1a2b",
+    )
+    assert got[0]["family_size"] == 1
     assert got[0]["supported"] is True
-    assert "ci95_corrected" not in (got[0]["observed"] or {})
+    assert got[0]["observed"]["ci95_corrected"] is None
 
 
 def _thin_member(where, step, metric, delta, ci95):
@@ -933,6 +971,30 @@ def test_a_constant_hypothesis_can_still_name_its_condition():
     assert got.rests_on == "computed"
 
 
+def test_a_constant_hypothesis_can_name_the_baseline_arm():
+    """Finding 3: `vs_baseline` has no entry for the baseline against itself,
+    but `to: constant` never reads `vs_baseline` — it reads `aggregated`,
+    which holds every condition's own value, baseline included. `label_to_index`
+    maps `"arm=a"` (this fixture's stand-in for a baseline label) to index 0,
+    and `_CONST_AGGREGATED[0]` is a real block, so this must resolve rather
+    than come back `None` the way the `to: baseline` form does for the same
+    label."""
+    got = resolve(
+        {
+            "id": "h",
+            "metric": "step03_screen.auroc",
+            "compare": {"condition": "arm=a", "to": "constant", "value": 0.5},
+        },
+        label_to_index={"arm=a": 0, "arm=b": 1},
+        vs_baseline=None,
+        contrasts=None,
+        summary=None,
+        aggregated=_CONST_AGGREGATED,
+    )
+    assert got.where == "const:0"
+    assert got.block == {"value": 0.62, "ci95": [0.55, 0.69]}
+
+
 def test_a_constant_hypothesis_where_clashes_with_no_vs_baseline_member():
     """`where` is prefixed `const:`, distinct from `cond:` — the same condition
     index can carry both a `vs_baseline` delta and a constant-referenced
@@ -1005,12 +1067,22 @@ def test_auroc_below_chance_is_supported_false_same_constant():
 def test_a_constant_hypothesis_on_ci95_lower_is_superiority():
     """`evaluate_on: ci95_lower` against a constant is the superiority form:
     the whole interval must clear the reference, not just the point estimate.
-    0.55 - 0.5 = 0.05 > 0.0."""
+
+    Fixture chosen so `observed`, `ci95_lower` and `ci95_upper` give THREE
+    DIFFERENT verdicts on the same block and the same threshold/direction —
+    0.62 - 0.5 = 0.12 > 0.05 (observed: True), 0.53 - 0.5 = 0.03 > 0.05
+    (ci95_lower: False), 0.71 - 0.5 = 0.21 > 0.05 (ci95_upper: True) — so no
+    single-bug implementation (ignoring `value`, ignoring `evaluate_on`,
+    shifting only the point estimate) can pass this test and its
+    `ci95_upper` sibling below by coincidence. A mutant that subtracts
+    `value` only when `evaluate_on == "observed"` compares the RAW lower
+    bound (0.53) against `threshold` (0.05) instead — 0.53 > 0.05 is True,
+    disagreeing with the correct `False` this test asserts."""
     obs = Observation(
         where="const:0",
         step="step03_screen",
         metric="auroc",
-        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        block={"value": 0.62, "ci95": [0.53, 0.71]},
         rests_on="computed",
     )
     hyp = {
@@ -1018,27 +1090,54 @@ def test_a_constant_hypothesis_on_ci95_lower_is_superiority():
         "metric": "step03_screen.auroc",
         "compare": {"to": "constant", "value": 0.5},
         "direction": "greater",
-        "threshold": 0.0,
+        "threshold": 0.05,
         "evaluate_on": "ci95_lower",
     }
     got = verdict_for(hyp, obs, None)
-    assert got["supported"] is True
+    assert got["supported"] is False
     assert got["verdict_evaluated_on"] == "ci95_lower"
 
 
-def test_a_constant_hypothesis_on_ci95_upper_is_non_inferiority():
-    """`evaluate_on: ci95_upper` with `direction: less` is the non-inferiority
-    form against a constant: 0.69 - 0.5 = 0.19, which is NOT less than the
-    0.05 threshold, so this fails — the upper bound is too far from the
-    reference for the equivalence claim, and `evaluate_on: observed` on the
-    same block (0.62 - 0.5 = 0.12, also not less than 0.05) would agree, but
-    the point is that this reads the bound `evaluate_on` names, not the point
-    estimate."""
+def test_a_constant_hypothesis_on_observed_disagrees_with_its_own_bounds():
+    """The `observed` sibling of the fixture above: 0.62 - 0.5 = 0.12 > 0.05
+    is `True`, disagreeing with `ci95_lower`'s `False` and `ci95_upper`'s
+    `True` on the very same block — the three-way disagreement is what makes
+    `evaluate_on` legible rather than a rename of one already-correct
+    number."""
     obs = Observation(
         where="const:0",
         step="step03_screen",
         metric="auroc",
-        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        block={"value": 0.62, "ci95": [0.53, 0.71]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "h",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.05,
+        "evaluate_on": "observed",
+    }
+    got = verdict_for(hyp, obs, None)
+    assert got["supported"] is True
+    assert got["verdict_evaluated_on"] == "observed"
+
+
+def test_a_constant_hypothesis_on_ci95_upper_is_non_inferiority():
+    """`evaluate_on: ci95_upper` with `direction: less` is the non-inferiority
+    form against a constant: 0.58 - 0.5 = 0.08 < 0.15, so this IS supported —
+    chosen so the mutant that only subtracts `value` for `evaluate_on ==
+    "observed"` compares the RAW upper bound (0.58) against `threshold`
+    (0.15) instead — 0.58 < 0.15 is `False`, disagreeing with the correct
+    `True` this test asserts. The earlier fixture ([0.55, 0.69] against
+    threshold 0.05) could not distinguish the two: both the shifted and the
+    raw upper bound landed on the same side of that threshold."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.55, "ci95": [0.52, 0.58]},
         rests_on="computed",
     )
     hyp = {
@@ -1046,12 +1145,39 @@ def test_a_constant_hypothesis_on_ci95_upper_is_non_inferiority():
         "metric": "step03_screen.auroc",
         "compare": {"to": "constant", "value": 0.5},
         "direction": "less",
-        "threshold": 0.05,
+        "threshold": 0.15,
         "evaluate_on": "ci95_upper",
     }
     got = verdict_for(hyp, obs, None)
-    assert got["supported"] is False
+    assert got["supported"] is True
     assert got["verdict_evaluated_on"] == "ci95_upper"
+
+
+def test_the_briefs_own_worked_example_auroc_exceeds_0_5_by_at_least_0_02():
+    """The design's own instantiation, never exercised until now:
+    `value: 0.5, threshold: 0.02, direction: greater` reads "AUROC exceeds
+    0.5 by at least 0.02" — 0.53 - 0.5 = 0.03 > 0.02 (supported), while the
+    same observed value against `threshold: 0.05` (0.03 > 0.05 is False)
+    would not be — proving `threshold` and `value` are independently live
+    rather than one having silently folded into the other."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.53, "ci95": [0.48, 0.58]},
+        rests_on="computed",
+    )
+    supported_hyp = {
+        "id": "above_chance",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.02,
+        "evaluate_on": "observed",
+    }
+    assert verdict_for(supported_hyp, obs, None)["supported"] is True
+    stricter_hyp = {**supported_hyp, "threshold": 0.05}
+    assert verdict_for(stricter_hyp, obs, None)["supported"] is False
 
 
 def test_a_constant_hypothesis_joins_the_family_and_grows_its_size():
@@ -1096,3 +1222,67 @@ def test_a_constant_hypothesis_joins_the_family_and_grows_its_size():
     assert by_id["b"]["verdict_rests_on"] == "computed"
     assert by_id["b"]["supported"] is True
     assert by_id["a"]["family_size"] == 2
+
+
+def test_a_constant_hypothesis_is_corrected_unavailable_on_a_real_correction_method():
+    """Finding 1's fix: no `Member` exists for a constant-referenced
+    observation, so under a real correction method (`holm`, here) the
+    hypothesis is counted into `family_size` — Decision 2's whole point — but
+    a bound test cannot rebuild a corrected interval from nothing, and reads
+    `supported: null` / `ci95_corrected: null` rather than silently deciding
+    on the raw bound at the wrong level."""
+    hyp = {
+        "id": "above_chance",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert got["family_size"] == 1
+    assert got["supported"] is None
+    assert got["observed"]["ci95_corrected"] is None
+
+
+def test_a_constant_hypothesis_under_no_correction_gets_the_ordinary_absent_field():
+    """`method: "none"` means no correction was attempted for anyone in the
+    family, constant-referenced or not — the ordinary absent-`ci95_corrected`
+    case, not the honest-gap `null` finding 1's fix introduces. Distinguishing
+    the two is the point: `null` says a level was demanded and could not be
+    met, absent says none was demanded at all."""
+    hyp = {
+        "id": "above_chance",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
+    got = evaluate(
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[],
+        method="none",
+        parameters_hash="sha256:1a2b",
+    )[0]
+    assert got["family_size"] == 1
+    assert "ci95_corrected" not in (got["observed"] or {})
+    # ci95_lower: 0.55 - 0.5 = 0.05 > 0.0, raw bound, no correction claimed
+    assert got["supported"] is True
