@@ -4842,6 +4842,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 for r in results
                 if r.execution.scope == "summary"
             },
+            aggregated=aggregated,
             members=comparison_members,
             method=correction_method,
             parameters_hash=ph,

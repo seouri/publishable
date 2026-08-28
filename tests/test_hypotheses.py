@@ -35,13 +35,20 @@ _SUMMARY = {
 }
 
 
-def _resolve(hyp):
+_AGGREGATED = {
+    0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}},
+    1: {"step03_analyze": {"r": {"value": 0.44, "ci95": [0.35, 0.53]}}},
+}
+
+
+def _resolve(hyp, aggregated=_AGGREGATED):
     return resolve(
         hyp,
         label_to_index={"method=spearman": 1},
         vs_baseline=_VS_BASELINE,
         contrasts=_CONTRASTS,
         summary=_SUMMARY,
+        aggregated=aggregated,
     )
 
 
@@ -107,6 +114,7 @@ def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():
         vs_baseline=None,
         contrasts=None,
         summary={"step04_agreement": {"bare": "high"}},
+        aggregated=None,
     )
     assert got.block is None
     assert (
@@ -456,6 +464,7 @@ def test_only_confirmatory_computed_hypotheses_are_counted():
         vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
         summary={},
+        aggregated=None,
         members=[_member("contrast:x", "s", "m", 0.1, (0.01, 0.19))],
         method="holm",
         parameters_hash="sha256:1a2b",
@@ -495,6 +504,7 @@ def test_a_reported_estimate_hypothesis_is_evaluated_but_never_counted():
                 }
             }
         },
+        aggregated=None,
         members=[],
         method="holm",
         parameters_hash="sha256:1a2b",
@@ -524,6 +534,7 @@ def test_every_verdict_carries_the_hash_that_declared_it():
         vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
         summary={},
+        aggregated=None,
         members=[],
         method="none",
         parameters_hash="sha256:1a2b",
@@ -567,6 +578,7 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
             }
         ],
         summary={},
+        aggregated=None,
         members=[
             _member("contrast:x", "s", "m1", 0.10, (0.01, 0.19), decl=0),
             _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29), decl=1),
@@ -626,6 +638,7 @@ def test_p_value_corrected_is_computed_at_the_hypothesis_familys_own_size():
             }
         ],
         summary={},
+        aggregated=None,
         members=[
             _p_member("m1", 0.05, 0),
             _p_member("m2", 0.05, 1),
@@ -672,6 +685,7 @@ def test_an_unresolvable_confirmatory_hypothesis_is_not_counted():
         vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
         summary={},
+        aggregated=None,
         members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19))],
         method="bonferroni",
         parameters_hash="sha256:1a2b",
@@ -703,6 +717,7 @@ def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
         vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
         summary={},
+        aggregated=None,
         members=[],
         method="bonferroni",
         parameters_hash="sha256:1a2b",
@@ -750,6 +765,7 @@ def _thin_verdict(evaluate_on, method="holm", threshold=0.0):
         vs_baseline=None,
         contrasts=_THIN_CONTRASTS,
         summary={},
+        aggregated=None,
         members=[_thin_member("contrast:x", "s", "m", 0.10, (0.01, 0.19))],
         method=method,
         parameters_hash="sha256:1a2b",
@@ -840,6 +856,7 @@ def test_a_counted_hypothesis_on_a_p_only_member_records_an_unavailable_correcte
         vs_baseline=None,
         contrasts=[{"id": "y", "s": {"m": {"delta": 0.10}}}],
         summary={},
+        aggregated=None,
         members=[p_only_member],
         method="holm",
         parameters_hash="sha256:1a2b",
@@ -847,3 +864,235 @@ def test_a_counted_hypothesis_on_a_p_only_member_records_an_unavailable_correcte
     assert got["family_size"] == 1
     assert got["observed"]["ci95_corrected"] is None
     assert got["supported"] is True
+
+
+# ---- `compare: {to: constant, value: N}` — Task 9 ----------------------------
+
+_CONST_AGGREGATED = {
+    0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}},
+    1: {"step03_screen": {"auroc": {"value": 0.58, "ci95": [0.50, 0.66]}}},
+}
+
+
+def _resolve_const(hyp, aggregated=_CONST_AGGREGATED):
+    return resolve(
+        hyp,
+        label_to_index={"arm=b": 1},
+        vs_baseline=None,
+        contrasts=None,
+        summary=None,
+        aggregated=aggregated,
+    )
+
+
+def test_a_constant_hypothesis_with_one_condition_reads_its_sole_block():
+    """No `condition` named, and the run declares exactly one condition — the
+    only case where omitting `condition` resolves to something, on the same
+    reasoning `E-HYPOTHESIS-BASELINE` gives for refusing a silent default
+    elsewhere: with more than one condition, a bare `{to: constant}` has no way
+    to say which one is meant."""
+    got = _resolve_const(
+        {"id": "h", "metric": "step03_screen.auroc", "compare": {"to": "constant", "value": 0.5}},
+        aggregated={0: _CONST_AGGREGATED[0]},
+    )
+    assert got == Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        rests_on="computed",
+    )
+
+
+def test_a_constant_hypothesis_with_several_conditions_and_no_condition_named_has_no_block():
+    """Ambiguous rather than guessed: `label_to_index` has two entries here, so
+    a bare `{to: constant}` would otherwise have to pick one silently. It picks
+    none, and the verdict reads `supported: null` rather than a number nobody
+    can trace to a declared condition."""
+    got = _resolve_const(
+        {"id": "h", "metric": "step03_screen.auroc", "compare": {"to": "constant", "value": 0.5}}
+    )
+    assert got.block is None
+    assert got.where is None
+    assert got.rests_on == "computed"
+
+
+def test_a_constant_hypothesis_can_still_name_its_condition():
+    """`condition` travels with `to: constant` exactly as it does with `to:
+    baseline` — resolved by the same `label_to_index`, just against `aggregated`
+    rather than `vs_baseline`."""
+    got = _resolve_const(
+        {
+            "id": "h",
+            "metric": "step03_screen.auroc",
+            "compare": {"condition": "arm=b", "to": "constant", "value": 0.5},
+        }
+    )
+    assert got.where == "const:1"
+    assert got.block == {"value": 0.58, "ci95": [0.50, 0.66]}
+    assert got.rests_on == "computed"
+
+
+def test_a_constant_hypothesis_where_clashes_with_no_vs_baseline_member():
+    """`where` is prefixed `const:`, distinct from `cond:` — the same condition
+    index can carry both a `vs_baseline` delta and a constant-referenced
+    hypothesis on the metric's own value, and `evaluate`'s `by_key` must never
+    confuse the two. A mutation that resolved this form to `cond:{index}`
+    instead would pass every other test in this file and only show up here,
+    against a family that also has a `cond:1` member for the same step/metric."""
+    got = _resolve_const(
+        {
+            "id": "h",
+            "metric": "step03_screen.auroc",
+            "compare": {"condition": "arm=b", "to": "constant", "value": 0.5},
+        }
+    )
+    assert got.where != "cond:1"
+    assert got.where == "const:1"
+
+
+def test_auroc_exceeds_chance_is_supported_true():
+    """The design's own example: "AUROC exceeds chance" is `value: 0.5,
+    threshold: 0.0, direction: greater` against an observed AUROC of 0.62 —
+    0.62 - 0.5 = 0.12 > 0.0."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "above_chance",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    got = verdict_for(hyp, obs, None)
+    assert got["supported"] is True
+    assert got["verdict_rests_on"] == "computed"
+    assert got["observed"]["value"] == 0.62  # the real value, not the shifted one
+
+
+def test_auroc_below_chance_is_supported_false_same_constant():
+    """Same constant, an observation on the other side of it — the pair proves
+    `value` actually enters the arithmetic rather than being a documented,
+    unread field: with `value` ignored, both this test and the one above would
+    read the same raw threshold comparison and could not disagree."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.44, "ci95": [0.37, 0.51]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "above_chance",
+        "kind": "confirmatory",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
+    got = verdict_for(hyp, obs, None)
+    assert got["supported"] is False
+
+
+def test_a_constant_hypothesis_on_ci95_lower_is_superiority():
+    """`evaluate_on: ci95_lower` against a constant is the superiority form:
+    the whole interval must clear the reference, not just the point estimate.
+    0.55 - 0.5 = 0.05 > 0.0."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "h",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
+    got = verdict_for(hyp, obs, None)
+    assert got["supported"] is True
+    assert got["verdict_evaluated_on"] == "ci95_lower"
+
+
+def test_a_constant_hypothesis_on_ci95_upper_is_non_inferiority():
+    """`evaluate_on: ci95_upper` with `direction: less` is the non-inferiority
+    form against a constant: 0.69 - 0.5 = 0.19, which is NOT less than the
+    0.05 threshold, so this fails — the upper bound is too far from the
+    reference for the equivalence claim, and `evaluate_on: observed` on the
+    same block (0.62 - 0.5 = 0.12, also not less than 0.05) would agree, but
+    the point is that this reads the bound `evaluate_on` names, not the point
+    estimate."""
+    obs = Observation(
+        where="const:0",
+        step="step03_screen",
+        metric="auroc",
+        block={"value": 0.62, "ci95": [0.55, 0.69]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "h",
+        "metric": "step03_screen.auroc",
+        "compare": {"to": "constant", "value": 0.5},
+        "direction": "less",
+        "threshold": 0.05,
+        "evaluate_on": "ci95_upper",
+    }
+    got = verdict_for(hyp, obs, None)
+    assert got["supported"] is False
+    assert got["verdict_evaluated_on"] == "ci95_upper"
+
+
+def test_a_constant_hypothesis_joins_the_family_and_grows_its_size():
+    """The whole gain per Decision 2: `verdict_rests_on: computed` and the
+    entry carries `family_size`/`family`, exactly like a baseline or contrast
+    hypothesis — unlike the `reported` route it replaces, which carries
+    neither."""
+    hyps = [
+        {
+            "id": "a",
+            "kind": "confirmatory",
+            "metric": "s.m",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        },
+        {
+            "id": "b",
+            "kind": "confirmatory",
+            "metric": "step03_screen.auroc",
+            "compare": {"to": "constant", "value": 0.5},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        },
+    ]
+    got = evaluate(
+        hyps,
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
+        summary={},
+        aggregated={0: {"step03_screen": {"auroc": {"value": 0.62, "ci95": [0.55, 0.69]}}}},
+        members=[_member("contrast:x", "s", "m", 0.1, (0.01, 0.19))],
+        method="holm",
+        parameters_hash="sha256:1a2b",
+    )
+    by_id = {e["id"]: e for e in got}
+    assert by_id["b"]["family_size"] == 2
+    assert by_id["b"]["family"] == {"hypotheses": 2}
+    assert by_id["b"]["verdict_rests_on"] == "computed"
+    assert by_id["b"]["supported"] is True
+    assert by_id["a"]["family_size"] == 2

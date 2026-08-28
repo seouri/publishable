@@ -6426,6 +6426,102 @@ def test_a_compare_to_naming_another_condition_gets_one_code_not_two(
     assert "E-HYPOTHESIS-BASELINE" not in found
 
 
+def test_a_compare_to_constant_with_a_numeric_value_is_not_flagged(write_config_two_scopes):
+    """The third `compare.to` value, alongside `baseline`. `step01_measure` is
+    `repeat`-scoped (non-summary), so this is a well-formed constant-referenced
+    hypothesis and none of `E-HYPOTHESIS-COMPARE-TO`, `E-HYPOTHESIS-COMPARE-VALUE`
+    or `E-HYPOTHESIS-FORM` should fire."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"to": "constant", "value": 0.5},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-COMPARE-TO" not in found
+    assert "E-HYPOTHESIS-COMPARE-VALUE" not in found
+    assert "E-HYPOTHESIS-FORM" not in found
+
+
+def test_a_compare_to_constant_with_no_value_is_refused(write_config_two_scopes):
+    """`value` is required exactly when `to: constant` — its absence is the same
+    kind of silent-guess hazard `E-HYPOTHESIS-THRESHOLD` refuses for `threshold`:
+    without this check the hypothesis validates clean and comes back
+    `supported: null` after the whole run is spent."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"to": "constant"},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-COMPARE-VALUE" in found
+
+
+def test_a_compare_to_constant_with_a_non_numeric_value_is_refused(write_config_two_scopes):
+    found = codes(
+        write_config_two_scopes(
+            {
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"to": "constant", "value": "high"},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-COMPARE-VALUE" in found
+
+
+def test_a_summary_metric_compared_to_a_constant_is_still_form_refused(write_config_two_scopes):
+    """`to: constant` does not exempt a `scope: summary` metric from
+    `E-HYPOTHESIS-FORM`: a summary metric is one value per run and takes no
+    `compare` at all, constant-referenced or not. `value` is present and
+    numeric, so `E-HYPOTHESIS-COMPARE-VALUE` must not also fire — one fault,
+    one code."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step02_combine.s",
+                        "compare": {"to": "constant", "value": 0.5},
+                        "direction": "greater",
+                        "threshold": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-FORM" in found
+    assert "E-HYPOTHESIS-COMPARE-VALUE" not in found
+
+
 def test_a_sweep_without_a_baseline_still_needs_one_for_a_baseline_comparison(
     write_config_two_scopes,
 ):

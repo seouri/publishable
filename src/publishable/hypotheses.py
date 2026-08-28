@@ -47,8 +47,9 @@ def resolve(
     vs_baseline: dict[int, dict[str, dict[str, Any]]] | None,
     contrasts: list[dict[str, Any]] | None,
     summary: dict[str, dict[str, Any]] | None,
+    aggregated: dict[int, dict[str, dict[str, Any]]] | None,
 ) -> Observation:
-    """The one number this hypothesis is about, from one of three places.
+    """The one number this hypothesis is about, from one of four places.
 
     `reference.md` § What a hypothesis is tested against: "`metric` is required
     in every form, because `compare` says *where* and never *what*." A contrast
@@ -60,6 +61,19 @@ def resolve(
     is the string `cli` gave the `correction.Member` it built for that
     condition. `label_to_index` is therefore the caller's job, not this
     module's: a pure resolver has no run to look the mapping up in.
+
+    **`compare: {to: constant, value: N}` reads the metric's own per-condition
+    block from `aggregated`, not a delta.** `condition` may still be given
+    (validated the same way the baseline form's is) to pick which of several
+    conditions is meant; absent, it resolves against the sole condition when
+    the run declares exactly one, and to nothing otherwise — a silent default
+    to "the first condition" would decide what a pre-registered hypothesis
+    tested rather than what the config declared, the same reasoning
+    `E-HYPOTHESIS-BASELINE` already rests on for the bare `{condition: X}`
+    form. `where` is prefixed `const:`, distinct from `cond:` and `contrast:`,
+    because the same condition can carry both a `vs_baseline` delta and a
+    constant-referenced hypothesis on its own value, and the two must never
+    collide in `by_key`.
     """
     step, _, metric = str(hyp.get("metric", "")).partition(".")
     compare = hyp.get("compare")
@@ -72,6 +86,25 @@ def resolve(
             metric=metric,
             block=block if isinstance(block, dict) else None,
             rests_on="reported",
+        )
+
+    if compare.get("to") == "constant":
+        if "condition" in compare:
+            index = label_to_index.get(str(compare.get("condition")))
+        else:
+            agg = aggregated or {}
+            index = next(iter(agg)) if len(agg) == 1 else None
+        if index is None:
+            return Observation(
+                where=None, step=step, metric=metric, block=None, rests_on="computed"
+            )
+        found = (aggregated or {}).get(index, {}).get(step, {}).get(metric)
+        return Observation(
+            where=f"const:{index}",
+            step=step,
+            metric=metric,
+            block=found if isinstance(found, dict) else None,
+            rests_on="computed",
         )
 
     if "contrast" in compare:
@@ -238,9 +271,22 @@ def verdict_for(
     names three bounds and none is a p-value, so it travels straight through to
     `_observed_block` for a reader to see, and never through the comparison
     this function decides.
+
+    **`compare: {to: constant, value: N}` shifts `number` by the constant,
+    once, after `_tested_number` returns** — `threshold` stays the decision
+    boundary and `value` the reference, so "exceeds 0.5 by at least 0.02" is
+    `value: 0.5, threshold: 0.02, direction: greater`, never `threshold: 0.52`
+    with the constant folded in and lost from the record. `observed` itself
+    is untouched: a reader sees the metric's real value and interval, and only
+    the comparison this function makes is against the shifted number.
     """
     evaluate_on = str(hyp.get("evaluate_on") or "observed")
     number = _tested_number(obs, evaluate_on, bounds, corrected_unavailable)
+    compare = hyp.get("compare")
+    if number is not None and isinstance(compare, dict) and compare.get("to") == "constant":
+        constant = compare.get("value")
+        if isinstance(constant, (int, float)) and not isinstance(constant, bool):
+            number = number - float(constant)
     threshold = hyp.get("threshold")
     direction = hyp.get("direction")
     supported: bool | None = None
@@ -279,6 +325,7 @@ def evaluate(
     vs_baseline: dict[int, dict[str, dict[str, Any]]] | None,
     contrasts: list[dict[str, Any]] | None,
     summary: dict[str, dict[str, Any]] | None,
+    aggregated: dict[int, dict[str, dict[str, Any]]] | None,
     members: Sequence["Member"],
     method: str,
     parameters_hash: str,
@@ -288,6 +335,12 @@ def evaluate(
     The corrected bound is rebuilt from the same evidence as the raw one, at this
     family's level — which is why `members` is a parameter: the record carries no
     draws, so a bound cannot be re-derived from it.
+
+    `aggregated` is the same per-condition, per-step metric table `run.yaml`
+    writes under `results.conditions[i].aggregated` — required, not defaulted,
+    so a caller that forgets to thread it through a new call site fails loudly
+    rather than silently resolving every `{to: constant}` hypothesis to no
+    observation.
     """
     resolved = [
         (
@@ -298,6 +351,7 @@ def evaluate(
                 vs_baseline=vs_baseline,
                 contrasts=contrasts,
                 summary=summary,
+                aggregated=aggregated,
             ),
         )
         for hyp in hyps

@@ -179,7 +179,8 @@ limits:
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
   # A `summary` metric takes no `compare`; see "A hypothesis may name a summary metric".
-  # `compare` also accepts {contrast: <id>}; `evaluate_on` picks observed vs. an interval bound.
+  # `compare` also accepts {contrast: <id>} and {to: constant, value: N}; `evaluate_on` picks
+  #   observed vs. an interval bound.
   - id: h1
     kind: confirmatory                   # confirmatory | exploratory
     statement: "Spearman correlation exceeds Pearson on this cohort."
@@ -560,7 +561,8 @@ likewise apart from those same two envelope rows, none of the others.
 | `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
 | A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is present and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared. Presence is the test, so `condition: null` counts and is *not* treated as absent the way an unset `E-CONFIG-TYPE` or `E-CONFIG-SHAPE` leaf is: `hypotheses` is a whole-leaf block whose entries `hypotheses.resolve` reads by key, stringifying whatever `condition` holds into a label lookup, so a present-but-`null` `condition` names a label that resolves to nothing rather than leaving a field unset. With a baseline declared it draws `E-HYPOTHESIS-CONDITION` instead, for that same reason | `E-HYPOTHESIS-BASELINE` |
 | Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
-| A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
+| A hypothesis's `compare` declares `to`, and its value is neither `baseline` nor `constant` | `E-HYPOTHESIS-COMPARE-TO` |
+| A hypothesis's `compare.to` is `constant` and `compare.value` is missing or not a number | `E-HYPOTHESIS-COMPARE-VALUE` |
 | A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
 | A hypothesis's `compare.contrast` names an `id` `statistics.contrasts` does not declare | `E-HYPOTHESIS-CONTRAST` |
 | A hypothesis's `direction` is missing or is a value other than `greater` or `less` | `E-HYPOTHESIS-DIRECTION` |
@@ -3587,7 +3589,7 @@ Not every key above is required, and `validate` enforces the set below rather th
 | `evaluate_on` | optional | `observed` when absent; `ci95_lower` or `ci95_upper` otherwise (`E-HYPOTHESIS-EVALUATE-ON` when present and none of the three) |
 | `compare` | conditional | absent exactly when `metric` names a `scope: "summary"` step — a summary metric is one value per run, not a contrast between conditions — and required for every other scope; both directions are `E-HYPOTHESIS-FORM` |
 
-**`compare` names both sides of the comparison, not one.** A condition alone says *what's being measured*; a comparison also needs *what it's measured against*. `to: baseline` is the ordinary spelling of the second side — the named condition against the declared baseline — and a declared contrast, named through `compare.contrast`, is the other. `compare: {condition: X}` with neither `to: baseline` nor a declared `sweep.baseline` names a condition and nothing to compare it against, and `validate` refuses it (`E-HYPOTHESIS-BASELINE`) rather than defaulting the missing side to baseline: a hypothesis whose comparison cannot be resolved has no quantity under test, the same reason `metric` is required, and a silent default would decide what a pre-registered hypothesis tested rather than what the config declared.
+**`compare` names both sides of the comparison, not one.** A condition alone says *what's being measured*; a comparison also needs *what it's measured against*. `to: baseline` is the ordinary spelling of the second side — the named condition against the declared baseline — a declared contrast, named through `compare.contrast`, is the second, and `to: constant` — the metric's own value against a fixed reference named by `compare.value` — is the third. `compare: {condition: X}` with neither `to: baseline` nor a declared `sweep.baseline` names a condition and nothing to compare it against, and `validate` refuses it (`E-HYPOTHESIS-BASELINE`) rather than defaulting the missing side to baseline: a hypothesis whose comparison cannot be resolved has no quantity under test, the same reason `metric` is required, and a silent default would decide what a pre-registered hypothesis tested rather than what the config declared.
 
 Core evaluates each hypothesis against the results and writes the verdict into `run.yaml`:
 
@@ -3710,6 +3712,15 @@ hypotheses:
     direction: less
     threshold: 0.05
     evaluate_on: ci95_upper                   # an equivalence claim
+
+  - id: above_chance
+    kind: confirmatory
+    statement: "Held-out AUROC exceeds chance."
+    metric: step03_screen.auroc
+    compare: {to: constant, value: 0.5}       # a fixed reference, not another condition
+    direction: greater
+    threshold: 0.0
+    evaluate_on: ci95_lower
 ```
 
 **`evaluate_on: ci95_upper` is what an equivalence or non-inferiority gate is**, and there is no way to spell one against a point estimate. A mean absolute difference of 0.01 with an interval of [0.001, 0.30] passes `direction: less, threshold: 0.05` on the observed value and fails on the upper bound — and the second verdict is the correct one, because the study claimed invariance and the data are consistent with a large effect. Reporting "supported" there would be the tool asserting the opposite of what the evidence says.
@@ -3718,7 +3729,9 @@ hypotheses:
 
 Two rules core enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. `validate` catches the config-level form of that, where nothing in the run could carry an interval; the per-metric form is settled [when the step returns](#validation), like everything else about a returned key. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
 
-**`metric` is required in every form, because `compare` says *where* and never *what*.** A [contrast](#contrasts-claims-that-arent-condition-vs-baseline) reports one value per step metric exactly as a condition does, so `compare: {contrast: invariance}` on its own names a comparison and leaves the quantity under test unstated — and a contrast declared over a step that reports three metrics would leave three candidates. `metric` is `step.metric` in all three forms: a baseline comparison, a declared contrast, and a [summary `Estimate`](#a-hypothesis-may-name-a-summary-metric), which is the one form that takes no `compare` at all.
+**`metric` is required in every form, because `compare` says *where* and never *what*.** A [contrast](#contrasts-claims-that-arent-condition-vs-baseline) reports one value per step metric exactly as a condition does, so `compare: {contrast: invariance}` on its own names a comparison and leaves the quantity under test unstated — and a contrast declared over a step that reports three metrics would leave three candidates. The same is true of `compare: {to: constant, value: 0.5}`: the constant names what the metric is measured against, never which metric. `metric` is `step.metric` in all four forms: a baseline comparison, a declared contrast, a constant reference, and a [summary `Estimate`](#a-hypothesis-may-name-a-summary-metric), which is the one form that takes no `compare` at all.
+
+**`compare: {to: constant, value: N}` is core-computed from the metric's own per-condition value, not a delta**, so `verdict_rests_on: computed` and the hypothesis joins the [hypothesis family](#pre-registration) — unlike the [reported `Estimate`](#a-hypothesis-may-name-a-summary-metric) route below, which is the only way to test a fixed reference without it and stays outside the family because core did not derive the number. `compare.condition` may still be given to pick which condition's value is meant, resolved the same way [`E-HYPOTHESIS-CONDITION`](#validation) resolves it for the baseline form; omitted, it resolves against the sole condition when the run declares exactly one and to no observation otherwise, on the same reasoning `E-HYPOTHESIS-BASELINE` gives for refusing a silent default elsewhere in this field. `threshold` stays the decision boundary and `value` the reference, so "AUROC exceeds 0.5 by at least 0.02" is `value: 0.5, threshold: 0.02, direction: greater` — the constant is subtracted from the tested number before it is compared to `threshold`, and both fields stay independently writable rather than one folding into the other.
 
 **A hypothesis is one quantity against one threshold**, which is what makes it evaluable at all. A claim about the *shape* of a series — monotonic across doses, trending across ordered strata, flattening over a curve — has no single quantity to threshold, so it is a summary-step estimator returning an `Estimate` rather than a hypothesis. Declaring the shape claim as several adjacent hypotheses is available and rarely what you want: it tests each step of the series separately and corrects for all of them, which is a different claim from the one about the series.
 

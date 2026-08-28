@@ -5735,15 +5735,30 @@ def _check_hypotheses(
     that is the same fault under a different spelling.
     `E-HYPOTHESIS-BASELINE`.
 
-    **`compare.to` has exactly one value, and it is `baseline`.**
-    `reference.md` § Pre-registration writes `to: baseline` and core computes
-    no other per-condition comparison — a claim against some *other* condition
-    is a `statistics.contrasts` entry, named through `compare.contrast`. Left
-    unchecked, `to: some_other_label` validates clean and
+    **`compare.to` has exactly two values, `baseline` and `constant`.**
+    `reference.md` § Pre-registration writes `to: baseline` for the ordinary
+    per-condition comparison, and core computes no other one against some
+    *other* condition — that is a `statistics.contrasts` entry, named through
+    `compare.contrast`. `to: constant` is the third form (§ What a hypothesis
+    is tested against), a claim against a fixed reference rather than another
+    condition or a contrast — `compare.value`, checked just below, is the
+    reference. Left unchecked, `to: some_other_label` validates clean and
     `hypotheses.resolve` — which never reads the field — evaluates it against
     the baseline anyway, so the verdict answers a question the config did not
     ask and nothing in the record reveals the substitution.
     `E-HYPOTHESIS-COMPARE-TO`.
+
+    **`compare.value` is required, and numeric, exactly when `to: constant`.**
+    `hypotheses.verdict_for` reads it as the fixed reference and subtracts it
+    from the tested number before comparing to `threshold` — an absent or
+    non-numeric `value` is silently treated as no constant at all (the guard
+    there is defensive, not a diagnostic), so the comparison would run against
+    the metric's raw value instead of the declared reference, with nothing in
+    the record to say the constant was never applied. This is
+    `E-HYPOTHESIS-FORM`'s sibling — the two errors share a family (a
+    hypothesis's `compare` shape doesn't match what its metric needs) but are
+    never raised on the same fault, so one code apiece stays legible rather
+    than doubling up under the first. `E-HYPOTHESIS-COMPARE-VALUE`.
 
     **`compare.contrast` needs a real contrast.** `reference.md` § Validation,
     "Hypothesis names a real contrast": `hypotheses[1].compare.contrast` is
@@ -5936,16 +5951,29 @@ def _check_hypotheses(
 
         compare = hyp.get("compare")
         if isinstance(compare, dict):
-            if "to" in compare and compare.get("to") != "baseline":
+            compare_to = compare.get("to")
+            if "to" in compare and compare_to not in ("baseline", "constant"):
                 c.error(
                     "E-HYPOTHESIS-COMPARE-TO",
                     f"hypotheses[{i}].compare.to",
-                    f"is `{compare.get('to')}`; the only value is `baseline` — core computes "
-                    "no other per-condition comparison, and `hypotheses.resolve` reads the "
-                    "baseline block whatever this says, so any other value names a "
-                    "comparison that will never be made and is silently evaluated against "
-                    "the baseline instead",
+                    f"is `{compare_to}`; the only values are `baseline` and `constant` — "
+                    "core computes no other per-condition comparison, and "
+                    "`hypotheses.resolve` reads the baseline block whatever this says, so "
+                    "any other value names a comparison that will never be made and is "
+                    "silently evaluated against the baseline instead",
                 )
+            if compare_to == "constant":
+                value = compare.get("value")
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    c.error(
+                        "E-HYPOTHESIS-COMPARE-VALUE",
+                        f"hypotheses[{i}].compare.value",
+                        f"is `{value}`; `to: constant` names a fixed reference and needs a "
+                        "number to compare against — `hypotheses.resolve` reads it as the "
+                        "constant the metric's own value is tested against, and a missing or "
+                        "non-numeric value leaves the verdict `supported: null` after the "
+                        "whole run is spent, with nothing in the record saying why",
+                    )
             # `to: baseline` is the ordinary spelling, but `hypotheses.resolve`
             # reads `compare.condition` as a baseline comparison whether or not
             # `to` says so — so a bare `{condition: X}` implies the same
