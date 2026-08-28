@@ -192,3 +192,16 @@ member of every family, so the honest-null state is precedented rather than mint
 `Member` from the condition's own resample pool is real statistical work and the charter was to
 close a gap, not to add statistics. Costs if wrong: a bound test on a constant reference is
 unusable under `holm`, and the motivating E2/E6 claims stay on the `Estimate` route.
+Task 9: fix round 2/5 (all addressed; commits 6e96655..7c19472)
+
+Ruling: **round 2 was verified by the controller directly, not by a dispatched re-reviewer.** The
+subagent session limit was reached mid-review. Verified by running rather than reading: both
+`reference.md` homes read correctly in their whole paragraphs, and the surviving "two routes" count
+phrase nearby is a different count that stays true; the `_is_counted` mutant was re-applied and
+killed exactly the two intended tests (2 failed, 46 passed), restored to 48 passed; the new
+`spec-defects.md` entry is accurate, owned *unassigned*, says the project ships with it, names the
+`fdr_bh` precedent and costs the real fix; the docstring overclaim is gone; and no assertion was
+removed anywhere in the test diff. Costs if wrong: this round had one pair of eyes instead of two,
+and the whole-branch review at T11 is the net.
+
+Task 9: complete (commits ae21f78..7c19472, 2 fix rounds, review clean, 1 new spec-defects filing)
