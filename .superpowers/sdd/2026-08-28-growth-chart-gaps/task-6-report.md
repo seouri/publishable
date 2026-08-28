@@ -113,3 +113,48 @@ confirmed byte-identical, both green again.
 
 `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all pass;
 `tests/test_validate.py` (804 tests) passes.
+
+## Fix round 3 (prose only, no predicate change)
+
+Ruling 1 (X1/P1 parked): both require `groups: [{by: arm, levels: [c, c]}]`, which
+`E-SWEEP-LEVEL-DUPLICATE` refuses per-entry independent of `grid`/`baseline`
+(confirmed by reading the check at `validate.py`, the `seen`/`level in seen` loop
+reads only `entry["levels"]`) — such a config does not run, so no code change made.
+
+Ruling 2 sweep: pattern was "the claim that the exclusion covers only the pair
+another code already reports" — swept for its recurring phrasings (`already report`,
+`already covers?`, `already gated`, `no ambiguity`, `cannot say which`, `cannot
+disambiguate`, `known gap, recorded`, `the exact pair \`E-SWEEP-LEVEL-DUPLICATE\``)
+with whitespace normalized first (`re.sub(r"\s+", " ", text)`) so a wrapped instance
+can't hide, across `validate.py`, `reference.md`, `tests/test_validate.py`. Proof the
+sweep can find something present: it also matched unrelated true positives (e.g.
+"already reported by `_check_data`", "cannot say which run produced it") before I
+filtered to the six homes that were actually about this claim, showing the patterns
+are not vacuous.
+
+Six homes found and fixed (one more than the three the round-3 brief named):
+1. `docs/reference.md` row 408 — "gated that way because... cannot say" rewritten to
+   state the exclusion excuses more than `E-SWEEP-LEVEL-DUPLICATE`'s own pair, and
+   every extra pair sits in a config that code already refuses.
+2. `docs/reference.md` row 636 (`E-SWEEP-LEVEL-DUPLICATE`) — "parameter-axis duplicate
+   is a known gap, recorded here rather than closed" was stale for its own worked
+   example (`groups[control,treatment] × grid[pearson,pearson]`, closed since round 2);
+   rewritten to say closed bare and crossed-with-distinct-levels, open only when the
+   group axis's own level also repeats (moot, since that's already refused).
+3. `_group_axes_already_erred`'s `duplicated_levels` docstring — "expand's output
+   alone cannot say" rewritten to the "excuses more, but only inside an already-
+   refused config" framing.
+4. `_warn_duplicate_conditions`'s docstring ("What IS grounds to skip" paragraph and
+   the level-duplicate bullet) — same rewrite, plus corrected "already gated to
+   declarations with no ambiguity, above" (false: nothing above gates on ambiguity).
+5. The inline `continue` comment before the `c.warn` call — corrected from "the exact
+   pair ... already reports" to name that only the baseline branch is exact.
+6. `validate.py`'s `E-SWEEP-LEVEL-DUPLICATE` comment (~line 4790, "known gap, recorded
+   on this code's row") — same staleness as home 2, fixed in the code comment too.
+   (Not in the brief's three, found by the sweep.)
+7. `tests/test_validate.py`'s Finding-J test docstring — same "cannot say which"
+   framing, corrected to name the config as already-refused.
+
+No predicate change; no new tests (existing tests' assertions were unaffected, only
+docstrings). `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all
+pass; `tests/test_validate.py` (804 tests) passes.

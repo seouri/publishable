@@ -7483,15 +7483,16 @@ def test_a_repeated_group_level_beside_a_repeated_grid_value_still_fires_on_the_
     write_config,
 ):
     """Round 2's Finding J, verbatim. `groups` repeats the level `c` twice —
-    `E-SWEEP-LEVEL-DUPLICATE` fires — and `grid.analysis.method` ALSO
-    independently repeats `pearson`, so all four rendered conditions
-    (`arm=c__method=pearson`, crossed two ways over each axis) resolve to
-    identical `values`. `duplicated_levels` is gated to declarations with NO
-    `grid` repeat precisely because `expand`'s output here cannot say which
-    duplicate pair came from the repeated level and which from the repeated
-    grid value — `Condition.values` never records which `levels` list entry
-    produced it — so every pair among the four is reported rather than
-    silently assumed to be `E-SWEEP-LEVEL-DUPLICATE`'s own."""
+    `E-SWEEP-LEVEL-DUPLICATE` fires, and this config does not run — and
+    `grid.analysis.method` ALSO independently repeats `pearson`, so all four
+    rendered conditions (`arm=c__method=pearson`, crossed two ways over each
+    axis) resolve to identical `values`. `duplicated_levels` is gated off
+    entirely once a `grid` axis also repeats, so `W-SWEEP-CONDITION-DUPLICATE`
+    fires on every pair here rather than assuming any of them is already
+    `E-SWEEP-LEVEL-DUPLICATE`'s own — parked that way (per
+    `_group_axes_already_erred`'s own docstring) rather than closed as a
+    separate case, since the config is refused regardless and a reader loses
+    no actionable warning either way."""
     found = messages_by_code(
         write_config(
             {

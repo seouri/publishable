@@ -4231,24 +4231,22 @@ def _group_axes_already_erred(
     `ablate`; `_check_sweep`'s own two branches are what report it correctly,
     once each, under their own gate.
 
-    **`duplicated_levels` is populated only when no `sweep.grid` axis has an
-    internally repeated value.** Measured (`baseline: {arm: control}` +
-    `groups: [{by: arm, levels: [control, treatment]}]` + `grid:
-    {analysis.method: [pearson, pearson]}`, and `groups: [{by: arm, levels:
-    [c, c]}]` + the same `grid`): once a `grid` axis independently repeats a
-    value, EVERY condition sharing a group axis value also shares that
-    axis's `values`, and `expand`'s output alone cannot say whether a given
-    duplicate pair's group-axis agreement came from the SAME declared level
-    position (`E-SWEEP-LEVEL-DUPLICATE`'s own fault) or from two DIFFERENT
-    positions crossed with the repeated grid value (an unrelated fault this
-    warning owns) — `Condition.values` carries the axis's resolved value,
-    never which `levels` list entry produced it. Suppressing every pair on
-    that axis in that case silences the grid-only ones outright, which a
-    reviewer measured; reporting every pair over-reports the ones
-    `E-SWEEP-LEVEL-DUPLICATE` already covers, which is the safe direction —
-    `validate` collects, and a pair a sharper code also names is still a true
-    duplicate. So this only builds `duplicated_levels` (and the exclusion
-    below only reads it) when the declaration has no such ambiguity to create.
+    **`duplicated_levels` excuses more than `E-SWEEP-LEVEL-DUPLICATE`'s own
+    single reported pair, and every extra pair it excuses sits in a config
+    that code already refuses outright.** A `groups` entry whose `levels`
+    repeats a string (`[control, treatment, control]`, or `[c, c]`) fails
+    `E-SWEEP-LEVEL-DUPLICATE` regardless of anything else the declaration
+    does — such a config does not run — so this dict, and the exclusion built
+    from it, only ever matches inside an already-refused config; nothing here
+    is withheld from a config a reader could otherwise act on. It is further
+    narrowed to skip entirely once a `sweep.grid` axis also repeats a value —
+    measured on `groups: [{by: arm, levels: [c, c]}]` crossed with `grid:
+    {analysis.method: [pearson, pearson]}`, and on the same crossed with a
+    `sweep.baseline` too — and both remain refused by `E-SWEEP-LEVEL-
+    DUPLICATE` on the identical "does not run" ground as the plain case, so
+    `W-SWEEP-CONDITION-DUPLICATE` firing on every pair there instead costs a
+    reader nothing they were not already forced to fix. Parked on that
+    ground, not closed as a separate case.
 
     Non-string/non-list entries are skipped rather than raising:
     `_check_shape`'s job, not this one's, and a malformed entry contributes
@@ -4329,25 +4327,26 @@ def _warn_duplicate_conditions(
     silenced: `groups` crossed with a `grid` axis that independently repeats a
     value produces pairs (same arm, same repeated grid value) that neither
     `E-SWEEP-LEVEL-DUPLICATE` nor `E-SWEEP-BASELINE-GROUP` names, whether or
-    not `sweep.baseline` is also present. What IS grounds to skip a pair: it
-    is the EXACT pair one of those two codes (or `E-SWEEP-ABLATE-BASELINE-
-    GROUP`, its `ablate`-declared sibling) already reports —
-    `_group_axes_already_erred` computes that precisely, from the raw
-    declaration, as `fixed_levels[0]` (never a second baseline-fixed axis,
-    which no code names) and an axis's own repeated level (only when no
-    `grid` axis independently repeats, which is the one shape `expand`'s
-    output cannot disambiguate — see that function's own docstring). A
-    shared-axis check on its own over-generalizes from "this axis" to "every
-    pair that happens to touch this axis"; the two conditions below narrow it
-    back to the specific pair each sharp code's own shape describes:
+    not `sweep.baseline` is also present. What IS grounds to skip a pair is
+    narrower: for the baseline shape, exactly the pair one of two codes (or
+    `E-SWEEP-ABLATE-BASELINE-GROUP`, its `ablate`-declared sibling) reports —
+    `fixed_levels[0]` (never a second baseline-fixed axis, which no code
+    names) crossed with its own product row. For the level-duplicate shape,
+    it is not exact: `duplicated_levels` also excuses pairs beyond
+    `E-SWEEP-LEVEL-DUPLICATE`'s own single reported one, but only inside a
+    config that code already refuses outright, so nothing reachable loses a
+    warning it could act on — see `_group_axes_already_erred`'s own
+    docstring for what is measured there and why it is gated off entirely
+    once a `grid` axis also repeats. A shared-axis check on its own
+    over-generalizes from "this axis" to "every pair that happens to touch
+    this axis"; the two conditions below narrow it back down:
 
     - **The baseline shape**: `axis == baseline_fixed_axis`, the shared value
       equals `baseline_fixed_value`, AND exactly one of the pair `is_baseline`
       — the baseline row and its own product row, not two baseline rows or two
       product rows a `grid` repeat alone produced.
     - **The level-duplicate shape**: the shared value is one `duplicated_levels`
-      names for that axis (already gated to declarations with no ambiguity,
-      above).
+      names for that axis.
 
     `validate` collects rather than aborting, so a config either sharp check
     refuses still reaches this one; a pair that fails both conditions above is
@@ -4385,8 +4384,9 @@ def _warn_duplicate_conditions(
             if shared_group_axes and all(
                 _already_erred(axis, conditions[i], conditions[j]) for axis in shared_group_axes
             ):
-                continue  # the exact pair `E-SWEEP-LEVEL-DUPLICATE` /
-                # `E-SWEEP-BASELINE-GROUP` already reports — not duplicated here
+                continue  # the baseline shape's exact pair, or the level-duplicate
+                # shape — the latter only inside a config `E-SWEEP-LEVEL-DUPLICATE`
+                # already refuses outright, per `_group_axes_already_erred`
             c.warn(
                 "W-SWEEP-CONDITION-DUPLICATE",
                 "sweep",
@@ -4787,8 +4787,13 @@ def _check_sweep(
         # later of the pair silently. The line drawn here is about what a
         # duplicate *means*, not what it costs: a group level is a claim about
         # which units, a parameter value is not. The parameter-axis duplicate is
-        # a known gap, recorded on this code's row in § Errors `validate`
-        # reports rather than closed.
+        # no longer an unclosed gap, bare or crossed with a group axis whose own
+        # levels are distinct — `W-SWEEP-CONDITION-DUPLICATE` (below) reports it.
+        # It stays open only where the group axis's own level ALSO repeats,
+        # crossed with a repeated parameter value — moot rather than open,
+        # since that config already fails right here as `E-SWEEP-LEVEL-DUPLICATE`
+        # and does not run. § Errors `validate` reports carries the current
+        # wording on this code's row.
         seen: dict[str, int] = {}
         for j, level in enumerate(entry["levels"]):
             if not isinstance(level, str):
