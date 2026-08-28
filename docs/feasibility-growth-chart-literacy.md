@@ -196,7 +196,7 @@ E1, E2 and E6 contain no LLM at all: they compute label agreement and fit tabula
 
 Each carries a cross-block rule only a template can know. `growth_screen` refuses a synthetic stimulus arm whose ground truth still claims to come from the EHR, and refuses `serialize.order: shuffled` unless `serialize.permutation` is swept — one arbitrary shuffle reported as *the* shuffled condition is E8's whole finding thrown away. `growth_label` is the specification's own example applied literally: a config that fits a model and declares neither a `holdout` nor a `fold` has nowhere to fit, so it is refused.
 
-Both derive their metrics in `aggregate(units, cfg)` rather than returning them from a step, because that is [the only way a derived statistic gets a real interval](reference.md#templates-where-parameters-are-defined) — core can recompute it on a resampled table. `growth_screen` derives `flag_rate`, `accuracy`, `kappa`, `sensitivity` and `false_positive_rate`; `growth_label` derives `auroc`. The full text of both is [in the executability section](#executability-on-this-build), since every line of it was loaded and enforced by the build measured there.
+Both derive their metrics in `aggregate(units, cfg)` rather than returning them from a step, because that is [the only way a derived statistic gets a real interval](reference.md#templates-where-parameters-are-defined) — core can recompute it on a resampled table. `growth_screen` derives `flag_rate`, `accuracy`, `kappa`, `sensitivity` and `false_positive_rate`; `growth_label` derives `kappa` and `agreement_raw` from the label-agreement arm's two columns, and `auroc` from the fitted comparator's — never both from one table, since a recording step's units carry one pair or the other. The full text of both is [in the executability section](#executability-on-this-build), since every line of it was loaded and enforced by the build measured there.
 
 **Five derived metrics is a deliberate ceiling.** The correction family is comparisons × metrics, so a template returning twenty diagnostics widens every interval in the run for numbers nobody reads. E7 declares three contrasts and its template derives five metrics: fifteen, which is what Holm is applied at.
 
@@ -1895,7 +1895,7 @@ These are the deliverable's second output: places where a real plan pressed on t
 
 **3. Closed — a `sweep.baseline` that duplicates a `grid` cell now draws a warning.** Written the obvious way — `baseline: {stimulus.physiology: healthy}` beside `grid: {stimulus.physiology: [healthy, concerning], stimulus.schedule: [sparse, dense]}` — the E7 2 × 2 still expands to **six** conditions, of which `00_schedule=sparse__baseline` and `02_physiology=healthy__schedule=sparse` hold the same parameters and the same units in two directories, but `validate` now reports `W-SWEEP-CONDITION-DUPLICATE` on the pair. The check asks the direct question — do two conditions `expand` renders resolve to the same `values` over the same units — rather than naming only the group-axis route (`E-SWEEP-LEVEL-DUPLICATE`, `E-SWEEP-BASELINE-GROUP`) [two identical measurements reported as two arms](experimental-designs.md#mistakes-core-prevents) already refused; the parameter-axis form is the same mistake and is now caught by the general check. The message names the working spelling — fix the axis under test, leave the stratifying axis free — directly at the point of failure.
 
-**4. Retracted — `W-DATA-CLUSTER-UNDECLARED` firing on a declared reporting stratum is not a gap.** `true_count_band` and `visit_band` each hold three labels over 300 units and are named in `statistics.report_by`, and both draw the undeclared-cluster warning; that half is true and measured, in both `validate` runs and in row 1 below. What this entry got wrong is reading the firing as an omission. `_warn_undeclared_cluster`'s exclusions are documented — `reference.md` § Warnings core reports enumerates exactly four: an attribute a `sweep.groups` axis names or an `assign.from` reads, any `stratify_by`, and `statistics.null_test`'s `shuffle` — and `report_by` is deliberately not a fifth. The reason is in the function's own docstring: a run that reports by `site` while `site` really is a cluster wants both declarations, not silence, because a reporting stratum and a cluster identity are different facts about the same column and one can hold without the other. `true_count_band` and `visit_band` are not clusters here — no unit belongs to a correlated group by way of either — so both firings are the false positive the warning's own message already provides for ("ignore this if the units really are independent"), not evidence the exclusion list is short a name. A case for silencing `report_by` the way the other four are silenced would have to argue that a stratum can never also be a cluster, which is a design change against a documented decision, not a gap this analysis discovered.
+**4. Retracted — `W-DATA-CLUSTER-UNDECLARED` firing on a declared reporting stratum is not a gap.** `true_count_band` and `visit_band` each hold three labels over 300 units and are named in `statistics.report_by`, and both draw the undeclared-cluster warning; that half is true and [measured](#executability-on-this-build). What this entry got wrong is reading the firing as an omission. `_warn_undeclared_cluster`'s exclusions are documented — `reference.md` § Warnings core reports enumerates exactly four: an attribute a `sweep.groups` axis names or an `assign.from` reads, any `stratify_by`, and `statistics.null_test`'s `shuffle` — and `report_by` is deliberately not a fifth. The reason is in the function's own docstring: a run that reports by `site` while `site` really is a cluster wants both declarations, not silence, because a reporting stratum and a cluster identity are different facts about the same column and one can hold without the other. `true_count_band` and `visit_band` are not clusters here — no unit belongs to a correlated group by way of either — so both firings are the false positive the warning's own message already provides for ("ignore this if the units really are independent"), not evidence the exclusion list is short a name. A case for silencing `report_by` the way the other four are silenced would have to argue that a stratum can never also be a cluster, which is a design change against a documented decision, not a gap this analysis discovered.
 
 **5. Closed — a fold level's `stratify_by` type is now stated.** `data.units.holdout.stratify_by` and `data.units.assign.<axis>.stratify_by` are lists in [§ The one config file](reference.md#the-one-config-file); a `{kind: fold}` level's is a string, and `[visit_decile]` still earns `E-REPL-FOLD-STRATIFY-UNKNOWN`. [§ Repeat kinds](reference.md#repeat-kinds) now names the field's type directly — `stratify_by` (`str | None`, naming **one** attribute, unlike the list form the other two take) — so the difference is documented rather than discoverable only by running into it.
 
@@ -1910,13 +1910,28 @@ These are the deliverable's second output: places where a real plan pressed on t
 
 ## Executability on this build
 
-A claim about what the tool *does today* is perishable in a way a specification claim is not, so everything in this section is dated and pinned, and nothing outside it is a build claim.
+A claim about what the tool *does today* is perishable in a way a specification claim is not, so
+everything in this section is dated and pinned, and nothing outside it is a build claim. **This
+section is re-measured whole rather than appended to**, so what follows is the current state and
+not a log: every number below was produced by running the command named beside it at the commits
+named here. Earlier measurements against earlier commits are in this file's git history, which is
+where a superseded reading belongs.
 
-### Measured on 2026-08-28 against commit `b0a6c9e`
+### Measured on 2026-08-28 against `publishable` commit `081efc0`
 
-**What was built to measure it.** A scratch experiment repository from `publishable new`, with the two project-local templates below written into `templates/`, one `src/growth_chart/` package holding six steps and two `BaseExperiment` subclasses, fifteen configs, and a `publishable-growth-chart` plugin from `publishable plugin new` installed as an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no** template. Each config's `input_dir` held a synthetic `index.csv` at the plan's stated unit count with the attributes the config declares. Every command was run through the project's own console script.
+Also pinned: `2026-08-28-gcl-measurement@e245d24` and `publishable-growth-chart@64bde4d`.
 
-**Row 1 — the fifteen configs, measured by running `publishable validate` on each.**
+**What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
+two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
+one `src/growth_chart/` package (2,406 lines over seven modules, six step bodies and three prompt
+files) with 2,091 lines of tests, fifteen configs, and a `publishable-growth-chart` plugin from
+`publishable plugin new` (390 lines, 526 of tests) installed as an editable dependency — registering
+one resolver, one probe, and one writer/reader pair, and **no** template. Each config's `input_dir`
+holds a synthetic `index.csv`, regenerated by `tools/make_fixtures.py`, at the plan's stated unit
+count with the attributes the config declares. `uv run pytest` in the measurement repository:
+**179 passed**. Every command below was run through the project's own console script.
+
+**The fifteen configs, by running `publishable validate` on each.**
 
 | Config | Result |
 |---|---|
@@ -1936,13 +1951,27 @@ A claim about what the tool *does today* is perishable in a way a specification 
 | `e09-age-norm` | ✓ valid |
 | `e10-cross-model-2x2` | ✓ valid |
 
-Thirteen clean, two carrying one warning each and no errors. **Zero of the fifteen were refused.**
+Thirteen clean, two carrying one warning each, no errors. **Zero of the fifteen are refused.** Both
+warnings are the false positive [gap 4's retraction](#gaps-this-analysis-found-in-the-specification)
+explains: `true_count_band` and `visit_band` are reporting strata rather than cluster identities, and
+`report_by` is deliberately not among the four exclusions `_warn_undeclared_cluster` documents.
 
-**Row 2 — `publishable dry-run` on each, which is where every execution count in this document comes from.** It expanded the sweep, built the input manifest, probed the apparatus, and printed the step directories and the unit-execution count. The counts are quoted per experiment above and totalled below; each is the number the command printed, not one derived from it.
+**`publishable dry-run` on each is where every execution count in this document comes from.** It
+expands the sweep, builds the input manifest, probes the apparatus, and prints the step directories,
+the ten fixed files a run would write, and the unit-execution count. The counts are quoted per
+experiment above and totalled below; each is the number the command printed, not one derived from it.
+It also states what it cannot list, which is the honest half: artifact file names are `io.write`
+arguments in step code, declared nowhere in the config.
 
-**Row 3 — the plugin's three registries dispatched.** The reusable request step named in [§ Where the shared machinery lives](#where-the-shared-machinery-lives) is proposed there and was not written, so nothing in this row is a claim about it. `data.units.from: {resolver: growth_trajectory}` resolved every roster at `validate`; `apparatus_probe = "growth_llm_deployment"` was called at `dry-run` and its facts recorded per condition. The `.transcript.jsonl` writer/reader pair was registered and its entry points resolved at install, and **it was not exercised by a write**, because nothing here executed a step — the suffix-dispatch rule it relies on is [measured in the tutorial](tutorial-writing-a-plugin.md) rather than here.
+**The plugin's three registries dispatch.** `data.units.from: {resolver: growth_trajectory}` resolves
+every roster at `validate`; `apparatus_probe = "growth_llm_deployment"` is called at `dry-run` and its
+facts recorded per condition. The `.transcript.jsonl` writer/reader pair is registered and its entry
+points resolve at install, and **it is not exercised by a write**, because nothing here executes a
+step — the suffix-dispatch rule it relies on is [measured in the tutorial](tutorial-writing-a-plugin.md)
+rather than here.
 
-**Row 4 — the credential check, measured on E10 before `.env` existed.** `validate` reported, per condition and by name:
+**The credential check, measured on E10 with `.env` moved aside.** `validate` reports, per condition
+and by name, and exits `3 problems (3 errors, 0 warnings)`:
 
 ```
 error   E-CRED-PARAM-MISSING parameters.llm.provider
@@ -1953,36 +1982,107 @@ error   E-CRED-PARAM-MISSING parameters.llm.provider
         which requires `ANTHROPIC_API_KEY` — no value in the environment or in `.env`
 ```
 
-Three variables demanded across the four deployments, and nothing demanded for the `ollama` arm whose `requires_env` entry is `[]`. With a `.env` supplying them, all four conditions passed.
+Three variables demanded across the four deployments, and **nothing demanded for the `ollama` arm**,
+whose `requires_env` entry is `[]`. With `.env` in place all four conditions pass, which is the state
+the fifteen-config table above was measured in.
 
-**Row 5 — the apparatus probe's unanswered facts, measured on E10 at `dry-run`.** The local arm's probe returns `None` for both declared facts, and core reported it rather than failing:
+**The apparatus probe's unanswered facts, measured on E10 at `dry-run`.** The local arm's probe returns
+`None` for both declared facts, in each of the four `ollama` conditions, and core reports it rather
+than failing:
 
 ```
 condition `03_schedule=sparse__provider=ollama__deployment=llama-4-70b__baseline`'s fact
 `model_version` came back `null` on 1 of 1 probes
 ```
 
-**Row 6 — four refusals probed deliberately**, each by editing one line and re-running `validate`:
+**Three refusals probed deliberately**, each by copying a config, editing one line, and re-running
+`validate`:
 
 | Probe | Result |
 |---|---|
-| `sweep.grid` on a `list`-typed parameter — `llm.backoff_secs: [[2, 8, 30], [5, 20, 60]]` | `E-SWEEP-VALUE-UNNAMEABLE` × 2: *swept value '[2, 8, 30]' does not match `^[A-Za-z0-9._+-]+$`* |
-| A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN`, naming the label that matched no condition |
+| `sweep.grid` on a `list`-typed parameter — `llm.backoff_secs: [[2, 8, 30], [5, 20, 60]]` | `E-SWEEP-VALUE-UNNAMEABLE`: *swept value '[2, 8, 30]' does not match `^[A-Za-z0-9._+-]+$`* |
+| A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN`, naming the label that matched no condition, beside `E-STATS-CONTRAST-SHAPE` |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
-| `data.units.measurements: {by: calc_id, collapse: mean}` over a resolver roster | `E-RESOLVER-MEASUREMENT-FIELD` plus two `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
 
-**Row 7 — two things that are *not* refused, and both were checked by running.** A second config naming the first's `entrypoint` validates, which is what makes one `src/` package across fifteen configs the recommended layout rather than a hope. And a `sweep.baseline` duplicating a `grid` cell validates clean while expanding to six conditions where four were meant — [gap 3](#gaps-this-analysis-found-in-the-specification), found this way and not by reading.
+**Two things that are *not* refused, both checked by running.** A second config naming the first's
+`entrypoint` validates, which is what makes one `src/` package across fifteen configs the recommended
+layout rather than a hope. And a `sweep.baseline` duplicating a `grid` cell validates — with
+`W-SWEEP-CONDITION-DUPLICATE` now reporting the pair, which is [gap 3](#gaps-this-analysis-found-in-the-specification),
+found by running and not by reading.
 
-**Row 8 — one unhandled crash.** `publishable generate experiment` against a template declaring a one-segment or three-segment `parameter_spec` path exits `1` with a Python traceback rather than a diagnostic: `ValueError: _parameters_block only supports two-segment dotted paths (head.leaf); got 'reference_frame'`. [Gap 1](#gaps-this-analysis-found-in-the-specification).
+**What writing the pipeline found.** Four things the configs alone could not surface, because a config
+exercises declarations and a step body exercises the runtime:
 
-**What was not measured, and is therefore written as specification rather than as fact.** Nothing here executed a step, so no `run`, `draft`, `resume`, `report`, `freeze`, `diff`, `study` or `reproduce` claim in this document is a build claim: the statistics routing table, the `Estimate` shape, `io.reuse_from`, the apparatus gate's *failure* on a moved fact, and every interval this analysis attributes to core are read from the specification. Executing them needs a real deployment, a real cohort, and the two open items the plan itself names.
+**1. A metric a config declares and a template never derives is invisible to `validate`.** This is the
+sharpest limit of a declaration-level check this analysis has found. `e01-reference-gate` names
+`step02_score.kappa` in its hypothesis while `growth_label.aggregate` derived only `auroc`; the config
+validated clean, because core cannot know which keys an `aggregate` returns, so the hypothesis would
+have resolved to `supported: null` at run time with no diagnostic anywhere. The template now derives
+`kappa` and `agreement_raw`. It is not a defect in core — `aggregate` is user Python and
+[greenfield only](design-principles.md#greenfield-only) means core validates declarations and verifies
+effects rather than reading the body — but it means **the fifteen configs validating was never the
+same claim as the fifteen configs computing what they declare**, and every other measurement in this
+section should be read against that distinction.
+
+**2. E2's above-chance claim has two live routes, and the config picks one.** `e02-utilization-baseline`'s
+`h1` names `step03_compare.auroc_count_only`, which **is** a `summary`-step `Estimate`: it carries no
+`compare` block, so its verdict records `verdict_rests_on: reported`, and core stores that interval
+without ever recomputing or correcting it. The alternative is `compare: {to: constant, value: 0.5}` on
+the condition-scoped `auroc` that `growth_label.aggregate` derives, which under `holm` or `bonferroni`
+returns a real corrected bound inside the hypothesis family — `auroc` is derived under E2's declared
+`statistics.resample`, so core builds it a correctable `Member`. The two differ in what they measure,
+not only in their paperwork: the `Estimate`'s bootstrap pools every fold's out-of-fold score into one
+AUROC over patients, which is the quantity E2 claims, where the template's is per condition. The config
+as written takes the first route. See [gap 7](#gaps-this-analysis-found-in-the-specification) for what
+still comes back `supported: null` on a bound, and why `fdr_bh` is not an instance of it.
+
+**3. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
+quantities the configs declare are ratios of means over a paired table and the third is a rank
+correlation; none needs a likelihood optimiser. `statsmodels` stays declined until an arm genuinely
+needs a random-intercept fit — E3's format × derivation interaction is the first — because a plugin's
+dependency lands in the lockfile `reproduce` restores.
+
+**4. The shortcut reliance index is undefined where the plan most needs it, and says so.** OI-17
+records this and the implementation honours it: when the physiology main effect is zero — which is
+E4's H0 holding, a model that cannot see the curve at all — the index returns nothing rather than a
+ratio with no meaning. A cohort that flags on schedule alone produces a real numerator over a zero
+denominator, and reporting infinity there would read as "total shortcut reliance" from a division that
+has none.
+
+**Writing the steps is also what surfaced a gap in core itself.** `W-STEP-RETURN-DISCARDED` fires when
+a `run`- or `condition`-scoped step returns a non-empty mapping core then discards, and it exists
+because two wide steps here were doing exactly that: `step01_summarize_units` returned `n_units`,
+`n_visits`, `n_labelled`, and `step02_serialize` returned `n_prompts`, `n_without_visits`. Every one was
+being dropped. Both now write their counts to an artifact (`join_counts.json`, `serialize_counts.json`)
+and return `{}`, which is the route the warning's own message names — and the numbers were worth
+keeping, since how many visits joined and how many units carry a label are the first questions asked of
+a run reporting a surprising `n`. That is this document's own argument turned back on itself:
+[§ Where every statistical procedure lands](#where-every-statistical-procedure-lands) routes a wide
+step's product to `io.write`, and the pipeline proposed here returned five counts from two wide steps
+anyway. The rule was written down here and not followed here, which is what a diagnostic is for.
+
+**One observation not filed as a gap.** `publishable validate configs/e01-reference-gate` — the
+experiment *directory* rather than its `config.yaml` — reports `E-IO-FAILED  Is a directory`.
+[§ CLI reference](reference.md#cli-reference) documents the argument as a config file path and every
+example writes one, so this is a thin diagnostic rather than a contradiction, and it is recorded here
+instead of filed because it is a property of core's argument handling rather than anything this
+analysis's configs pressed on.
+
+**What is not measured, and is therefore written as specification rather than as fact.** Nothing here
+has executed a step against a deployment, so no `run`, `draft`, `resume`, `report`, `freeze`, `diff`,
+`study` or `reproduce` claim in this document is a build claim: the statistics routing table, the
+`Estimate` shape, `io.reuse_from`, the apparatus gate's *failure* on a moved fact, and every interval
+this analysis attributes to core are read from the specification. Every cost figure below is
+arithmetic rather than an anchor. What blocks execution is not code: **OI-7's cohort definition** and
+**OI-8's model roster and prompt specification**, both `[author decision]` in the source plan. The
+pipeline is ready for them; they are not ready for it.
 
 ### The two templates, as loaded
 
-Both were read by `list-templates`, materialized by `generate experiment`, and enforced by `validate` at the commit above.
+Both are read by `list-templates`, materialized by `generate experiment`, and enforced by `validate`
+at the commit this section is measured against.
 
 ```python
-# templates/growth_screen.py
 # templates/growth_screen.py — the LLM screening experiment type, discovered by path
 from publishable import BaseTemplate, Param, register_template
 
@@ -2099,7 +2199,6 @@ class GrowthScreenTemplate(BaseTemplate):
 ```
 
 ```python
-# templates/growth_label.py
 # templates/growth_label.py — the non-LLM half: label validity and tabular comparators
 from publishable import BaseTemplate, Param, register_template
 
@@ -2147,249 +2246,67 @@ class GrowthLabelTemplate(BaseTemplate):
         return []
 
     def aggregate(self, units, cfg) -> dict:
+        """Derive what each arm claims, from the per-unit table.
+
+        Two arms, two column pairs, and `{}` for a table holding neither — which
+        is the right answer for a table this template does not recognise, since
+        core calls `aggregate` once per recording step and a pipeline can have
+        several.
+
+        Derived here rather than returned by the step because that is the only
+        route to a real interval: core can recompute a derived metric on a
+        resampled table, so `kappa` and `auroc` are `basis: units` with a
+        percentile ci95 over the declared draws. A step-returned scalar would be
+        `basis: repeats` with no interval, and E1's whole comparison is between
+        two strata's kappas WITH bootstrapped intervals.
+        """
+        out: dict = {}
+
+        # E1: chance-corrected agreement between the EHR label and the panel.
+        pairs = [
+            (r["label"], r["rating"])
+            for r in units
+            if r.get("label") is not None and r.get("rating") is not None
+        ]
+        if pairs:
+            kappa = self._kappa([a for a, _ in pairs], [b for _, b in pairs])
+            if kappa is not None:
+                out["kappa"] = kappa
+            out["agreement_raw"] = sum(a == b for a, b in pairs) / len(pairs)
+
+        # E2 and E6: discrimination of the fitted comparator.
         rows = [r for r in units if r.get("score") is not None and r.get("truth") is not None]
-        if not rows:
-            return {}
         pos = [r["score"] for r in rows if r["truth"]]
         neg = [r["score"] for r in rows if not r["truth"]]
-        if not pos or not neg:
-            return {}
-        wins = sum((p > n) + 0.5 * (p == n) for p in pos for n in neg)
-        return {"auroc": wins / (len(pos) * len(neg))}
+        if pos and neg:
+            wins = sum((p > n) + 0.5 * (p == n) for p in pos for n in neg)
+            out["auroc"] = wins / (len(pos) * len(neg))
+
+        return out
+
+    @staticmethod
+    def _kappa(a: list, b: list) -> float | None:
+        """Cohen's kappa, or `None` where it is undefined.
+
+        `None` rather than 1.0 when both raters are constant and identical:
+        `1 - p_e` is zero there, and the plan is explicit that a kappa is only
+        interpretable against the inter-rater kappa beside it. A fabricated 1.0
+        would be the most flattering possible number for the degenerate case.
+
+        Negative values are returned rather than floored — §Cross-Cutting calls
+        systematic inverse performance "a substantively different finding from
+        noise".
+        """
+        n = len(a)
+        if n == 0:
+            return None
+        pa, pb = sum(map(bool, a)) / n, sum(map(bool, b)) / n
+        observed = sum(bool(x) == bool(y) for x, y in zip(a, b)) / n
+        expected = pa * pb + (1 - pa) * (1 - pb)
+        if abs(1.0 - expected) < 1e-12:
+            return None
+        return (observed - expected) / (1.0 - expected)
 ```
-
-### Re-measured on 2026-08-28 against commit `6bac09a`
-
-The `growth-chart-gaps` slice closed gaps 1, 3, 5, and 7 by building against the specific shapes this
-analysis found, and closed gap 2 as a documented limitation rather than by a mechanism. This entry
-re-runs `publishable validate` on all fifteen configs at that commit, from the same project-local
-templates and the same synthetic rosters `tools/make_fixtures.py` regenerates, through the project's
-own console script.
-
-| Config | Result |
-|---|---|
-| `e01-reference-gate` | ✓ valid |
-| `e02-utilization-baseline` | ✓ valid |
-| `e03-serialization` | ✓ valid |
-| `e03b-tokenization` | ✓ valid |
-| `e04a-matched-pairs` | ✓ valid |
-| `e04b-physiology-swap` | ✓ valid |
-| `e05a-schedule-density` | ✓ valid |
-| `e05b-flat-negative` | ✓ valid |
-| `e05c-fixed-n` | 0 errors, 1 warning — `W-DATA-CLUSTER-UNDECLARED` on `true_count_band` |
-| `e05d-framing` | ✓ valid |
-| `e06-comparator` | ✓ valid |
-| `e07-two-by-two` | ✓ valid |
-| `e08-ordering` | 0 errors, 1 warning — `W-DATA-CLUSTER-UNDECLARED` on `visit_band` |
-| `e09-age-norm` | ✓ valid |
-| `e10-cross-model-2x2` | ✓ valid |
-
-Thirteen clean, two carrying the same one warning each as [row 1](#executability-on-this-build) above,
-and no errors — unchanged from the first measurement, exactly as [gap 4's retraction](#gaps-this-analysis-found-in-the-specification)
-says it should be: `W-DATA-CLUSTER-UNDECLARED` firing on `true_count_band` and `visit_band` was never
-the gap, and neither config's cluster identity changed. **No sixteenth warning appeared**: all fifteen
-configs already write `sweep.baseline`/`grid` and `{kind: fold}` shapes `W-SWEEP-CONDITION-DUPLICATE`
-and the now-documented `stratify_by` type were built to catch, none of the fifteen contains a
-duplicate-condition shape to trip the new check, and E07's own baseline/grid pairing was never
-written as a duplicate in the first place — [row 7](#executability-on-this-build) above measured
-that shape as a separate, deliberately-constructed probe, not as one of the fifteen. `E-TEMPLATE-PARAM-PATH`
-and `compare: {to: constant, value: N}` were not re-probed here since neither gap's fix changes what
-any of the fifteen validate to — [gap 1](#gaps-this-analysis-found-in-the-specification) and
-[gap 7](#gaps-this-analysis-found-in-the-specification) describe what changed for each.
-
----
-
-### Re-measured on 2026-08-28 against `v0.2.0` (commit `aba9542`) — first measurement with real step bodies
-
-Two things changed since the entry above, and they cut in opposite directions. Core released
-**0.2.0**, adding a fourth diagnostic the `growth-chart-gaps` slice did not:
-`W-STEP-RETURN-DISCARDED`, which fires when a `run`- or `condition`-scoped step returns a non-empty
-mapping core then discards. And the measurement repository stopped being stubs — `serialize.py`,
-`parse.py`, the plugin's request step, three prompt files, and real bodies for `step01`, `step02`
-and `step03` all landed, so for the first time there is step code for a runtime diagnostic to fire
-on.
-
-**All fifteen configs validate exactly as before**: thirteen clean, `e05c-fixed-n` and `e08-ordering`
-carrying one `W-DATA-CLUSTER-UNDECLARED` each, no errors. A config is a declaration and 0.2.0 removed
-nothing, so this is the expected result rather than a reassuring one.
-
-**The new warning fires on this analysis' own proposed pipeline, and that is the finding.** Both wide
-steps returned counts — `step01_summarize_units` at `run` scope returned `n_units`, `n_visits`,
-`n_labelled`; `step02_serialize` at `condition` scope returned `n_prompts`, `n_without_visits` — and
-every one was being dropped, silently at 0.1.3 and audibly at 0.2.0. Both now write their counts to
-an artifact (`join_counts.json`, `serialize_counts.json`) and return `{}`, which is the route the
-warning's own message names. **The numbers were real and worth keeping**: how many visits joined and
-how many units carry a label are the first questions asked of a run reporting a surprising `n`, and
-before this they existed only in a mapping core threw away.
-
-That is worth more than a housekeeping note, because it is this document's own argument turned back
-on itself. [§ Where every statistical procedure lands](#where-every-statistical-procedure-lands)
-routes a wide step's product to `io.write`; the pipeline this analysis proposed then returned five
-counts from two wide steps anyway. The rule was written down here and not followed here — which is
-what a diagnostic is for, and the reason `W-STEP-RETURN-DISCARDED` was worth building rather than
-documenting harder.
-
-**What is still not measured**, unchanged from every entry above: nothing here has executed a step
-against a deployment. `run`, `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain
-unexercised by this analysis, the four `summary`-step `Estimate`s are unwritten, and `step02_score`
-is still a stub. The release moves none of that.
-
----
-
-### Measured on 2026-08-28 against `v0.2.0` — the pipeline is written, and this is what writing it found
-
-Every step body this analysis proposed now exists: **2,328 lines of implementation and 2,091 lines
-of tests across seven modules**, at `2026-08-28-gcl-measurement@de3878d` and
-`publishable-growth-chart@64bde4d`. 179 tests pass. All fifteen configs still validate — thirteen
-clean, two carrying the `W-DATA-CLUSTER-UNDECLARED` [gap 4's retraction](#gaps-this-analysis-found-in-the-specification)
-explains.
-
-| Module | Is |
-|---|---|
-| `serialize.py` | E3's nine cells, E3b's two encodings, E8's five fixed shuffles, E5c's cap, E5d's framing sentence |
-| `parse.py` | Response → `growth_issues`, with the three failure kinds kept apart so `scoring.parse_failure` means something |
-| `prompts/` | Three prompt files under `src/`, loaded by stem, inside `code_hash` |
-| `models.py` | Logistic regression and a boosted tree on numpy, plus Cohen's kappa |
-| `estimates.py` | The shortcut reliance index, the residual slope, DeLong, Cochran's Q — the quantities core refuses |
-| the plugin's `request.py` | Transport, retry over `llm.backoff_secs`, per-unit token and latency capture |
-| the six step bodies | The wiring, at the four scopes |
-
-**This section's job is what the writing found, not that it happened.** Five things, each measured:
-
-**1. A metric a config declares and a template never derives is invisible to `validate`.**
-`e01-reference-gate` names `step02_score.kappa` in its hypothesis; `growth_label.aggregate` derived
-only `auroc`. The config validates clean — core cannot know which keys an `aggregate` returns — so
-the hypothesis would have resolved to `supported: null` at run time with no diagnostic anywhere. The
-template now derives `kappa` and `agreement_raw`. **This is the sharpest limit of a declaration-level
-check this analysis has found**, and it is not a defect in core: `aggregate` is user Python, and
-[greenfield only](design-principles.md#greenfield-only) means core validates declarations and
-verifies effects rather than reading the body. But it means *the fifteen configs validating* was
-never the same claim as *the fifteen configs computing what they declare*, and this document's
-earlier entries should be read with that distinction in mind.
-
-**2. The `{to: constant}` limitation no longer bites for E2 — a later slice narrowed it to a
-combination this config does not use.** E2's claim is "a visit-count-only model discriminates above
-chance". The template already derives `auroc` per condition *with a core-computed interval* — the
-better number — and `compare: {to: constant, value: 0.5}` on that condition-scoped metric now returns
-a real corrected bound under a declared correction method, because core builds a correctable `Member`
-for it: `auroc` is derived under E2's declared `statistics.resample`, which is exactly the row of
-[the design's Decision 1 table](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)
-that gets the pool. The claim could be written directly on that condition-scoped `auroc` — the one
-`growth_label`'s `aggregate` derives — rather than routed through a `summary`-step `Estimate`.
-`step03_compare.auroc_count_only`, which E2's `h1` names today, IS that `Estimate`: the config
-carries no `compare` block at all there, so the rewrite this finding describes is a change to the
-config, not a re-reading of it (see the dated re-check below, which measured exactly that). What [the filed limitation](superpowers/spec-defects.md)
-still costs a real claim its place in the family is narrower now: only a recorded column carried
-under both `weight_by` and `cluster_by` — E2 declares neither — still has no `Member` and still comes
-back `supported: null` on a bound.
-
-**3. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
-quantities the configs declare are ratios of means over a paired table and the third is a rank
-correlation; none needs a likelihood optimiser. `statsmodels` stays declined until an arm genuinely
-needs a random-intercept fit — E3's format × derivation interaction is the first — because a plugin's
-dependency lands in the lockfile `reproduce` restores.
-
-**4. The shortcut reliance index is undefined where the plan most needs it, and now says so.** OI-17
-records this and the implementation honours it: when the physiology main effect is zero — which is
-E4's H0 holding, a model that cannot see the curve at all — the index returns nothing rather than a
-ratio with no meaning. A cohort that flags on schedule alone produces a real numerator over a zero
-denominator, and reporting infinity there would read as "total shortcut reliance" from a division
-that has none.
-
-**5. Writing the steps is what surfaced core's own gap.** `W-STEP-RETURN-DISCARDED` exists in 0.2.0
-because two wide steps here returned counts core was dropping — silently before the release. That is
-the whole argument for driving a specification with a real pipeline rather than with configs alone:
-a config exercises declarations, a step body exercises the runtime, and the two find different
-things.
-
-**What is still not measured.** Nothing here has executed a step against a deployment, so `run`,
-`resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised by this analysis and
-every cost figure below is still arithmetic rather than an anchor. What blocks that is unchanged and
-is not code: **OI-7's cohort definition** and **OI-8's model roster and prompt specification**, both
-`[author decision]` in the source plan. The pipeline is ready for them; they are not ready for it.
-
-### Re-checked on 2026-08-28 against commit `ae9677e` — the fifteen configs, re-validated after the slice closed
-
-The `correctable-condition-metric` slice ([design](superpowers/specs/2026-08-28-correctable-condition-metric-design.md),
-[ledger](../.superpowers/sdd/2026-08-28-correctable-condition-metric/progress.md)) landed in full at this commit,
-and this entry is the closing task's re-check against `2026-08-28-gcl-measurement`'s fifteen configs,
-re-run from fresh fixtures (`tools/make_fixtures.py`). All fifteen validate exactly as [the last
-measurement](#measured-on-2026-08-28-against-v020--the-pipeline-is-written-and-this-is-what-writing-it-found)
-found: thirteen clean, `e05c-fixed-n` and `e08-ordering` each carrying the one `W-DATA-CLUSTER-UNDECLARED`
-[gap 4's retraction](#gaps-this-analysis-found-in-the-specification) already explains. Nothing about
-the fourteen configs other than E2 changed, because nothing about them touches a constant-referenced
-hypothesis.
-
-**E2 itself did not change, and that is worth stating rather than assuming.** `e02-utilization-baseline/config.yaml`'s
-`h1` is unchanged from finding 2 above: it names `metric: step03_compare.auroc_count_only` with no
-`compare` block at all, because that metric is the `summary`-step `Estimate` `step03_compare.py`
-computes — its own docstring still narrates the *pre-slice* reason for routing around the
-condition-scoped `auroc`. `verdict_rests_on: reported` for that hypothesis before this slice and
-after it, unaffected by [Decision 1](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)
-in either direction, because a reported `Estimate` was never the metric shape Decision 1 governs. Finding
-2 already said what changed: not the config as written, but what the config **could** now be rewritten
-to do — `compare: {to: constant, value: 0.5}` directly on the condition-scoped `auroc` the template's
-`aggregate` already derives. That metric is derived under E2's declared `statistics.resample`, which is
-[Decision 1](superpowers/specs/2026-08-28-correctable-condition-metric-design.md)'s third row —
-"Derived (`aggregate`), declared `resample`" — the row this slice's `correction.Member` construction
-now answers with a real corrected bound rather than `supported: null`. That rewrite was not made here:
-this task reads and reasons, per its own charter, rather than editing the downstream project or running
-its pipeline, which needs a deployment this analysis has never had.
-
----
-
-### Re-measured on 2026-08-28 against commit `92ce44e` — the slice's own review, and three sentences it had to take back
-
-The `correctable-condition-metric` slice is complete at this commit: seven tasks and one fix wave,
-`3545 passed, 1 skipped, 2 xfailed`, with `ruff`, `ruff format --check` and `mypy` clean. This entry
-records what its **final whole-branch review** found, because the finding is about this document's
-subject rather than only about the slice.
-
-**The code was right and the documents were not.** The review returned three Important findings and
-all three were sentences the slice itself had just written, each false against the build it described:
-
-| What the slice wrote | What the code does | Where it was corrected |
-|---|---|---|
-| A corrected bound exists "except in two cases" | `correction.py`'s `_level_for` returns `None` for `fdr_bh`, so **no** member of any kind carries one under BH | [§ Pre-registration](reference.md#pre-registration) and two neighbouring passages now scope the promise to `holm`/`bonferroni` and name BH as a prior condition |
-| Row 4 of the design's own decision table: "derived, no declared `resample`" is the no-raw-interval case | A derived metric is resampled whenever a `compute` callable and a seed exist, declared `statistics.resample` or not — the row's conclusion is right and its stated cause is not | `spec-defects.md`, `hypotheses.py`, and a third home in `cli.py` the fix brief had not named |
-| [Finding 2](#gaps-this-analysis-found-in-the-specification) above: the E2 claim can be written "directly on `step03_compare.auroc_count_only`" | That metric **is** the `summary`-step `Estimate`; the condition-scoped metric that could carry `compare: {to: constant}` is `growth_label.aggregate`'s own `auroc` | Finding 2, corrected in place |
-
-[Gap 7](#gaps-this-analysis-found-in-the-specification) above carried the first of those overstatements
-too, and is corrected in this revision: it now scopes the corrected bound to `holm` or `bonferroni` and
-names `fdr_bh` as a prior condition on the whole promise. The distinction is not pedantry for a reader of
-this analysis — under BH a bound-evaluated gate reads `supported: null` no matter what it compares, so a
-null bound there says nothing about the hypothesis form and everything about the method.
-
-**Two mechanical results from the same review, both about this slice's own tests.** `pools_by_key` — the
-carrier the pool was to be handed through — was written and never read, and its comment claimed the job a
-local variable actually did; it is deleted. And the `declaration_index` offset that keeps a condition
-member from colliding with a comparison member was unpinned: mutating it to `=i` left `test_cli.py`,
-`test_hypotheses.py` and `test_correction.py` fully green at 702 passed. It is pinned now, by a test that
-forces an exact evidence-ratio tie by construction — a collision alone is invisible, because the sort is
-stable and the family is built in hypothesis order.
-
-**The fifteen configs, re-validated at this commit** from fresh fixtures: thirteen clean,
-`e05c-fixed-n` and `e08-ordering` each carrying the one `W-DATA-CLUSTER-UNDECLARED` that
-[gap 4's retraction](#gaps-this-analysis-found-in-the-specification) explains. Identical to
-[the previous measurement](#re-checked-on-2026-08-28-against-commit-ae9677e--the-fifteen-configs-re-validated-after-the-slice-closed) — nothing in the fix wave touched a validation path.
-
-**A correction to that previous entry rather than an edit of it.** It states that
-`step03_compare.py`'s docstring "still narrates the *pre-slice* reason for routing around the
-condition-scoped `auroc`". That was true when it was written and is not true now: the docstring rested
-its routing decision on core building no correctable member for a condition's own value, which is
-exactly what this slice retired, and `2026-08-28-gcl-measurement` installs `publishable` editable off
-this working tree — so the sentence was false against the code that repo actually runs. It has been
-rewritten there to name both live routes and what each buys; **the routing itself is unchanged**, because
-the `Estimate`'s bootstrap pools every fold's out-of-fold score into the one AUROC over patients that E2
-claims, where the template's `auroc` is per condition. That remains the study's trade to make — it just
-now rests on current facts.
-
-**One observation not filed as a gap.** `publishable validate configs/e01-reference-gate` — the
-experiment *directory* rather than its `config.yaml` — reports `E-IO-FAILED  Is a directory`.
-[§ CLI reference](reference.md#cli-reference) documents the argument as a config file path and every
-example writes one, so this is a thin diagnostic rather than a contradiction, and it is recorded here
-instead of filed because it is a property of core's argument handling rather than anything this
-analysis's configs pressed on.
 
 ---
 
