@@ -103,8 +103,9 @@ publishable-growth-chart/
     ├── resolvers/units.py       @register_resolver("growth_trajectory")
     ├── probes/instrument.py     @register_probe("growth_llm_deployment")
     ├── writers/artifact.py      @register_writer(".transcript.jsonl") + its reader
-    └── steps/request.py         a reusable BaseStep subclass, imported not registered
-                                 (proposed here, and not among what was built to measure)
+    └── steps/request.py         transport, retry and per-unit cost, imported not
+                                 registered — written 2026-08-28, see the dated
+                                 entry in § Executability on this build
 ```
 
 ```toml
@@ -2232,6 +2233,73 @@ documenting harder.
 against a deployment. `run`, `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain
 unexercised by this analysis, the four `summary`-step `Estimate`s are unwritten, and `step02_score`
 is still a stub. The release moves none of that.
+
+---
+
+### Measured on 2026-08-28 against `v0.2.0` — the pipeline is written, and this is what writing it found
+
+Every step body this analysis proposed now exists: **2,328 lines of implementation and 2,091 lines
+of tests across seven modules**, at `2026-08-28-gcl-measurement@de3878d` and
+`publishable-growth-chart@64bde4d`. 179 tests pass. All fifteen configs still validate — thirteen
+clean, two carrying the `W-DATA-CLUSTER-UNDECLARED` [gap 4's retraction](#gaps-this-analysis-found-in-the-specification)
+explains.
+
+| Module | Is |
+|---|---|
+| `serialize.py` | E3's nine cells, E3b's two encodings, E8's five fixed shuffles, E5c's cap, E5d's framing sentence |
+| `parse.py` | Response → `growth_issues`, with the three failure kinds kept apart so `scoring.parse_failure` means something |
+| `prompts/` | Three prompt files under `src/`, loaded by stem, inside `code_hash` |
+| `models.py` | Logistic regression and a boosted tree on numpy, plus Cohen's kappa |
+| `estimates.py` | The shortcut reliance index, the residual slope, DeLong, Cochran's Q — the quantities core refuses |
+| the plugin's `request.py` | Transport, retry over `llm.backoff_secs`, per-unit token and latency capture |
+| the six step bodies | The wiring, at the four scopes |
+
+**This section's job is what the writing found, not that it happened.** Five things, each measured:
+
+**1. A metric a config declares and a template never derives is invisible to `validate`.**
+`e01-reference-gate` names `step02_score.kappa` in its hypothesis; `growth_label.aggregate` derived
+only `auroc`. The config validates clean — core cannot know which keys an `aggregate` returns — so
+the hypothesis would have resolved to `supported: null` at run time with no diagnostic anywhere. The
+template now derives `kappa` and `agreement_raw`. **This is the sharpest limit of a declaration-level
+check this analysis has found**, and it is not a defect in core: `aggregate` is user Python, and
+[greenfield only](design-principles.md#greenfield-only) means core validates declarations and
+verifies effects rather than reading the body. But it means *the fifteen configs validating* was
+never the same claim as *the fifteen configs computing what they declare*, and this document's
+earlier entries should be read with that distinction in mind.
+
+**2. The `{to: constant}` limitation bites in practice, exactly as filed.** E2's claim is "a
+visit-count-only model discriminates above chance". The template already derives `auroc` per
+condition *with a core-computed interval* — the better number — but `compare: {to: constant, value:
+0.5}` on a condition-scoped metric returns `supported: null` under a declared correction method,
+because core builds no correctable `Member` for a condition's own value. So the claim routes through
+a `summary`-step `Estimate` instead, which is `reported: true` and outside the correction family.
+That is [the filed limitation](superpowers/spec-defects.md) costing a real claim its place in
+the family, and it is the study's decision rather than this code's.
+
+**3. The refusals are ~200 lines of numpy, not a `statsmodels` dependency.** Two of the three
+quantities the configs declare are ratios of means over a paired table and the third is a rank
+correlation; none needs a likelihood optimiser. `statsmodels` stays declined until an arm genuinely
+needs a random-intercept fit — E3's format × derivation interaction is the first — because a plugin's
+dependency lands in the lockfile `reproduce` restores.
+
+**4. The shortcut reliance index is undefined where the plan most needs it, and now says so.** OI-17
+records this and the implementation honours it: when the physiology main effect is zero — which is
+E4's H0 holding, a model that cannot see the curve at all — the index returns nothing rather than a
+ratio with no meaning. A cohort that flags on schedule alone produces a real numerator over a zero
+denominator, and reporting infinity there would read as "total shortcut reliance" from a division
+that has none.
+
+**5. Writing the steps is what surfaced core's own gap.** `W-STEP-RETURN-DISCARDED` exists in 0.2.0
+because two wide steps here returned counts core was dropping — silently before the release. That is
+the whole argument for driving a specification with a real pipeline rather than with configs alone:
+a config exercises declarations, a step body exercises the runtime, and the two find different
+things.
+
+**What is still not measured.** Nothing here has executed a step against a deployment, so `run`,
+`resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised by this analysis and
+every cost figure below is still arithmetic rather than an anchor. What blocks that is unchanged and
+is not code: **OI-7's cohort definition** and **OI-8's model roster and prompt specification**, both
+`[author decision]` in the source plan. The pipeline is ready for them; they are not ready for it.
 
 ---
 
