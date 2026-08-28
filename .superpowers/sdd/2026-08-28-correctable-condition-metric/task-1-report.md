@@ -97,3 +97,32 @@ Deferred (not fixed here, per the coordinator's instruction): the two
 pre-assertions implied by the final equality, and the hypothesis block's
 `family_size == 1` (its corrected bound trivially equals its raw one; the
 `vs_baseline` bounds do differ, so the oracle still stands on those).
+
+## Fix round 2 — promote the silently-wrong-bound mutation to primary
+
+Round 1's `rank + 1` mutation only proves the oracle notices a crash
+(`ZeroDivisionError`), not a silently wrong but valid corrected bound —
+the actual risk this slice poses. The coordinator ran the stronger
+mutation and reported both outputs rather than spend a round on it; I did
+not re-run either mutation, per instruction.
+
+Coordinator-run mutation, quoted as given, `src/publishable/correction.py`
+`_level_for`'s `holm` branch:
+`return ALPHA / (family_size - rank + 1)` -> `return ALPHA / family_size`
+(flat Bonferroni level under a declared `holm` correction — a valid float,
+no exception).
+
+- red: `FAILED tests/test_cli.py::test_task1_bit_stability_oracle_over_the_correction_machinery`, `1 failed, 582 deselected in 1.09s`
+- restored via `cp` from a backup, `diff` byte-identical, re-ran: `1 passed, 582 deselected in 0.88s`
+
+Rewrote the docstring's "Mutation" paragraph: the flat-Bonferroni
+substitution above is now the PRIMARY evidence, with the reasoning stated
+inline (this pin is for bit-stability, not crash-detection). Both
+previously-run mutations (`rank + 1` at the call site, and the golden-
+literal edit) are demoted underneath, each labeled with what it actually
+proves and does not prove.
+
+Verification: `uv run ruff format tests/test_cli.py` -> `1 file left
+unchanged`; `uv run ruff check tests/test_cli.py` -> `All checks passed!`;
+the oracle test -> `1 passed, 582 deselected`; `uv run mypy` -> `Success:
+no issues found in 56 source files`.

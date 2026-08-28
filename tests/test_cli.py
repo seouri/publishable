@@ -29010,20 +29010,28 @@ def test_task1_bit_stability_oracle_over_the_correction_machinery(tmp_path: Path
     it path- or timing-sensitive it would have differed between the two
     captures and it did not.
 
-    Mutation (proves the oracle can fail against PRODUCTION code, not just
-    against its own golden literal): `src/publishable/correction.py`'s
-    `corrected_for` call site, `level = _level_for(method, family_size,
-    rank)` -> `_level_for(method, family_size, rank + 1)` -- the actual code
-    that COMPUTES a corrected bound, mirroring `_level_for`'s own docstring
-    (`holm` is alpha/(m-i+1), so shifting the rank by one is exactly the
-    off-by-one a real regression would introduce). Run by hand before this
-    test was finalized (task 1 report has the full before/after `pytest`
-    output): red under the mutation, restored from a pre-mutation copy
-    (checked by `diff`, not by `git status`) and green again after. A second,
-    earlier mutation against the golden literal itself
-    (`results.contrasts.0...ci95_corrected.0`) was also run and is reported,
-    but that one only proves the comparison reads that element -- it is the
-    production-code mutation above that proves the pin.
+    PRIMARY mutation (proves the oracle catches a silently WRONG bound, which
+    is the only thing this pin is for -- bit-stability, not crash-detection):
+    in `src/publishable/correction.py`'s `_level_for`, the `holm` branch,
+    `return ALPHA / (family_size - rank + 1)` -> `return ALPHA / family_size`
+    -- a flat Bonferroni level under a declared `holm` correction, a valid
+    float with no exception raised anywhere. Run by the task 1 slice's
+    coordinator rather than re-run here (re-running would tell nothing new):
+    red, `FAILED tests/test_cli.py::test_task1_bit_stability_oracle_over_the_
+    correction_machinery` / `1 failed, 582 deselected in 1.09s`; restored via
+    `cp` from a backup, `diff` byte-identical, re-ran green, `1 passed, 582
+    deselected in 0.88s` (task 1 report has both outputs verbatim).
+
+    Demoted, weaker mutations, both actually run (by this task's own
+    implementer) and both reported: `_level_for`'s call site in
+    `corrected_for`, `level = _level_for(method, family_size, rank)` ->
+    `rank + 1` -- proves the oracle notices *an* error, but this fixture's
+    3-member family drives one rank to 4 and `_level_for` raises
+    `ZeroDivisionError` before returning anything, so it never reaches a
+    wrong-but-valid bound; and the golden literal itself
+    (`results.contrasts.0...ci95_corrected.0`), which only proves the
+    comparison reads that element. Neither is what makes this pin trustworthy
+    -- the flat-Bonferroni mutation above is.
     """
     import publishable.generators.experiment as experiment_gen
 
