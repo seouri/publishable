@@ -205,3 +205,4 @@ removed anywhere in the test diff. Costs if wrong: this round had one pair of ey
 and the whole-branch review at T11 is the net.
 
 Task 9: complete (commits ae21f78..7c19472, 2 fix rounds, review clean, 1 new spec-defects filing)
+Task 10: complete (commits fc6413c..40f1663, review clean)
