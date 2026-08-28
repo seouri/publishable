@@ -3452,8 +3452,13 @@ run-time knowledge by the same argument as the metric count above.
 ## A column metric's `resample_draws` records the requested `n`, not a survivor count
 
 Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Interval` where
-`percentile_of_derived` returns `(Interval, int)`, so a recorded column under a declared
-`statistics.resample` has no survivor count to record beside its interval.
+`percentile_of_derived` returned `(Interval, int)`, so a recorded column under a declared
+`statistics.resample` has no survivor count to record beside its interval. **The asymmetry this
+entry rests on is being closed as it is read**: G2 task 2 (2026-08-28) widened
+`percentile_of_derived` again, to a `PairedResample` carrying the pool as well, and G2 task 3 gives
+`percentile_over_units` the same shape — at which point a column DOES have a survivor count and
+this entry's premise expires. The ruling below stands for every build before that; re-read it
+against the code rather than carrying it forward.
 
 **Ruling: record the requested `n`, and only when an interval is actually produced — conditional
 on finite inputs.** A column's draw statistic is a mean over a non-empty sample of *finite*

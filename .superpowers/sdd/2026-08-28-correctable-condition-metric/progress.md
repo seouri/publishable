@@ -90,3 +90,28 @@ the docstring's primary evidence, attributed to the controller and not claimed a
 Task 1: complete (commits b5eb0ef..5661b90, 2 fix rounds, review clean; suite 3532 passed, 1
 skipped, 2 xfailed; ruff and mypy clean). THE ORACLE IS LIVE — every later task must keep it green,
 and a task that reddens it has moved a bound the slice promised not to move.
+Task 2: implemented (commits 1abc3df..98cd061) — reused the existing PairedResample dataclass; 21 call sites; oracle reported green. Review dispatched.
+Task 2: review — SPEC ✅, quality Approved, 3 Minor (commits 1abc3df..98cd061). The reviewer verified
+line by line that no arithmetic moved, that `pool=values` IS the list `interval_at` indexed, that
+`PairedResample`'s three fields carry the same meaning here (not a near-fit), and that the Task 1
+oracle is green with its golden literal untouched.
+
+Ruling: **the stale `spec-defects.md` claim is fixed by me, now, rather than entering a fix round.**
+Line ~3455 said in the PRESENT tense that `percentile_of_derived` returns `(Interval, int)`, which
+task 2 made false. It is one sentence in a file the implementer was never pointed at, and this
+slice's remaining tasks widen the same signature again — so a round spent on it would be re-opened
+by task 3 anyway. I amended it to say the entry's premise is expiring under G2 and to re-read it
+against the code. The sibling at line ~801 is a DATED past-tense account of what H4a did and is
+correct as history; left alone. Costs if wrong: a controller edit skipped review, in a development
+record rather than in code.
+
+Task 2: minor (deferred): `assert got.pool == sorted(got.pool)` is implied by the `interval_at` call
+in the same test, which asserts sortedness internally.
+Task 2: minor (deferred): nothing pins the new `pool=sorted(values)` on the below-floor branch
+(interval `None`, pool non-empty). Task 4 consumes it.
+Task 2: minor (noted): `PairedResample`'s NAME now overreaches — it serves unpaired constructions
+too. Renaming touches every paired call site; not worth a round mid-slice.
+Task 2: the report under-counted call sites (21 claimed, 26 actual: 2 in `stats.py`, 24 in
+`test_stats.py`). All updated, mypy clean, zero tuple-unpacks remain — a miscount in prose, not a
+missed site.
+Task 2: complete (commits 1abc3df..98cd061, review clean; suite 3534 passed, 1 skipped, 2 xfailed)
