@@ -3853,6 +3853,10 @@ None of this disturbs verification: `parameters_hash` [never covered the path fi
 
 **One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count, and for a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) the `n` it declared — and asks you to confirm — a prompt for your judgment, not a guarantee. An `Estimate` that declared no `n` is listed too: core has nothing to compare, and an interval without a denominator is the case the prompt exists for.
 
+### A correction family does not cross a run
+
+Within a single run, `statistics.correction` corrects the family built from `vs_baseline` and `statistics.contrasts`, and `correction.family_shape` counts those core-built members — a count a reader can re-derive from the record. Across runs, a declared family would be whatever an author listed; a bundle correcting at that asserted size would render an interval that looks core-computed and is not. That is the one fault this project's whole correction story exists to prevent. So the route is: a family spanning runs is the author's to correct, declared in the manuscript, and each member's own record continues to carry the within-run family it really was corrected at. The analysis's own worked case is `{E5a–d}` — four arms of one experiment with four different rosters, and therefore four runs — one author's family pre-registered across all four.
+
 ---
 
 ## CLI reference
