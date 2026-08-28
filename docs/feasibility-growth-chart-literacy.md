@@ -1962,6 +1962,8 @@ shipped in `v0.2.0`; the corrected bound described below landed in `v0.2.1` — 
 
 **9. Closed — a derived metric gets no unpaired contrast, and both the promise and the silence are fixed.** [§ Errors `validate` reports](reference.md#errors-validate-reports)' *Contrast has units in common* row says a comparison crossing a [group axis](reference.md#expansion-modes) "is unpaired instead, computed by `welch_t_over_units`/`unpaired_percentile_over_units` and their `_clustered` forms", with no carve-out for how the metric was produced. `cli.py` suppresses that branch for a **derived** metric on a stated ground — a recomputed metric would need `aggregate` evaluated on each side's independently drawn table, "a construction this build does not have" — so the contrast records `delta: null`, `method: null`, `paired: false` and both side counts, and the hypothesis reading it comes back `supported: null`. [E1](#e1--the-reference-standard-gate) is exactly this shape and its confirmatory hypothesis is unanswerable as written: `visit_tertile` is a group axis and `kappa` is derived by `growth_label.aggregate`. The code's reasoning is sound and the refusal is right; the gap was that a reader was told the construction exists, and then met a null delta beside two healthy side counts with nothing to attribute it to. Both ends are closed: the row now names the exception, and the suppression reports [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), naming the two routes — record the quantity as a column, or carry the comparison as a `summary`-step `Estimate`. **`validate` could not have reported it**, which is the second half of [finding 1](#executability-on-this-build) and worth stating: whether `step02_score.kappa` names a derived key or a recorded column is a fact about what an `aggregate` *returns*, and core never reads a step body. At the suppression site, mid-run, it is known. E1's run now emits the warning twice — once per metric `growth_label.aggregate` derives on that contrast.
 
+**10. Closed — a hypothesis that reaches no verdict now records why, and says so while it is still fixable.** The sharpest failure this analysis produced twice: a pre-registered confirmatory hypothesis naming a metric the run never produced, resolving to `observed: null` / `supported: null` in total silence. E1 hit it when `growth_label.aggregate` derived only `auroc` and the config named `step02_score.kappa`; E2 hit it when a `summary` step keyed its `Estimate` after the condition label (`auroc_baseline`) while the config named `auroc_count_only`. Two properties made it as bad as it was: `observed: null` covers **two** faults with different remedies — the metric was absent, or `compare: {to: constant}` named no `condition` on a run whose sweep resolved several — and nothing distinguished them; and core's run-time warnings are never written to `run.yaml`, so no warning alone would have reached the person reading the record. Both halves are closed: the entry carries [`unevaluable`](reference.md#pre-registration) — `metric_absent` or `condition_unresolved`, **absent** rather than null when there is a verdict — and [`W-HYPOTHESIS-UNEVALUABLE`](reference.md#warnings-core-reports) renders that field at run time, naming **every metric the step did record**, which is what turns *something is wrong* into *here is the typo*. It is not a `validate` row and cannot be: the step half of a metric name is already checked there by `E-HYPOTHESIS-METRIC`, and the key half is whatever a template's `aggregate` or a `summary` step returns — user Python, which core does not read. The general form of the second property — that no warning of any kind survives into the record — is [filed](superpowers/spec-defects.md) rather than closed, because persisting findings raises a redaction question and changes what `diff` calls identical.
+
 **One gap belongs to the source rather than to the specification, and it bounds this whole analysis.** OI-7 leaves the cohort, the variable derivations and the source cohort size undefined; OI-8 leaves the model roster and the prompt specification undefined. Every unit count in this document is therefore the plan's own stated sample size rather than something checked as drawable, and **no cost or runtime figure is given at all**, because there is no anchor the source itself observed — no roster, no prompt, and so no token count. The request counts below are exact; multiplying them by a price is not something this document can honestly do.
 
 
@@ -1976,9 +1978,9 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-28 against `publishable` commit `6a71507`
+### Measured on 2026-08-28 against `publishable` commit `62d842a`
 
-Also pinned: `2026-08-28-gcl-measurement@0af6d2e` and `publishable-growth-chart@64bde4d`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@df6cfb2` and `publishable-growth-chart@64bde4d`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
@@ -2029,7 +2031,9 @@ warnings are the false positive [gap 4's retraction](#gaps-this-analysis-found-i
 explains. Every config's `data.units.attributes` now also names the label columns its own pipeline
 reads — see [gap 8](#gaps-this-analysis-found-in-the-specification), which is why they have to.
 
-**Three configs have executed, and all three reach a verdict.** E1, E2 and E6 are the
+**Three configs have executed, and all three reach a verdict**, re-run at this commit against core
+`62d842a` — no `unevaluable` on any of them, which is the field's control case as much as its
+absence is the point. E1, E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and each now completes:
 
@@ -2120,7 +2124,11 @@ exercises declarations and a step body exercises the runtime:
 sharpest limit of a declaration-level check this analysis has found. `e01-reference-gate` names
 `step02_score.kappa` in its hypothesis while `growth_label.aggregate` derived only `auroc`; the config
 validated clean, because core cannot know which keys an `aggregate` returns, so the hypothesis would
-have resolved to `supported: null` at run time with no diagnostic anywhere. The template now derives
+have resolved to `supported: null` at run time — with no diagnostic anywhere at the time this was
+found, which is the half core has since closed: a hypothesis whose metric the run never produced now
+records [`unevaluable: metric_absent`](reference.md#pre-registration) and reports
+[`W-HYPOTHESIS-UNEVALUABLE`](reference.md#warnings-core-reports) naming every metric the step did
+record. The template now derives
 `kappa` and `agreement_raw`. It is not a defect in core — `aggregate` is user Python and
 [greenfield only](design-principles.md#greenfield-only) means core validates declarations and verifies
 effects rather than reading the body — but it means **the fifteen configs validating was never the
@@ -2160,7 +2168,9 @@ units are in this run*: each downstream step indexes it by keys from its own `io
 `e02` fixes its only `grid` axis with `sweep.baseline`, so that condition renders as the bare word
 `baseline` — there is no `key=value` body left. A label-derived `Estimate` key was therefore
 `auroc_baseline`, while the config's hypothesis names `auroc_count_only`: a metric nothing produced,
-resolving to `supported: null` with no diagnostic anywhere. This is [finding 1](#executability-on-this-build)
+resolving to `supported: null`. It was silent when found and is not now — core records
+`unevaluable: metric_absent` and names the keys the step produced, which for this exact config prints
+`auroc_count_only` beside the typo that should have been it. This is [finding 1](#executability-on-this-build)
 again from the other end — core cannot know which keys a step returns — and the fix is to name the
 metric after the **resolved arm**, written by the `repeat`-scoped step that had it. A summary step
 cannot recover it itself: reading a path the sweep varies
