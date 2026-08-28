@@ -140,3 +140,33 @@ Task 4: complete (commits e40b9e2..48e9ea4, 3 fix rounds, review clean after adj
 Task 5: complete (commits b831bcc..5da4986, review clean)
 Task 5: minor (deferred): traceback-absence asserted on both stdout and stderr rather than only the
 stream a traceback goes to — harmless, since stdout is independently pinned to the diagnostic.
+
+Task 6+7: review found 1 Critical, 2 Important, 2 Minor (commits 7161ae5..7df4772)
+Task 6+7: minor (deferred): `reference.md` row 636 under-describes coverage — "a known gap, recorded
+here rather than closed" is no longer true for the no-groups form.
+Task 6+7: minor (deferred): report-once is pinned only through `messages_by_code`'s dict collapse
+rather than by counting findings; it did go red, so it has power.
+Task 6+7: fix round 1/5 (2 addressed, 1 open — the exclusion moved from per-config to per-axis and is still too broad; shapes F and J silenced; commits 7df4772..ce5f10d)
+Task 6+7: fix round 2/5 (1 open — X1 and P1 over-silenced; commits ce5f10d..2ee69af)
+
+Ruling: **X1 and P1 are PARKED, and the predicate is accepted as correct for every reachable
+config.** Both shapes the round-2 re-review found require `groups: [{by: arm, levels: [c, c]}]` — a
+level declared twice on one axis — and that is `E-SWEEP-LEVEL-DUPLICATE`, emitted by `c.error`
+(`validate.py:4797`). Such a config does not run. A warning withheld from a config that already
+fails with an error tells a reader nothing the error does not already force them to fix, and once
+they fix it the warning fires on whatever duplication remains. The exclusion's remaining breadth is
+therefore invisible from outside. Costs if wrong: if a later slice ever downgrades
+`E-SWEEP-LEVEL-DUPLICATE` to a warning, these two shapes become live silences and this ruling is the
+thing to re-read.
+
+Ruling: **round 3 is narrowed to the false justification sentences only, not the predicate.** The
+same claim — that the exclusion covers "the pair those checks already report" — has now been false
+after every round, and is currently false in THREE homes. A false sentence in a normative document
+is what this repo punishes hardest, and it is cheap; the predicate is not being touched again.
+Costs if wrong: one more round spent on prose while the code stands.
+Task 6+7: fix round 3/5 (1 addressed, 0 open — 7 homes corrected, predicate confirmed untouched;
+commits 2ee69af..664b21d)
+Task 6+7: minor (deferred): the report says "six homes" and lists seven — a slip in ledger prose,
+not in governed spec or code.
+Task 6+7: complete (commits 7161ae5..664b21d, 3 fix rounds, review clean, 2 parked;
+suite 3499 passed, 1 skipped, 2 xfailed; ruff and mypy clean)
