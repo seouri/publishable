@@ -12,3 +12,16 @@ No task contradicts another and none mandates something the review rubric treats
 Ruling: work proceeds directly on `main` with commit and push per task, as G1 and G2 did on the
 same instruction. Cost if wrong: history on main rather than a branch, which this project has
 accepted twice before.
+
+Task 1: implemented (commit 76aa752). Suite 3556 passed / 1 skipped / 2 xfailed (+2 new tests);
+ruff, format and mypy clean. Both mutations reported with output: restoring the interpolation fails
+the message test, and adding an offending interpolation fails the source sweep.
+Ruling: the agent STALLED mid-task waiting on a monitor it had scheduled, and returned without
+running its gate or committing. Resumed with an instruction to run the four commands in the
+foreground with long timeouts. Recorded because it is a dispatch defect rather than an implementer
+one — a brief that says "gate before committing" should also say how long the gate takes. Cost if
+wrong: none; the work was correct once it ran.
+Note for later tasks: T1 found the old message pinned in TWO places the brief did not name — a
+whole-stdout literal in `tests/test_cli.py` and README's demo transcript. A message this project
+prints is quoted in more places than a grep of `src/` shows. Later tasks changing printed output
+must sweep `tests/` and the four documents before believing they are done.
