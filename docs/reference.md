@@ -2053,7 +2053,7 @@ sweep:
   #   03_cohort=validation__baseline   …
 ```
 
-**`expand` numbers this differently today, and the divergence is unresolved.** It emits every
+**`expand` numbers this differently today, and the divergence is unresolved**, and it is [recorded as a gap](superpowers/spec-defects.md) rather than left as a discrepancy between this section and the tool. It emits every
 baseline as one leading block and then the ablations — `00_cohort=derivation__baseline`,
 `01_cohort=validation__baseline`, `02_cohort=derivation__labs=false`,
 `03_cohort=derivation__notes=false`, `04_cohort=validation__labs=false`,

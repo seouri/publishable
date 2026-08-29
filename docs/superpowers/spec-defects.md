@@ -22,6 +22,9 @@ of this file's job now, and it changes how three things read:
   new entry: 152 of which 62 are `OPEN`** — a filing rather than a reopening, and the count moves with it.
   **Recounted again 2026-08-28: the `persisted-findings` slice closed the run-time-warnings-are-never-
   written entry by code and removed it, netting to 151 of which 61 are `OPEN`.**
+  **Recounted again 2026-08-29: the build-claim sweep over the four documents filed the `expand`
+  numbering divergence, netting to 152 of which 62 are `OPEN`** — a filing rather than a reopening,
+  and it closed nothing, so the count moves in one direction only.
   What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
@@ -6563,4 +6566,43 @@ none`, where nothing is corrected for anyone — the bound test works exactly as
 `vs_baseline` comparison or a declared contrast. (The entry's original "Why open" paragraph said the
 bound test was never answerable at all; that was true when filed and false after Task 5, so the fix
 wave deleted it rather than rewriting it.)
+
+## OPEN — `expand` numbers a `groups` × `ablate` sweep in a different order from the one `reference.md` § Expansion modes documents, and neither has been chosen — **Owner: unassigned, and no slice follows**
+
+**Found by:** the build-claim sweep over the four documents, 2026-08-29. **Measured against commit
+`4207ed2`** by calling `sweep.expand` directly on the config that section prints, not inferred from
+the code.
+
+`reference.md` § Expansion modes shows a combined group-and-ablate sweep numbering its conditions
+interleaved — each group level's baseline followed by that level's ablations — and its own
+[§ How artifacts are organized](../reference.md#how-artifacts-are-organized) Index row states the same
+rule. `expand` emits every baseline as one leading block instead:
+
+```
+documented:  00_cohort=derivation__baseline  01_cohort=derivation__labs=false  02_cohort=derivation__notes=false
+             03_cohort=validation__baseline  04_cohort=validation__labs=false  05_cohort=validation__notes=false
+
+measured:    00_cohort=derivation__baseline  01_cohort=validation__baseline
+             02_cohort=derivation__labs=false  03_cohort=derivation__notes=false
+             04_cohort=validation__labs=false  05_cohort=validation__notes=false
+```
+
+**The two agree on everything except the indices.** The same six conditions, the same labels, the
+same units in each — so no result depends on the difference, and the standing advice in that section
+(*"Address a baseline by its label, never by its index"*) is what keeps it harmless. What it costs is
+a reader who designs against the documented numbering and looks for a directory
+`03_cohort=validation__baseline` that is named `01_`.
+
+**This is filed as a defect rather than as a bug because neither side is obviously right, which is
+also why it is still open.** The interleaved rule the documents state is ill-defined once a second
+axis makes a cell's rows non-contiguous; the tool's rule is well-defined but is not what either
+document says. Picking one is a design decision, and the reason `reference.md` states the numbering
+rather than quietly matching the tool is that changing the document would settle that decision by
+default.
+
+**Both halves already say so, and this entry adds only the filing.** `reference.md` § Expansion modes
+carries *"`expand` numbers this differently today, and the divergence is unresolved"* with the
+measured ordering quoted beside it. That sentence was verified by running at the commit above, which
+is how this entry came to exist: a documented divergence with no entry here reads as an oversight
+rather than as a decision nobody has taken.
 
