@@ -20817,7 +20817,12 @@ def test_branch_is_recorded_from_the_repo_not_assumed(tmp_path: Path, monkeypatc
 
 
 def test_h9a_arm_b_runs_full_stdout_line_by_line(tmp_path: Path, capsys):
-    """H9a guard-pin ARM B. SOLE AUTHORIZED EDITOR: NONE. Same shape as arm
+    """H9a guard-pin ARM B. **RE-AUTHORIZED by G3 task 1 (persisted findings),
+    which changed `W-ENV-UNLOCKED`'s wording so that no run-path message
+    interpolates a host path — see that slice's design § Decision 4.** What
+    task 1 was permitted to change is the one stdout line carrying that
+    message, and nothing else: the literal list is still asserted verbatim,
+    not wildcarded. SOLE AUTHORIZED EDITOR: NONE thereafter. Same shape as arm
     A ("that same completed run" — the design's own wording, honoured here
     as the same fixture parameters, not the same process, since each test
     in this file drives its own `main(["run", ...])`), asserting stdout
