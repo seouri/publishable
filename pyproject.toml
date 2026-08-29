@@ -94,7 +94,7 @@ include = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "types-pyyaml>=6.0"]
+dev = ["pytest>=8.0", "pytest-xdist>=3.6", "ruff>=0.6", "mypy>=1.11", "types-pyyaml>=6.0"]
 
 [tool.ruff]
 line-length = 100
@@ -128,3 +128,16 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["slow: exercises real uv or network"]
+# `-n 8` is the default because the suite is ~3500 tests of real git repos and
+# real runs, and the serial wall clock is 6 minutes. Measured on 2026-08-29
+# against an 8-core machine: 365s serial, 143s at `-n 8`. It is a plateau
+# rather than a peak — `-n 4` gives 146s and `-n 6` 142s, and `-n 16` is worse
+# at 174s, because each test runs ~1.8x slower under contention (aggregate call
+# time goes 326s to 589s). So this buys the parallel speedup that exists on
+# this hardware and stops; raising the number does not help.
+#
+# Override it per-invocation with `-n 0`, which runs everything in one process
+# — verified to give live output under `-s` and to enter the debugger under
+# `--pdb`. NOT `-p no:xdist`: unloading the plugin leaves this `-n` unparsed and
+# pytest exits on a usage error before collecting anything.
+addopts = ["-n", "8"]

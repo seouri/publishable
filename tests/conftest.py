@@ -1,5 +1,6 @@
 import importlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -64,10 +65,8 @@ def write_experiment_module(repo: Path, body: str = EXPERIMENT_MODULE) -> Path:
     return path
 
 
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    """A real git repo with one commit. Provenance is never mocked."""
-    repo = tmp_path / "repo"
+def _build_git_repo(repo: Path) -> Path:
+    """Create the one-commit repository `git_repo` hands out, from nothing."""
     (repo / "src").mkdir(parents=True)
     (repo / "src" / "placeholder.py").write_text("# placeholder\n")
     write_experiment_module(repo)  # committed, so the tree stays clean
@@ -76,6 +75,33 @@ def git_repo(tmp_path: Path) -> Path:
     git("config", "user.name", "Test", cwd=repo)
     git("add", ".", cwd=repo)
     git("-c", "commit.gpgsign=false", "commit", "-qm", "initial", cwd=repo)
+    return repo
+
+
+@pytest.fixture(scope="session")
+def _git_repo_prototype(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Built once per session; `git_repo` copies it rather than rebuilding it.
+
+    Around 1500 tests take `git_repo`, and building one costs five `git`
+    subprocesses — measured at ~82ms against ~7ms for a `copytree` of the
+    finished tree, which is ~75s of the suite's wall clock. The copy is a real
+    repository, not a mock: `git status` reports it clean and `rev-parse HEAD`
+    resolves, because a repository holds no absolute path outside `.git/config`
+    and `copytree` preserves the mtimes the index caches.
+
+    The one property the copy does not have is a commit SHA of its own — every
+    test now shares one. Nothing here asserts two fixtures differ, and a test
+    that needs a distinct history should commit into its copy, which changes the
+    SHA the same way it always did.
+    """
+    return _build_git_repo(tmp_path_factory.mktemp("git_repo_prototype") / "repo")
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path, _git_repo_prototype: Path) -> Path:
+    """A real git repo with one commit. Provenance is never mocked."""
+    repo = tmp_path / "repo"
+    shutil.copytree(_git_repo_prototype, repo, symlinks=True)
     return repo
 
 
