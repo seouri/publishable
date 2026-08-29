@@ -28,6 +28,34 @@ def _restore_environ():
     os.environ.update(saved)
 
 
+# Every `git commit` fires `git maintenance run --auto`, and that child
+# DETACHES: it holds `.git/objects/maintenance.lock` for some milliseconds
+# after the commit has already returned. Anything that walks `.git` in that
+# window — `copytree` of the session fixture, `rmtree` of a `.git` a test is
+# removing on purpose — lists the lock and then fails to read it. Two such
+# failures landed on `ubuntu-latest` on 2026-08-29, at two sites with nothing
+# in common but a preceding commit; neither has ever fired on a developer
+# machine, because a loaded runner is what widens the window.
+#
+# There are ~70 raw commit sites across `tests/`, so this is set on the
+# environment rather than at any of them: `GIT_CONFIG_*` is inherited by every
+# git subprocess the suite spawns, including the ones `publishable` itself
+# spawns under test. It layers ABOVE repo-local config, so a test that sets its
+# own `gc.auto` would be overridden — nothing does, and `GIT_CONFIG_COUNT` is
+# unused elsewhere in `tests/` (grepped, along with `maintenance` and
+# `gc.auto`). `GIT_CONFIG_GLOBAL`, which several tests in `test_hashes.py` and
+# `test_reproduce.py` do set, is a different mechanism and is not disturbed.
+#
+# Set at import so it is in place before any fixture runs. The autouse
+# `_restore_environ` above snapshots the environment per test, so a test that
+# rewrites `os.environ` cannot leak the loss into the next one.
+os.environ["GIT_CONFIG_COUNT"] = "2"
+os.environ["GIT_CONFIG_KEY_0"] = "gc.auto"
+os.environ["GIT_CONFIG_VALUE_0"] = "0"
+os.environ["GIT_CONFIG_KEY_1"] = "maintenance.auto"
+os.environ["GIT_CONFIG_VALUE_1"] = "false"
+
+
 def git(*args: str, cwd: Path) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
