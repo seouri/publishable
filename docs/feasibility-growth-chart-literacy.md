@@ -1978,16 +1978,16 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-28 against `publishable` commit `62d842a`
+### Measured on 2026-08-29 against `publishable` commit `ffe9f61`
 
-Also pinned: `2026-08-28-gcl-measurement@df6cfb2` and `publishable-growth-chart@64bde4d`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@6ae12d0` and `publishable-growth-chart@28e368e`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
 form itself shipped in 0.2.0, but the correctable `Member` that gives it a real corrected bound under
 `holm` or `bonferroni` landed after it, so an install of `publishable==0.2.0` still evaluates such a
 hypothesis on a bound as `supported: null`. Read every claim here against the commit rather than the
-version number, and take `0.2.1` as the floor for the corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), and **`0.2.3`** for anything this section measures — [`unevaluable`](reference.md#pre-registration) and its warning, which [gap 10](#gaps-this-analysis-found-in-the-specification) closed, ship in 0.2.3.
+version number, and take `0.2.1` as the floor for the corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), and `0.2.3` for [`unevaluable`](reference.md#pre-registration) and its warning. **The persisted [`findings:` block](reference.md#the-two-files), `report`'s `finding` rows, and `W-ENV-UNLOCKED` no longer naming the repository path are in NO release** — they are on `main` only, which is exactly what an editable-path sibling executes and a `publishable==0.2.3` install does not. That distinction has bitten this document once already; it is spelled out rather than left to a version number.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
@@ -2031,9 +2031,14 @@ warnings are the false positive [gap 4's retraction](#gaps-this-analysis-found-i
 explains. Every config's `data.units.attributes` now also names the label columns its own pipeline
 reads — see [gap 8](#gaps-this-analysis-found-in-the-specification), which is why they have to.
 
-**Three configs have executed, and all three reach a verdict**, re-run at this commit against core
-`62d842a` — no `unevaluable` on any of them, which is the field's control case as much as its
-absence is the point. E1, E2 and E6 are the
+**Three configs have executed, and all three reach a verdict**, re-run at this commit — with two
+absences that are each a control case rather than a gap. No `unevaluable` on any of them, because
+each hypothesis resolves. And **no `findings:` key on any of them either**: the record now carries a
+run's own diagnostics, and these three runs emit none — the repository holds a `uv.lock`, so not even
+`W-ENV-UNLOCKED` fires. The populated case is real and was verified separately: restoring E1's
+declared contrast makes the run print two `W-STATS-CONTRAST-UNPAIRED-DERIVED` and its record carry
+exactly those two, in the same order, at `level: warning` — which is the whole claim the block exists
+to make. E1, E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and each now completes:
 
@@ -2067,7 +2072,7 @@ end to end and that a confirmatory hypothesis reaches a verdict rather than a nu
 
 **`publishable dry-run` on each is where every execution count in this document comes from.** It
 expands the sweep, builds the input manifest, probes the apparatus, and prints the step directories,
-the ten fixed files a run would write, and the unit-execution count. All were re-measured at this
+the fixed files a run would write, and the unit-execution count. All were re-measured at this
 commit: the total is **455**, up from 399, and the difference is exactly the 56 conditions across the
 twelve screening configs — one `step02_construct` execution each.
 
