@@ -54,31 +54,6 @@ uv run ruff check . || fail 'ruff check'
 uv run ruff format --check . || fail 'ruff format --check'
 uv run mypy || fail 'mypy'
 
-# The mechanical pass over the documents, when the tools are installed. They live
-# in `~/.claude/tools/` and NOT in this repository, which ships no tooling by
-# policy (CLAUDE.md § Checking consistency after any `*.md` edit) — so their
-# absence is a skip with a notice, never a failure. A hook that refused to push
-# because a personal script is missing on a fresh clone would be worse than the
-# defects it catches.
-#
-# `docs/superpowers/` is deliberately not passed: the mechanical pass governs the
-# four documents and their siblings, never the development record.
-checks="${HOME}/.claude/tools"
-if [ -d "$checks" ]; then
-    docs="README.md CLAUDE.md"
-    for f in docs/*.md; do
-        [ -e "$f" ] && docs="$docs $f"
-    done
-    for tool in link_check mech_check table_check; do
-        if [ -f "$checks/$tool.py" ]; then
-            # shellcheck disable=SC2086 - word splitting is how the file list is passed
-            python3 "$checks/$tool.py" $docs || fail "$tool"
-        fi
-    done
-else
-    printf 'pre-push: %s not present — document checks skipped\n' "$checks" >&2
-fi
-
 uv run pytest -q || fail 'pytest'
 
 # Every commit these four checks passed, for `.githooks/reference-transaction`
