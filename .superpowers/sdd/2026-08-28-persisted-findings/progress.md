@@ -53,3 +53,19 @@ doing its job, not a loosening — the review is checking it as such.
 Review dispatched with `streams` as its first question. Several of the 12 sites printed to stderr,
 and a silent move to stdout is invisible to every assertion about the record — the exact shape this
 slice is otherwise built to prevent.
+Task 2 review: PASS on both verdicts, no findings. The reviewer checked all 12 stream assignments
+individually (5 stderr, 7 stdout, none crossed), confirmed no out-of-scope command's rendering was
+touched, traced the list from construction through `Prepared` to extension without reassignment or
+sort, and — the part that mattered — mutated a site in `_execute_prepared`, which the implementer's
+own report never exercised, proving the pin covers both functions rather than only the one mutated.
+Task 2: complete (commits b9938c7, 9212a4a).
+
+Ruling: **Task 5 is ABSORBED into Task 3, and this is a defect in my plan rather than in any task.**
+The plan sequences the oracle update after the assembly, but the global constraint requires a clean
+suite at every commit — and the moment Task 3 puts `findings:` into `run.yaml`, the bit-stability
+oracle pinning the whole normalized record fails. There is no ordering in which the two are separate
+commits and the suite is green in between: the block cannot exist before Task 3 and cannot be
+unpinned after it. Task 3 therefore determines whether its fixture emits any finding, and updates the
+oracle in the same commit if it does, reading the diff rather than regenerating the literal.
+Cost if wrong: one larger commit instead of two, and the oracle's movement is reviewed with the
+change that caused it rather than a task later — which is arguably where it belongs anyway.
