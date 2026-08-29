@@ -69,3 +69,16 @@ unpinned after it. Task 3 therefore determines whether its fixture emits any fin
 oracle in the same commit if it does, reading the diff rather than regenerating the literal.
 Cost if wrong: one larger commit instead of two, and the oracle's movement is reviewed with the
 change that caused it rather than a task later — which is arguably where it belongs anyway.
+Task 3 review (opus): PASS both verdicts, 1 Medium + 2 Low. The strongest review of the slice — it
+AST-extracted each golden literal at both commits and diffed them (+4 leaves, 0 removed, 0 values
+changed), enumerated all EIGHT pinning tests by name and ruled each faithful, and mutated `assemble`
+to sort the findings to prove the order test discriminates.
+Task 3 fix round 1: all three addressed (commit c79cc51). Suite 3564 passed / 1 skipped / 2 xfailed.
+Ruling: the Medium was MY comment from the previous slice, and the sweep it triggered found THREE
+live homes where I had named one — `cli.py`, `hypotheses.py`, and a `test_cli.py` fixture template.
+That is the repo's own lore reproduced exactly: sweep for the claim, not for the file the claim was
+first noticed in. I verified the closure independently rather than spending a re-review cycle — the
+claim now has no live home in `src/`, `tests/` or the four documents, the justification is rewritten
+to survive on current facts, and the new end-to-end test exists with its reason in its docstring.
+Cost if wrong: a scoped re-review skipped on a three-line fix I read myself.
+Task 3: complete (commits 98dff8c, c79cc51).
