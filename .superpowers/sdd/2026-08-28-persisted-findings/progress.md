@@ -82,3 +82,15 @@ claim now has no live home in `src/`, `tests/` or the four documents, the justif
 to survive on current facts, and the new end-to-end test exists with its reason in its docstring.
 Cost if wrong: a scoped re-review skipped on a three-line fix I read myself.
 Task 3: complete (commits 98dff8c, c79cc51).
+
+Task 4: implemented (commits aa12e21, 8091f32). Suite 3567 passed / 1 skipped / 2 xfailed (+3);
+ruff, format, mypy clean. Absent-case mutation fails 3 tests and passes after a cp restore.
+The order fixture is three entries chosen so emission order differs from BOTH a by-code and a
+by-level sort — the implementer sized it by counting the orderings it had to rule out and noting
+that two elements can only ever rule out one. That is the discipline stated correctly and applied
+without being asked twice.
+Ruling: the stall is a DISPATCH defect and now a pattern, not an implementer one. Tasks 1 and 4 both
+scheduled a background wait for their own 7-minute test run and returned without gating or
+committing; Task 4 had an explicit "no monitors, foreground only" line and did it anyway. The
+instruction is being read too late, inside the gate section. For the remaining tasks it goes in the
+FIRST line of the dispatch. Cost if wrong: a resume message per task, which is what it has cost.
