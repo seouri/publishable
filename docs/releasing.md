@@ -14,7 +14,7 @@ The sequence matters, and each step's output is the next step's input.
 
 | # | Step | Why here |
 |---|---|---|
-| 1 | Land every change on `main` and push | The published metadata's URLs point at `main`; they should resolve to a tree that contains what they describe |
+| 1 | Land every change on `main`, through a pull request | The published metadata's URLs point at `main`; they should resolve to a tree that contains what they describe |
 | 2 | Build and verify the artifacts | Everything after this consumes the exact bytes verified here |
 | 3 | TestPyPI, and install from it — **optional**, see below | A real upload against a real index. `verify` covers the rest, so this earns its place only for a new name, a metadata change, or a README change |
 | 4 | Tag and cut the GitHub release | Tag the tree that gets uploaded, before uploading it |
@@ -37,7 +37,25 @@ Six files carry `publishable`'s own version, and `CLAUDE.md` § Versions is the 
 
 **Three sites carry `0.1.0` and must NOT move**: `scaffold.py` and `plugin_scaffold.py` write the *scaffolded project's* version, and `tests/test_cli.py`'s fixtures do the same. Two real pins assert `provenance.publishable_version`, and they move only when the package version does. Enumerate these; never `sed` the version across the tree.
 
-## 1. Land and push
+## 1. Land, through a pull request
+
+**`main` takes no direct pushes.** Since 2026-08-29 a ruleset requires a pull
+request and a passing `suite` check, with no bypass for anyone — the repo admin
+included. So the version bump is a branch like any other change:
+
+```bash
+git checkout -b release-<v>
+# ... move the six version sites (§ Version sites) ...
+git push -u origin release-<v>      # .githooks/pre-push runs the four checks here
+gh pr create --base main --title "publishable <v>"
+gh pr merge --squash --delete-branch # once `suite` is green
+git checkout main && git pull --ff-only origin main
+```
+
+The four checks still run, in three places now rather than one: `pre-push` on
+the branch push, `tests.yml` on the pull request, and `release.yml`'s `verify`
+before anything reaches PyPI. Run them by hand first if you would rather not
+spend a push on a formatting slip.
 
 ```bash
 uv run pytest        # 3444 passed, 1 skipped, 2 xfailed as of 0.1.0
@@ -45,6 +63,14 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 ```
+
+**That last `git pull` is not tidiness, and skipping it can cost a version
+number.** A squash merge writes a NEW commit: PR #3's branch head was
+`a2ae4da` and what landed on `main` was `5e594d4`, measured on 2026-08-29.
+Everything downstream — the build at step 2, the tag at step 4 — has to come
+from the commit that is on `main`, not from the branch head that is not. Tag
+the branch head and the immutable release you cannot recut points at a commit
+`main` does not contain.
 
 ## 2. Build and verify the artifacts
 
@@ -115,6 +141,7 @@ Then walk the same arc as step 2.
 ## 4. Tag and release
 
 ```bash
+git checkout main && git pull --ff-only origin main   # tag what is ON main
 git tag -a v<v> -m "publishable <v>
 
 ..."
@@ -122,6 +149,18 @@ git push origin v<v>
 gh release create v<v> --title "publishable <v>" --notes-file <notes> \
   dist/publishable-<v>.tar.gz dist/publishable-<v>-py3-none-any.whl
 ```
+
+**The ruleset does not touch tags**, which is worth knowing here rather than
+discovering at the one step where a mistake costs a version number: it targets
+branches and its condition is `~DEFAULT_BRANCH`, so `git push origin v<v>`
+needs no pull request. Probed on 2026-08-29 with a throwaway tag, which pushed
+and was then deleted — not read off the configuration.
+
+Two smaller consequences of the same setup. `pre-push` fires on a tag push
+too, so the suite runs again here; that is a couple of minutes, not a problem,
+but it is not instant. And `.githooks/reference-transaction` reports nothing
+for a tag push, because it watches `refs/remotes/*` and a tag push updates no
+tracking ref — so `--no-verify` on a tag is silent, unlike on a branch.
 
 **Publishing the release is what triggers the upload** — see step 5. Attach both artifacts here — releases on this repository are immutable, so nothing can add them afterwards — and write the notes **without install instructions** — they are not true yet. The install block goes in at step 7 with `gh release edit`, which keeps the URL.
 
@@ -131,7 +170,7 @@ gh release create v<v> --title "publishable <v>" --notes-file <notes> \
 remote: - Cannot create ref due to creations being restricted.
 ```
 
-Measured on 2026-08-27, when `release.yml`'s first run failed at `verify` and `v0.1.1` could not be re-tagged after its release was deleted. **So there is no retry.** If a release's pipeline fails, the fix goes on `main` and the next release takes the next number.
+Measured on 2026-08-27, when `release.yml`'s first run failed at `verify` and `v0.1.1` could not be re-tagged after its release was deleted. **So there is no retry.** If a release's pipeline fails, the fix goes on `main` — through a pull request like everything else, which is a few minutes of CI before you can cut the next number — and the next release takes the next number.
 
 Which is why a change that could plausibly fail on CI should be proven from a throwaway branch first, on a workflow generated **from** `release.yml` rather than hand-written to resemble it — same jobs, only the trigger changed. That costs a CI run and no version number.
 
@@ -203,7 +242,7 @@ Five things this formula knows that are easy to lose:
 
 **`no_autobump!` is rejected in third-party taps** — measured, not assumed: `Error: ... can only be used in official Homebrew taps`. That is why the `brew bump` workflow is disabled at the tap level instead: its PR moves `url` and `sha256` and never the resources, so for this formula it would be incomplete every time.
 
-**`tests.yml` does not build the formula except on a pull request.** Its only build step, `brew test-bot --only-formulae`, is gated on `github.event_name == 'pull_request'`, so a push to `main` runs tap-syntax and compiles nothing. `formula-still-builds.yml` is the separate weekly workflow that does build, and it exists as a tripwire for the `pyarrow`/`apache-arrow` pin — nothing else in the tap fires when homebrew-core bumps Arrow. **Dispatch it after a version bump and read which step failed.** On 2026-08-27 it went red for 0.1.3 with the build and the formula's own test block both green: its reporting step reached into `Cellar/publishable/0.1.0/libexec/bin/python`, a path that spells a version, so a release is what broke it rather than the pairing it watches. It now reports through `brew --prefix publishable`, the opt link, which names no version.
+**The tap's own `tests.yml` — not this repository's — does not build the formula except on a pull request.** Its only build step, `brew test-bot --only-formulae`, is gated on `github.event_name == 'pull_request'`, so a push to `main` runs tap-syntax and compiles nothing. `formula-still-builds.yml` is the separate weekly workflow that does build, and it exists as a tripwire for the `pyarrow`/`apache-arrow` pin — nothing else in the tap fires when homebrew-core bumps Arrow. **Dispatch it after a version bump and read which step failed.** On 2026-08-27 it went red for 0.1.3 with the build and the formula's own test block both green: its reporting step reached into `Cellar/publishable/0.1.0/libexec/bin/python`, a path that spells a version, so a release is what broke it rather than the pairing it watches. It now reports through `brew --prefix publishable`, the opt link, which names no version.
 
 **`brew untap` and `brew tap` reset the tap's `origin` to HTTPS**, and pushing a workflow file over the `gh` OAuth token then fails with *"refusing to allow an OAuth App to create or update workflow ... without `workflow` scope"*. Set the remote back to SSH.
 
@@ -221,7 +260,8 @@ README's install block and the release notes both gain the routes now that they 
 - [ ] `uv build`; `twine check`; both archive listings read
 - [ ] Wheel installed outside the repo and driven to `status: completed` with a readable `units.parquet` — with the scaffolded project repointed at the wheel, and `publishable_version: <v>` read back out of the finished `run.yaml`
 - [ ] TestPyPI upload and install — only for a new project name, a packaging-metadata change, or a README change; `verify` covers an ordinary release
-- [ ] `main` pushed; tag pushed; GitHub release created, no install block yet
+- [ ] Pull request merged into `main` with `suite` green; local `main` pulled so the tag lands on the squashed commit
+- [ ] Tag pushed; GitHub release created, no install block yet
 - [ ] `release.yml` green through `verify` and `publish`; uploaded sha256 equals the local one
 - [ ] Formula repointed in **both** copies; style, audit, untap/tap, install, test
 - [ ] Tap pushed; `formula-still-builds.yml` green
