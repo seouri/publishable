@@ -1466,36 +1466,6 @@ already names.
 --check` and `mypy` all clean.
 
 
-## Cost and execution summary
-
-All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
-
-| Run | Conditions | Repeats | Executions | Compilations | Cost | Serial hours |
-|---|---:|---|---:|---:|---:|---:|
-| E1 screen-calibration | 4 | 3 × seed | 12 | 4 | $548 | 8.5 |
-| E2 screen-primary | 2 | 3 × seed | 6 | 1 | $179 | 2.6 |
-| E3 screen-cohort-sensitivity | 5 | 3 × seed | 15 | 0 | $210 | 2.6 |
-| E4 screen-reasoning-effort | 5 | 5 × batch | 25 | 0 | $350 | 4.4 |
-| E5 screen-repeatability | 1 | 10 × batch | 10 | 0 | $140 | 1.8 |
-| E6 screen-transfer | 6 | 3 × seed | 18 | 0 | $252 | 3.2 |
-| C1 shortcut-reference-gate | 3 | 5 × batch | 15 | 0 | $53 | 1.0 |
-| C2 shortcut-utilization | 9 | 5 × batch | 45 | 0 | $477 | 9.0 |
-| C3 shortcut-physiology | 12 | 5 × batch | 60 | 0 | $636 | 12.0 |
-| **Total** | | | **206** | **5** | **$2,845** | **45.1** |
-| *Same nine runs at one repeat each* | | | *77* | *5* | *$1,180* | *17.5* |
-
-**The headline is the second row, not the first.** All nine runs at `{kind: seed, n: 1}` / `{kind: batch, n: 1}` cost **less** than the source projects' own comparable matrix (≈ $1,276 for the screening protocol's 13 rows alone) while producing confidence intervals, paired contrasts, and pre-registered verdicts that neither source computes. The $2,845 figure is what repeat dispersion costs on top, and `replication.rationale` is where each run records whether it was worth it.
-
-Two roster-variant runs the screening protocol requires — the 32:1 class-ratio robustness row and the disease-cap 500 pair — are **not** in this table because they cannot share a roster with E1-E3. At source cost they add ≈ $444 and ≈ 12 h across three further runs.
-
-Every run is far below `limits.max_executions: 500`, so the binding constraint is money and wall clock rather than plan size. Three things drive the total, and each is a decision rather than an accident:
-
-- **Repeat counts.** The screening runs at `{kind: seed, n: 1}` would cost ≈ $1,180 against the source's own ≈ $1,276 for a comparable matrix — cheaper, and with intervals the source does not compute. The `n: 3` figures above buy `repeat_spread`, and `replication.rationale` is where that trade is recorded.
-- **Condition-scoped compilation.** Moving compilation to repeat scope would multiply the five compilations by every repeat and add ≈ $1,900.
-- **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
-
-**As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and the **step directories** and **fixed files** a run would write — not the artifact files inside them, which are `io.write` arguments in step code and are declared nowhere in the config — and it runs the apparatus probe, so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build; what this build's `dry-run` actually does lives in the dated entries ([§ Executability on this build](#executability-on-this-build)). Every figure in this table was computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
-
 ### Correction, appended 2026-08-20 against commit `8d5c046` — "six with no remaining core-side blocker" answers no consistent question
 
 **This corrects a figure carried by the six dated entries above and by `CLAUDE.md`. It does not
@@ -2877,8 +2847,49 @@ installed templates will be honored in a later slice."* The refusal is **permane
 refuses by design, and the route is a project-local `templates/llm_screen.py` subclassing a base class
 the plugin ships. The plugin on disk has already taken that route.
 
-**Where this entry sits.** Every entry since 2026-08-23 has been appended below the
-`## Cost and execution summary` heading rather than inside § Executability, which is where the
-chain drifted rather than a decision anyone made. Nothing above is moved to tidy it — a dated entry
-records where it was written as much as what it measured — so this one is appended at the end of the
-chain, which is what "read the most recent one" means in practice.
+**The entries were relocated on 2026-08-29, and nothing in them changed.** Nineteen of them had been
+appended below `## Cost and execution summary` rather than inside this section — the seventeen from
+the 2026-08-20 H8a entry onward, plus the two 2026-08-20 corrections that had come to rest at that
+section's end, after its per-run cost table, though the H8a entry cites them as prior. That was drift
+rather than a decision: the chain reads as one sequence, and this section tells a reader to read the
+most recent entry while the most recent ones sat under a different heading.
+
+They are here now, in their original order, with every date, commit and figure untouched. The move
+was verified rather than asserted: the block relocated first was compared byte-for-byte against the
+file as it stood before, the second move came out an exact permutation line for line, and the chain's
+dates are non-decreasing from top to bottom. `## Cost and execution summary` keeps what it was always
+about — the anchors, the per-run cost and runtime table, and the repeat-count discussion. What a
+dated entry must preserve is what it measured and when; a relocation touches neither.
+What a dated entry must preserve is what it measured and when, and that is exactly what a relocation
+leaves alone — the alternative, leaving the record's own navigation false, costs a reader the
+sequence the section tells them to read.
+
+## Cost and execution summary
+
+All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
+
+| Run | Conditions | Repeats | Executions | Compilations | Cost | Serial hours |
+|---|---:|---|---:|---:|---:|---:|
+| E1 screen-calibration | 4 | 3 × seed | 12 | 4 | $548 | 8.5 |
+| E2 screen-primary | 2 | 3 × seed | 6 | 1 | $179 | 2.6 |
+| E3 screen-cohort-sensitivity | 5 | 3 × seed | 15 | 0 | $210 | 2.6 |
+| E4 screen-reasoning-effort | 5 | 5 × batch | 25 | 0 | $350 | 4.4 |
+| E5 screen-repeatability | 1 | 10 × batch | 10 | 0 | $140 | 1.8 |
+| E6 screen-transfer | 6 | 3 × seed | 18 | 0 | $252 | 3.2 |
+| C1 shortcut-reference-gate | 3 | 5 × batch | 15 | 0 | $53 | 1.0 |
+| C2 shortcut-utilization | 9 | 5 × batch | 45 | 0 | $477 | 9.0 |
+| C3 shortcut-physiology | 12 | 5 × batch | 60 | 0 | $636 | 12.0 |
+| **Total** | | | **206** | **5** | **$2,845** | **45.1** |
+| *Same nine runs at one repeat each* | | | *77* | *5* | *$1,180* | *17.5* |
+
+**The headline is the second row, not the first.** All nine runs at `{kind: seed, n: 1}` / `{kind: batch, n: 1}` cost **less** than the source projects' own comparable matrix (≈ $1,276 for the screening protocol's 13 rows alone) while producing confidence intervals, paired contrasts, and pre-registered verdicts that neither source computes. The $2,845 figure is what repeat dispersion costs on top, and `replication.rationale` is where each run records whether it was worth it.
+
+Two roster-variant runs the screening protocol requires — the 32:1 class-ratio robustness row and the disease-cap 500 pair — are **not** in this table because they cannot share a roster with E1-E3. At source cost they add ≈ $444 and ≈ 12 h across three further runs.
+
+Every run is far below `limits.max_executions: 500`, so the binding constraint is money and wall clock rather than plan size. Three things drive the total, and each is a decision rather than an accident:
+
+- **Repeat counts.** The screening runs at `{kind: seed, n: 1}` would cost ≈ $1,180 against the source's own ≈ $1,276 for a comparable matrix — cheaper, and with intervals the source does not compute. The `n: 3` figures above buy `repeat_spread`, and `replication.rationale` is where that trade is recorded.
+- **Condition-scoped compilation.** Moving compilation to repeat scope would multiply the five compilations by every repeat and add ≈ $1,900.
+- **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
+
+**As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and the **step directories** and **fixed files** a run would write — not the artifact files inside them, which are `io.write` arguments in step code and are declared nowhere in the config — and it runs the apparatus probe, so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build; what this build's `dry-run` actually does lives in the dated entries ([§ Executability on this build](#executability-on-this-build)). Every figure in this table was computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
