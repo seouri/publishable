@@ -9,6 +9,7 @@ Why `publishable` works the way it does. This is the argument behind the [refere
 
 **The rules, and why**
 - [Everything is in the file](#everything-is-in-the-file) — why no command takes a parameter flag
+- [Every declarable field has a reader](#every-declarable-field-has-a-reader) — why nothing in the config is decoration
 - [Same code, different parameters](#same-code-different-parameters) — why hashes are split
 - [Code and data never share a repo](#code-and-data-never-share-a-repo)
 - [Whose git hash is this?](#whose-git-hash-is-this)
@@ -91,6 +92,25 @@ The test for any future addition: could a reader holding only the config and the
 The same test governs anything interactive. [`demo`](reference.md#what-demo-walks-you-through) stops between commands and waits, and every one of those prompts is proceed-or-quit: **a pause may never alter the config.** A prompt that asked which method to sweep would be a parameter flag with a friendlier face — it would reach the run without passing through the file, and in the first thing a new user ever touches. Pausing changes what a person sees, never what executes, which is why it needs no mode name and why the same sequence runs unattended when nothing is watching.
 
 Variation that needs expressing — a sweep across models, an ablation, a set of conditions — is [structure inside the config](reference.md#sweeps-and-repeats), expanded by core over the parameters the template defined. Never an invocation.
+
+---
+
+## Every declarable field has a reader
+
+A field in the config is a promise that something happens differently when you change it. That promise is easy to break and expensive when it breaks, because nothing about breaking it looks like a failure.
+
+A `Param` no step reads still validates, still expands the sweep, still labels the condition directories and still enters `parameters_hash`. Every condition then renders the identical thing. The run completes, the metrics compute, the intervals are honest about the units they were computed over — and the measured effect of the manipulation is approximately zero, because the manipulation never happened. A missing feature fails loudly. This produces a confident null, which is the one output nobody re-examines.
+
+So a field earns its place one of two ways, and there is no third:
+
+- **It changes what executes**, and something reads it — a step, a check, an expansion rule, a diagnostic.
+- **It is carried.** `metadata`, `replication.rationale`, and a [study bundle's](reference.md#studies-what-a-paper-reports) `title` and `authors` promise nothing but their own presence, and `run.yaml` embedding the config verbatim is what keeps that promise. Carriage is a real reader; it is just a weaker one.
+
+A field that neither changes execution nor reaches the record is decoration, and decoration in a file a reader trusts to describe the run is a claim with a schema around it. This is the [same test](#everything-is-in-the-file) the command line is held to — *could a reader holding only the config and the run record be misled about what happened?* — applied to the schema instead of to the invocation, and an unread field is the cleanest yes available.
+
+**Carriage is not a way to admit anything.** `replication.rationale` justifies a declared number three lines above it, so a reader who holds both can catch them disagreeing. A field that justifies nothing adjacent to it has nothing to be checked against, and belongs in the manuscript that cites the run rather than in the file that describes it. The distinction is whether the record gains a fact somebody could later contradict, not whether a string would fit.
+
+**Core cannot enforce this, which is why it is a principle and not a check.** [Greenfield only](#greenfield-only) means core validates declarations and verifies effects and never inspects the body of your Python, so for a plugin's `parameter_spec` there is nothing core could read to know whether a step ever consulted a value. The check is manual and it is specific: grep the new parameter's call sites and look for a literal sitting where the value should be. A docstring naming the parameter is not the wiring, and a test that exercises the refusal of a bad value proves nothing about whether a good one is honoured.
 
 ---
 

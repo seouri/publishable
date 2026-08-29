@@ -1939,6 +1939,8 @@ def aggregate(self, units, cfg) -> dict:
 
 `Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once. It carries one thing that is **not** a constraint and so is not in [the constraint table](#templates-where-parameters-are-defined): [the credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value), which constrains the environment a value may be used in rather than the value.
 
+**Adding it in one place is not adding a reader.** A `Param` no step consults still materializes, still validates, still expands the sweep, still labels the condition directories and still enters `parameters_hash` — and every condition then renders the identical thing, so the run completes and the manipulation's measured effect is zero. Core cannot catch it: it validates declarations and verifies effects and [never reads a step body](design-principles.md#greenfield-only), so nothing here knows whether `cfg.parameters.<path>` was ever reached. Grep the new parameter's call sites and look for a literal sitting where the value should be — see [Every declarable field has a reader](design-principles.md#every-declarable-field-has-a-reader).
+
 **The constraint vocabulary is closed**, because `parameter_spec` is the schema `validate` enforces and a spec whose vocabulary is open-ended can't be checked or rendered into a comment:
 
 | Constraint | Applies to | Renders as |
