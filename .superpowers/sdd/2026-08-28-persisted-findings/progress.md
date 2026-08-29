@@ -101,3 +101,10 @@ discriminates, and mutated `_finding_rows` to sort by code to prove the order te
 noticed that `fixture_r`'s real run DOES emit findings and checked why the existing pins survive
 anyway (they use filtered lookups, not whole-row equality) rather than accepting "unaffected".
 Task 4: complete (commits aa12e21, 8091f32).
+Task 6 review: PASS both verdicts, no findings. The reviewer grepped the code behind EVERY documented
+claim rather than reading the prose — `assemble_run_yaml` for the shape and absent-when-empty,
+`Collector.disclosed` for the shared redaction, `_disclose`/`E-INPUT-CHANGED` for the error level,
+`report._finding_rows` for the render — and settled the commands list by finding `assemble_run_yaml`'s
+only call site and tracing which handlers reach it (dry-run calls `_prepare_run` alone and never
+persists). It recounted spec-defects independently at 151/61, matching the preamble.
+Task 6: complete (commit 32d4cac).
