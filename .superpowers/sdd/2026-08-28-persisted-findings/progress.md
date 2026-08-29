@@ -42,3 +42,14 @@ Decision 4 refused in favour of prevention. Every message in the two functions t
 literal way, so the sweep covers the whole live surface and the gap is about a shape nothing uses.
 Cost if wrong: a future message could carry a path through a renamed variable and the sweep stays
 green; the reviewer of that task would have to catch it.
+
+Task 2: implemented (commits b9938c7, 9212a4a). All 12 print sites replaced — 5 in `_prepare_run`,
+7 in `_execute_prepared`. Suite 3560 passed / 1 skipped / 2 xfailed (+4); ruff, format, mypy clean.
+Source pin proven: reverting one real site to a bare print fails it with a message naming the
+function; restored from a cp backup and re-run green.
+The implementer disclosed one incidental fixup: a test pinned `len(dataclasses.fields(Prepared)) == 37`
+and `findings` makes it 38, with the docstring counts moved to match. That is a field-count pin
+doing its job, not a loosening — the review is checking it as such.
+Review dispatched with `streams` as its first question. Several of the 12 sites printed to stderr,
+and a silent move to stdout is invisible to every assertion about the record — the exact shape this
+slice is otherwise built to prevent.
