@@ -1,0 +1,54 @@
+# The check that stands between a commit and `main`. `release.yml` runs the
+# same four commands, but only once a release is published — by then a broken
+# commit is already on the branch and already tagged. This workflow is the
+# same gate moved earlier.
+#
+# It deliberately does NOT drive the installed console script the way
+# `release.yml` § "Drive the installed console script outside the repository"
+# does. That gate answers *does the built wheel work*, which is a question
+# about the artifact and belongs to the release; this one answers *does the
+# tree pass its own suite*, which is a question about the commit.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+# GitHub's default is `bash -e {0}`, which has neither `pipefail` nor `-u`.
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+# A superseded run on the same branch is testing a commit nobody will merge.
+# `main` is excluded from cancellation: every commit that lands there should
+# have its own recorded result, not be cancelled by the next push.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      # Same four commands, in the same order, as CLAUDE.md § Commands and as
+      # `release.yml`'s verify job. Keeping the order identical is what makes a
+      # green run here evidence about the release gate too.
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+      # `-n` is left to `addopts` rather than overridden here. pyproject's note
+      # measures the plateau on an 8-core machine; a GitHub runner has fewer
+      # cores, and xdist oversubscription costs wall clock rather than
+      # correctness. If this job's runtime becomes the complaint, measure `-n
+      # auto` on the runner before pinning a number that was measured elsewhere.
+      - run: uv run pytest -q

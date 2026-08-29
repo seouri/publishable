@@ -17,6 +17,16 @@ This repository holds both the normative specification and the tool it specifies
 | Lint | `uv run ruff check .` |
 | Format | `uv run ruff format .` |
 | Types | `uv run mypy` |
+| Install the hooks (once per clone) | `.githooks/install` |
+
+Those four commands run in that order in three places, and the order is the
+point: `.github/workflows/tests.yml` on every push to `main` and every pull
+request, `release.yml`'s `verify` job before anything reaches PyPI, and
+`.githooks/pre-push` before a push leaves the machine. **The hook is fast
+feedback, not the guarantee** — `git push --no-verify` skips it, and
+`core.hooksPath` is per-clone configuration that no clone gets for free, which
+is what `.githooks/install` is for. The guarantee is the workflow plus a branch
+rule on `main` that requires it; a green hook is never evidence that CI passed.
 
 `docs/reference.md` § Package layout describes a tree that now **partially** exists. Modules not yet built are still planned; the slices that would build them are in `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Points this clone's git at the tracked hooks in `.githooks/`.
+#
+# `core.hooksPath` is per-clone configuration and is NOT cloned with the
+# repository, which is the whole reason this script exists: the hook is
+# tracked, but nothing runs it until someone opts in here. Run it once per
+# clone:
+#
+#     .githooks/install
+#
+# Undo with `git config --unset core.hooksPath`.
+#
+# Setting `core.hooksPath` REPLACES `.git/hooks` wholesale rather than adding
+# to it — git looks in one directory, not both. This repository has no hooks in
+# `.git/hooks` (only git's own `.sample` files, which never run), so nothing is
+# displaced; a clone that has added its own hooks there should move them into
+# `.githooks/` rather than run this.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+git config core.hooksPath .githooks
+printf 'core.hooksPath = %s\n' "$(git config core.hooksPath)"
+printf 'installed: %s\n' "$(ls .githooks | grep -v '^install$' | tr '\n' ' ')"
