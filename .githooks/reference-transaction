@@ -1,0 +1,69 @@
+#!/bin/sh
+# Reports a push whose commits `pre-push` never checked.
+#
+# `git push --no-verify` skips `pre-push` entirely, so no hook of ours runs
+# during that push and none can refuse it. `reference-transaction` is the one
+# hook that still fires: it runs for every reference update, is NOT suppressed
+# by `--no-verify`, and a push updates `refs/remotes/<remote>/<branch>` locally
+# once the remote has accepted. Both halves were probed before this was written
+# — `pre-push` silent and this hook firing, under `--no-verify`.
+#
+# So this arrives AFTER the push, and it says so rather than pretending to be a
+# gate. It exists to make a bypass visible and attributable instead of silent.
+# The gate is `.github/workflows/tests.yml` plus the `main` ruleset, which no
+# local flag can skip.
+#
+# Exits 0 in every path. A non-zero exit here aborts the LOCAL ref update while
+# the remote has already taken the push, which would leave the tracking ref
+# lying about the remote — a worse repository than the one it was protecting.
+set -eu
+
+[ "${1:-}" = committed ] || exit 0
+
+record="$(git rev-parse --git-path publishable-verified)"
+warned="$(git rev-parse --git-path publishable-verified-warned)"
+
+while read -r _old new ref; do
+    case "$ref" in
+        refs/remotes/*) ;;
+        *) continue ;;
+    esac
+
+    # A fetch updates the same refs. The reflog message is what separates the
+    # two — `update by push` against `fetch origin: ...` — and it is written by
+    # the time this hook runs in the `committed` state. Without this the hook
+    # would accuse every fetch of upstream work, which is the failure that
+    # makes a warning get ignored.
+    case "$(git reflog show "$ref" -1 --format=%gs 2>/dev/null || true)" in
+        'update by push'*) ;;
+        *) continue ;;
+    esac
+
+    if [ -f "$record" ] && grep -qxF "$new" "$record" 2>/dev/null; then
+        continue
+    fi
+
+    # One push produces more than one committed transaction for the same ref,
+    # so the same commit would otherwise be reported twice in a row.
+    if [ -f "$warned" ] && [ "$(cat "$warned")" = "$new" ]; then
+        continue
+    fi
+    printf '%s' "$new" > "$warned"
+
+    short="$(git rev-parse --short "$new" 2>/dev/null || echo "$new")"
+    printf '\n' >&2
+    printf '  ###############################################################\n' >&2
+    printf '  #  UNVERIFIED PUSH\n' >&2
+    printf '  #    %s -> %s\n' "$short" "$ref" >&2
+    printf '  #  The pre-push checks did not run for this commit. Either\n' >&2
+    printf '  #  --no-verify was used, or the hooks are not installed in\n' >&2
+    printf '  #  this clone (.githooks/install).\n' >&2
+    printf '  #\n' >&2
+    printf '  #  It is already pushed and this cannot undo it. CI on the\n' >&2
+    printf '  #  branch is what decides, and `main` takes no commit without\n' >&2
+    printf '  #  a green one.\n' >&2
+    printf '  ###############################################################\n' >&2
+    printf '\n' >&2
+done
+
+exit 0

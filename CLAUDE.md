@@ -29,6 +29,18 @@ is what `.githooks/install` is for. The guarantee is the workflow plus the
 branch ruleset on `main` that requires it; a green hook is never evidence that
 CI passed.
 
+**A bypass is reported, not prevented.** `pre-push` records every commit its
+four checks passed, and `.githooks/reference-transaction` prints a banner when
+a push carries a commit that is not in that record — `--no-verify`, or hooks
+never installed. It is `reference-transaction` because that hook is **not**
+suppressed by `--no-verify` and still fires when a push updates
+`refs/remotes/*`; a hook cannot refuse a push it was never invoked for, so the
+report arrives *after* the push and says so. Two things keep it honest: it
+skips ref updates whose reflog message is not `update by push`, or every
+`fetch` of upstream work would be accused, and it exits 0 on every path,
+because a non-zero exit there aborts the local ref update while the remote has
+already taken the push — leaving the tracking ref lying about the remote.
+
 **`main` takes no direct pushes.** Since 2026-08-29 a ruleset named `main`
 requires a pull request and a passing `suite` check, with linear history,
 no force-push, no deletion, and **no bypass for anyone including the repo

@@ -3,9 +3,15 @@
 #
 # This hook is FAST FEEDBACK, NOT THE GUARANTEE. It is skipped by
 # `git push --no-verify`, and it only exists in a clone where someone ran
-# `.githooks/install`. The guarantee is `.github/workflows/tests.yml` plus a
-# branch rule on `main` that requires it. Do not let a green hook stand in for
-# a green CI run.
+# `.githooks/install`. The guarantee is `.github/workflows/tests.yml` plus the
+# branch ruleset on `main` that requires it. Do not let a green hook stand in
+# for a green CI run.
+#
+# What it CAN do about its own bypass is leave evidence that it ran: every
+# commit it passes is recorded below, and `.githooks/reference-transaction`
+# reports a push carrying a commit that is not in that record. A hook cannot
+# refuse a push it was never invoked for, so that report arrives after the
+# fact, by design.
 #
 # It checks the WORKING TREE, not the commits being pushed. With a clean tree
 # those are the same thing; with a dirty one they are not, so it says so below
@@ -17,10 +23,14 @@ set -eu
 # and a deletion is the all-zero local sha.
 zero=$(printf '0%.0s' $(seq 40))
 updating=0
+pushed=''
 while read -r _local_ref local_sha _remote_ref _remote_sha; do
     case "$local_sha" in
         "$zero" | "") ;;
-        *) updating=1 ;;
+        *)
+            updating=1
+            pushed="$pushed$local_sha
+" ;;
     esac
 done
 [ "$updating" -eq 1 ] || exit 0
@@ -44,3 +54,11 @@ uv run ruff check . || fail 'ruff check'
 uv run ruff format --check . || fail 'ruff format --check'
 uv run mypy || fail 'mypy'
 uv run pytest -q || fail 'pytest'
+
+# Every commit these four checks passed, for `.githooks/reference-transaction`
+# to read. Written only here, after the last check, so the record cannot claim
+# a commit the suite never saw. Truncated to the last 200 entries because it is
+# evidence about recent pushes and nothing reads further back.
+record="$(git rev-parse --git-path publishable-verified)"
+printf '%s' "$pushed" >> "$record"
+tail -n 200 "$record" > "$record.trimmed" && mv "$record.trimmed" "$record"
