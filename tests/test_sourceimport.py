@@ -24,6 +24,7 @@ row 6, *a sweep that stops one file short*).
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import yaml
@@ -217,3 +218,68 @@ def test_a_project_whose_steps_a_run_imports_still_runs_end_to_end(tmp_path: Pat
     )
     assert main(["run", str(cfg)]) == 0
     assert (next(results.glob("run_*")) / "run.yaml").is_file()
+
+
+_RACE_STEP = "class Step:\n    scope = 'run'\n" + "# padding, to widen the exec window\n" * 200
+
+_RACE_ENTRYPOINT = (
+    "".join(f"from .steps.step{i:02d} import Step as S{i}\n" for i in range(6))
+    + """\
+
+from publishable import BaseExperiment
+
+
+class RaceExperiment(BaseExperiment):
+    steps = []
+"""
+)
+
+
+def test_two_threads_loading_one_project_do_not_corrupt_each_others_import(tmp_path: Path):
+    """`load_experiment` purges `sys.modules` and opens a `sys.path` window,
+    and two of them at once corrupt each other unless the window is atomic.
+
+    Core spawns no threads, so no command reaches this. `test_cli.py`'s H9b
+    arm G does: it drives two `main(["resume", ...])` calls in threads as a
+    stand-in for the two PROCESSES a takeover race is really between, and
+    processes do not share `sys.modules`. That arm went red on CI on
+    2026-08-29 with `KeyError: 'cohort_pilot.steps.step02_step02_score'` and
+    had never failed on a developer machine, so this is the same hazard driven
+    directly rather than through a run.
+
+    **Sized against the unfixed code rather than guessed.** Unserialized, two
+    threads over this project raise within milliseconds — 43,697 failures in 8
+    seconds when the shape was first measured — in two forms: a purge landing
+    between another thread's `exec_module` and CPython's
+    `sys.modules.pop(spec.name)`, and `import_module_fresh` handing back a
+    module another thread is still executing. The step modules are padded and
+    there are six of them because both windows are the duration of an exec.
+    """
+    package = tmp_path / "src" / "race_pkg"
+    (package / "steps").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "steps" / "__init__.py").write_text("")
+    for index in range(6):
+        (package / "steps" / f"step{index:02d}.py").write_text(_RACE_STEP)
+    (package / "experiment.py").write_text(_RACE_ENTRYPOINT)
+
+    failures: list[str] = []
+    guard = threading.Lock()
+
+    def load_repeatedly() -> None:
+        for _ in range(25):
+            try:
+                load_experiment(tmp_path, "race_pkg.experiment:RaceExperiment")
+            except BaseException as exc:  # noqa: BLE001 - the failure is the finding
+                with guard:
+                    failures.append(f"{type(exc).__name__}: {exc}")
+                return
+
+    threads = [threading.Thread(target=load_repeatedly) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert failures == [], failures
