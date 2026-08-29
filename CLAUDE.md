@@ -25,8 +25,20 @@ request, `release.yml`'s `verify` job before anything reaches PyPI, and
 `.githooks/pre-push` before a push leaves the machine. **The hook is fast
 feedback, not the guarantee** — `git push --no-verify` skips it, and
 `core.hooksPath` is per-clone configuration that no clone gets for free, which
-is what `.githooks/install` is for. The guarantee is the workflow plus a branch
-rule on `main` that requires it; a green hook is never evidence that CI passed.
+is what `.githooks/install` is for. The guarantee is the workflow plus the
+branch ruleset on `main` that requires it; a green hook is never evidence that
+CI passed.
+
+**`main` takes no direct pushes.** Since 2026-08-29 a ruleset named `main`
+requires a pull request and a passing `suite` check, with linear history,
+no force-push, no deletion, and **no bypass for anyone including the repo
+admin** — probed, not assumed: a direct push of an empty commit was rejected
+with `GH013`, naming both rules. So the flow is branch, push, open a PR, let
+`tests.yml` go green, squash or rebase merge. Zero approving reviews are
+required, because a solo maintainer cannot approve their own pull request and
+a rule nobody can satisfy is a rule that gets deleted the first time it
+matters. An emergency override is editing the ruleset in Settings, which is
+visible afterwards, rather than a bypass that leaves no trace.
 
 `docs/reference.md` § Package layout describes a tree that now **partially** exists. Modules not yet built are still planned; the slices that would build them are in `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
