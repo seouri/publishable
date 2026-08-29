@@ -1465,6 +1465,7 @@ already names.
 `uv run pytest` at this commit: 2456 passed, 1 skipped, 2 xfailed; `ruff check`, `ruff format
 --check` and `mypy` all clean.
 
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
@@ -2779,3 +2780,105 @@ Full local gates at this commit, run rather than assumed: `3485 passed, 1 skippe
 418.90s`, `ruff check .` *All checks passed!*, `mypy` *no issues found in 56 source files*. Nothing this
 measurement did touches them — every run above happened in a scratch project outside this repository —
 and they are recorded so a reader can tell a docs-only change from one that moved code.
+
+### Measured on 2026-08-29 against commit `c344b05` — the first measurement against a released 0.2.x
+
+The 2026-08-27 entry was run against `dc03ec4`, where `__version__` read `0.1.3`. Core is `0.2.5`
+now, so this is the first entry measured against a build a reader can install by version rather than
+by commit. Appended, not folded back: every entry above stands as what was true on its date.
+
+**What moved in `src/` since `dc03ec4`.** 14 files, +1217/−132. Of the four modules the rows rest on,
+`runner.py` and `units.py` are byte-identical by `md5`, and **`validate.py` and `stats.py` are not** —
+so the byte-identity derivation the last five entries leaned on is no longer available for rows 1 and
+3, and both were re-derived by running instead. **Exactly one diagnostic code is minted** in the
+window and none removed: `E-TEMPLATE-PARAM-PATH`, by a `git grep` for the `code="..."` spelling over
+`src/publishable/**` at each commit, differenced — the same method at both ends, so trustworthy for
+the delta and not quoted as a total. That sweep was proved able to fail by searching the new set for
+a string known to be in it.
+
+**The narrowings are the 2026-08-27 entry's, with one substitution changed.** Same `publishable demo`
+fixture, same 240-row synthetic `index.csv` carrying every column the nine configs name, same
+verbatim transplant of each config's `data.units` and `statistics` blocks with `parameters`, `sweep`,
+`replication` and `hypotheses` left behind, same eight transplantable configs because E3 carries no
+`data`/`statistics` YAML, same single stand-in contrast for C2's two and C3's four.
+
+**The plugin the last entry installed is not on this machine.** `publishable-llm-screening@d47340d`
+is absent; what exists is `publishable-llm` at `e06dfd0` with substantial uncommitted work, which is
+the package this analysis proposes by name. It is **not** installed for this measurement and nothing
+below rests on it, because a measurement pinned to an uncommitted tree pins nothing. One thing about
+it is worth recording as a fact about the plugin rather than about core: its `pyproject.toml` now
+carries the comment *"No `publishable.templates` group, deliberately"*, shipping a template base
+class for a project-local `templates/` file to subclass — the route row 4's blocker leaves open.
+
+#### Row 1 re-derived by running: 8 of 8, unchanged
+
+Every transplantable config validates with **zero errors** under the table substitution. The print is
+`1 problem (0 errors, 1 warning)` for seven and `2 problems (0 errors, 2 warnings)` for E5 —
+identical to the 2026-08-27 entry, down to which config carries the second warning.
+`W-DATA-CLUSTER-UNDECLARED` on all eight and `W-STATS-FAMILY` on E5 alone, both fixture properties as
+that entry describes them.
+
+As declared — `from: {resolver: patient_trajectory}` — all eight earn `E-RESOLVER-UNKNOWN` and
+nothing else. `E-DATA-RESOLVER-UNSUPPORTED` stays retired, and **`E-DATA-WEIGHT-CONTRAST` does not
+appear on C1, C2 or C3**, which is the refusal table at the head of this section being superseded
+rather than a new finding: [§ Shortcut: three runs](#shortcut-three-runs) already states that this
+build computes `weight_by` beside a contrast rather than refusing it.
+
+**Both discriminating mutations re-run.** `holdout.frac: 0` on E1 produces `E-DATA-HOLDOUT-FRAC` and
+restoring returns one warning and zero errors; C2's `weight_by` pointed at a column the roster does
+not carry produces `E-DATA-WEIGHT-UNKNOWN`, and reverting restores the clean result. A block that
+could not fail either way would not be a measurement.
+
+**Two triage corrections, recorded because the first readings were wrong and looked like findings.**
+E6 first reported `E-STATS-REPORTBY-UNKNOWN` and `E-STATS-RESAMPLE-STRATIFY-UNKNOWN`, and C2/C3 first
+reported `E-STATS-CONTRAST-UNKNOWN`. Neither was about the build. The extractor bounded each design
+section at the next `###` heading, so the `## Shortcut: three runs` block fell inside E6's body and
+gave E6 the shortcut roster's attributes; and the stand-in contrast named `analysis.method=spearman`
+where `dry-run` prints the label as `method=spearman`. Both were attributed before being counted,
+which is the only reason they are corrections here rather than a table row claiming core regressed.
+
+#### Row 2 unchanged, row 3 re-derived rather than extracted
+
+`io.reuse_from` still ships (`grep -n "def reuse_from" src/publishable/artifacts.py` returns a hit),
+and six configs still need the plugin body to call it.
+
+Row 3 could not be carried forward on byte-identity this time, because `stats.py` moved. Run instead,
+with `report_by: [sex]` under a declared `resample`, it holds and is sharper than the byte-identity
+argument could show: at a `report_by` level a **recorded column** keeps `method: t_over_units` with
+`resample_draws: null`, while a **derived** metric at the same level is resampled
+(`percentile_over_units`, 200 draws) — and the same recorded column *is* resampled at whole-condition
+scope. So the limitation is specific to a recorded column at a level, exactly as
+[`reference.md`](reference.md) documents it, and the 2026-08-26 correction's noun still stands: a
+documented limitation, not a gap.
+
+#### Row 4's blocker is still there, and it has stopped being temporary
+
+A config naming a template an installed distribution registers is still refused with
+`E-TEMPLATE-INSTALLED-UNSUPPORTED` — measured by building a throwaway distribution that registers
+`llm_screen` as a `publishable.templates` entry point and validating a config that names it, since
+the plugin the last entry used is gone. **What changed is the message, and with it the conclusion
+this analysis should draw:**
+
+```
+error   E-TEMPLATE-INSTALLED-UNSUPPORTED experiment_type
+        names `llm_screen`, which fake-llm-plugin 0.1.0 registers as a `publishable.templates`
+        entry point — but core resolves an installed template's name from package metadata
+        without importing its package, and never loads the class behind it. That is what this
+        project ships rather than a gap waiting on a slice: keep the template in your own
+        `templates/`, where path discovery finds it and `code_hash` covers it, and let the
+        plugin carry the machinery — its resolvers, probes, writers and readers all dispatch
+        from an install
+```
+
+The 2026-08-27 entry quotes the older wording: *"loading one is not implemented in this build;
+installed templates will be honored in a later slice."* The refusal is **permanent**, and
+`publishable list-templates` says the same from the other side. So [§ Package](#package)'s
+`[project.entry-points."publishable.templates"]` line is not waiting on anything — it is a shape core
+refuses by design, and the route is a project-local `templates/llm_screen.py` subclassing a base class
+the plugin ships. The plugin on disk has already taken that route.
+
+**Where this entry sits.** Every entry since 2026-08-23 has been appended below the
+`## Cost and execution summary` heading rather than inside § Executability, which is where the
+chain drifted rather than a decision anyone made. Nothing above is moved to tidy it — a dated entry
+records where it was written as much as what it measured — so this one is appended at the end of the
+chain, which is what "read the most recent one" means in practice.
