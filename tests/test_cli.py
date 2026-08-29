@@ -26902,57 +26902,42 @@ def test_h9c_reproduce_new_reaches_real_argument_handling_not_a_roadmap_notice(c
 #           deliberately leaves README's `[0.347, 0.477]` unpinned, so it is
 #           NOT a collision with arm A or arm B (plan correction 29).
 #
-# Arm C is below; arm D is in `tests/test_scaffold.py`; arm F is below.
+# Arm C was below and is RETIRED IN FULL — its own block, immediately after
+# this one, records what retired it. Arm D is in `tests/test_scaffold.py`;
+# arm F is below.
 # ---------------------------------------------------------------------------
 
-# RETIRED IN PART, 2026-08-25, by controller ruling — see the docstring below.
-# `docs/experimental-designs.md` left this dict when H3c-3 task 21 made a
-# sentence in it TRUE that had been false against the code. The arm fired, a
-# human looked, and what the look found was the arm's own premise expiring.
-_H9D_ARM_C_DIGESTS = {
-    "docs/design-principles.md": (
-        "cf03bdf476973a74c4365f6abdd78ee76aa7754ca2062d02b9c8b785edd80171"
-    ),
-}
-
-
-@pytest.mark.parametrize("relative_path", sorted(_H9D_ARM_C_DIGESTS))
-def test_h9d_arm_c_two_of_the_four_documents_are_byte_identical_at_merge(relative_path: str):
-    """H9d guard-pin arm C. **NO AUTHORIZED EDITOR.** The file must be
-    byte-identical, so a red arm here is a FINDING — a hash to investigate,
-    never a hash to refresh.
-
-    **RETIRED IN PART, 2026-08-25, by controller ruling, and the reason is the
-    finding.** This arm was captured over TWO files. H3c-3 task 21 then edited
-    `docs/experimental-designs.md` to replace a sentence that was **false
-    against the code** — it said a fold or a holdout within a cell *"is not
-    built"* and *"is refused outright"*, which H3c-3 had just made untrue — and
-    the arm went red exactly as designed. **The investigation it forced is what
-    retired it**: the arm asserts a fact about a PAST merge by hashing a LIVE
-    file, so it must break the first time any later slice legitimately edits
-    that file, and `experimental-designs.md` is a document whose whole job is to
-    describe behaviour that slices change. **A digest over it is a proxy for
-    "did the worked example move?", and the proxy fails whenever the document
-    does its job.**
-
-    **`design-principles.md` stays**, on the opposite ground: it carries the
-    shared worked example, nothing remaining in this project should touch it,
-    and for a file that should not move a whole-file digest **is** the direct
-    question rather than a proxy for one. Its parametrization passed throughout
-    H3c-3, which is the evidence for keeping it.
-
-    `README.md` and `docs/reference.md` are deliberately NOT in this arm, and
-    design § 8.2 says why: task 12 must edit README twice and task 14 must edit
-    `reference.md` in eight sections, so a whole-file digest over either would
-    report only *an edit happened*, which is not a claim worth making and which
-    an implementer meeting it red has to guess about. What needs protecting in
-    those two files is pinned by CONTENT instead — arm A's `REFERENCE`
-    parametrization, arm B's README scan, and arm E's three `diff` blocks.
-
-    Captured at `f9434bf` by reading the whole file as bytes.
-    """
-    path = Path(__file__).resolve().parents[1] / relative_path
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == _H9D_ARM_C_DIGESTS[relative_path]
+# RETIRED IN FULL, 2026-08-29. Nothing is asserted here any more, and the two
+# retirements together are the finding, so both are kept rather than deleted.
+#
+# 2026-08-25, by controller ruling: `docs/experimental-designs.md` left this
+# arm when H3c-3 task 21 made a sentence in it TRUE that had been false against
+# the code. The arm fired, a human looked, and what the look found was the
+# arm's own premise expiring — the arm asserts a fact about a PAST merge by
+# hashing a LIVE file, so it must break the first time any later slice
+# legitimately edits that file. `docs/design-principles.md` stayed, on the
+# stated ground that "nothing remaining in this project should touch it," which
+# makes a whole-file digest the direct question rather than a proxy.
+#
+# 2026-08-29: that ground expired, for the reason the 2026-08-25 half already
+# names. `design-principles.md` gained § Every declarable field has a reader —
+# a new normative rule, which `CLAUDE.md` § Nothing remains on the charter
+# provides for in those words: a gap found from here is a new slice's charter.
+# So "nothing should touch it" was a statement about a completed charter, not a
+# property of the file, and the digest was a proxy for *did the worked example
+# move?* after all.
+#
+# **It had not moved, and the refresh was refused rather than taken.** The
+# property this arm existed to protect is pinned by CONTENT in two places, both
+# green across the edit that fired this one: arm A's `[DESIGN_PRINCIPLES]`
+# parametrization of `test_h5a_arm_d_the_worked_examples_own_numbers_as_raw_
+# text`, which locates every line carrying a worked-example literal by that
+# literal, and `tests/test_diff.py`'s
+# `test_h8c_arm_d_design_principles_worked_diff_block_rows`, which pins that
+# file's diff block row by row. Nothing is replaced here, because replacing it
+# would be the *same list pinned twice* fault this arm's own inventory refuses
+# for README and `reference.md` — both of which are pinned by content for
+# exactly this reason, and neither of which was ever in this arm.
 
 
 def test_h9d_arm_f_the_not_built_command_set():
