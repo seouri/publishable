@@ -1940,7 +1940,7 @@ The pattern across that table is worth naming, because it decides how the paper 
 
 ## Gaps this analysis found in the specification
 
-These are the deliverable's second output: places where a real plan pressed on the schema and something gave. Each was measured; the measurements are in the [next section](#executability-on-this-build).
+These are the deliverable's second output: places where a real plan pressed on the schema and something gave. Each was measured; the measurements are in [§ Executability on this build](#executability-on-this-build).
 
 **1. Closed — a `parameter_spec` path that is not exactly two segments now gets a diagnostic, not a traceback.** `"reference_frame"` and `"a.b.c"` used to raise `ValueError: _parameters_block only supports two-segment dotted paths (head.leaf)` as an unhandled traceback out of `generate experiment`; both are now refused at template-class load, before `@register_template` or anything else sees the class, as `E-TEMPLATE-PARAM-PATH`. [§ Templates](reference.md#templates-where-parameters-are-defined) now states the two-segment constraint directly, and [§ Errors `validate` reports](reference.md#errors-validate-reports) carries the row. The template written for this analysis renamed one parameter to work around the crash before the fix; that workaround is no longer necessary, but the renamed spelling is what this document's example still shows.
 
