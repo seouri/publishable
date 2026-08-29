@@ -108,3 +108,21 @@ claim rather than reading the prose — `assemble_run_yaml` for the shape and ab
 only call site and tracing which handlers reach it (dry-run calls `_prepare_run` alone and never
 persists). It recounted spec-defects independently at 151/61, matching the preamble.
 Task 6: complete (commit 32d4cac).
+Task 7: complete (commit 3aad714). Whole-branch 3567 passed / 1 skipped / 2 xfailed (baseline 3554,
++13 green); ruff, format, mypy clean. Both guard pins re-run green on their own lines — the
+bit-stability oracle and the no-bare-print source pin. Both consistency passes clean with a
+GitHub-accurate slugger (a naive one false-flags ~39 correct double-hyphen anchors, and 4 table
+flags were escaped `\|` in cell prose). Sibling repo: 212 passed.
+Task 7 reported a REAL residual rather than smoothing it: all three executable configs emit no
+run-path warning, so printed-equals-recorded was exercised only for the EMPTY case — a control
+asserting an absence, which is the shape this repo collects.
+Ruling: I closed that myself rather than shipping the slice on an absence. Added E1's declared
+contrast back temporarily to induce a genuine run-path warning, ran it, and compared:
+  printed  : W-STATS-CONTRAST-UNPAIRED-DERIVED  W-STATS-CONTRAST-UNPAIRED-DERIVED
+  recorded : W-STATS-CONTRAST-UNPAIRED-DERIVED  W-STATS-CONTRAST-UNPAIRED-DERIVED
+same order, `level: warning` both, `path: contrast:kappa_gap` both, full message intact, and `report`
+rendered two `finding` rows. Then reverted the probe and re-validated E1 clean. **The claim the slice
+exists to make is now verified against a real pipeline in both the empty and the populated case.**
+Cost if wrong: two throwaway commits in a scratch measurement repo, both reverted.
+
+SLICE COMPLETE: G3 (persisted findings), 7 tasks (Task 5 absorbed into Task 3), all on main.
