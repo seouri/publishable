@@ -1978,16 +1978,16 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-29 against `publishable` commit `ffe9f61`
+### Measured on 2026-08-29 against `publishable` commit `41e7cd3`
 
-Also pinned: `2026-08-28-gcl-measurement@6ae12d0` and `publishable-growth-chart@28e368e`. Both sibling
+Also pinned: `2026-08-28-gcl-measurement@b22d570` and `publishable-growth-chart@28e368e`. Both sibling
 repositories install core as an **editable path dependency** with no version bound, so they execute this
 working tree rather than a release — which is what makes the measurements below current. The corrected
 bound these measurements depend on is **released in `v0.2.1`**: the `compare: {to: constant, value: N}`
 form itself shipped in 0.2.0, but the correctable `Member` that gives it a real corrected bound under
 `holm` or `bonferroni` landed after it, so an install of `publishable==0.2.0` still evaluates such a
 hypothesis on a bound as `supported: null`. Read every claim here against the commit rather than the
-version number, and take `0.2.1` as the floor for the corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), and `0.2.3` for [`unevaluable`](reference.md#pre-registration) and its warning, and **`0.2.4`** for the persisted [`findings:` block](reference.md#the-two-files), `report`'s `finding` rows, and `W-ENV-UNLOCKED` no longer naming the repository path. Four floors for four releases, kept separate because a reader who installs one of them gets exactly what that one shipped — a distinction this document once collapsed into a single version number and had to take back.
+version number, and take `0.2.1` as the floor for the corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), and `0.2.3` for [`unevaluable`](reference.md#pre-registration) and its warning, and **`0.2.4`** for the persisted [`findings:` block](reference.md#the-two-files), `report`'s `finding` rows, and `W-ENV-UNLOCKED` no longer naming the repository path. Four floors for four releases, kept separate because a reader who installs one of them gets exactly what that one shipped — a distinction this document once collapsed into a single version number and had to take back. **`0.2.5` is released and adds a fifth floor to nothing**: its whole change under the hashed trees is a lock around `load_experiment`'s `sys.modules` window, which no config can observe and no measurement here can see, so an install of `0.2.4` gets everything this document describes.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (220 lines),
@@ -2113,8 +2113,10 @@ condition `03_schedule=sparse__provider=ollama__deployment=llama-4-70b__baseline
 | Probe | Result |
 |---|---|
 | `sweep.grid` on a `list`-typed parameter — `llm.backoff_secs: [[2, 8, 30], [5, 20, 60]]` | `E-SWEEP-VALUE-UNNAMEABLE`: *swept value '[2, 8, 30]' does not match `^[A-Za-z0-9._+-]+$`* |
-| A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN`, naming the label that matched no condition, beside `E-STATS-CONTRAST-SHAPE` |
+| A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN` alone, naming the label that matched no condition — one error, not two |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
+
+**The contrast-naming row said `beside E-STATS-CONTRAST-SHAPE` until this re-measurement, and the pairing was the probe's, not the edit's.** `E-STATS-CONTRAST-SHAPE` answers a structural question — a non-list `contrasts`, an entry that is not a mapping, a missing or non-string `id` — and a well-formed entry whose `of` names no condition earns `E-STATS-CONTRAST-UNKNOWN` and nothing else. Both codes appear together when the entry ALSO drops its `id`, which is what the original probe must have written; that variant was run here to confirm it, and reports both. Core's contrast checks did not move between the two measurements, so this is a correction to how a probe was described rather than a change in behaviour.
 
 **Two things that are *not* refused, both checked by running.** A second config naming the first's
 `entrypoint` validates, which is what makes one `src/` package across fifteen configs the recommended
