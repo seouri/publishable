@@ -52,3 +52,32 @@ def test_render_handles_empty_findings():
     c = Collector()
     out = c.render()
     assert "0 problems (0 errors, 0 warnings)" in out
+
+
+def test_disclosed_has_the_four_keys():
+    c = Collector()
+    c.error("E-PARAM-UNKNOWN", "parameters.analysis.min_sample", "did you mean `min_samples`?")
+    [finding] = c.disclosed()
+    assert set(finding.keys()) == {"level", "code", "path", "message"}
+    assert finding["level"] == "error"
+    assert finding["code"] == "E-PARAM-UNKNOWN"
+    assert finding["path"] == "parameters.analysis.min_sample"
+    assert finding["message"] == "did you mean `min_samples`?"
+
+
+def test_disclosed_redacts_the_same_credential_render_does():
+    c = Collector()
+    c.credentials = {"OPENAI_API_KEY": "sk-super-secret-value"}
+    c.error("E-RESOLVER-RAISED", "data.units", "auth failed for sk-super-secret-value")
+    [finding] = c.disclosed()
+    assert "sk-super-secret-value" not in finding["message"]
+    assert "<redacted:OPENAI_API_KEY>" in finding["message"]
+    # The same redaction `render` applies on the same field, so the two surfaces agree.
+    assert finding["message"] in c.render()
+
+
+def test_disclosed_leaves_the_message_unchanged_with_no_credentials():
+    c = Collector()
+    c.warn("W-ENV-UNLOCKED", "environment", "no uv.lock found; the environment is not pinned")
+    [finding] = c.disclosed()
+    assert finding["message"] == "no uv.lock found; the environment is not pinned"

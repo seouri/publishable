@@ -14,7 +14,7 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TextIO
 
 import yaml
 
@@ -2172,11 +2172,22 @@ class Prepared:
     phases 6-10 is `sweep.yaml`'s `partitions_within` (H3c-3 task 11), which
     is written exactly when this decomposition has a populated cell.
 
+    **Thirty-EIGHT since persisted-findings task 2**, `findings` the
+    thirty-eighth — ADDED, like `cells`, rather than found by the `ast` walk
+    above, which measured `command_run` before either field existed. It is
+    the plain-dict form of every finding `_prepare_run` disclosed, so a
+    second entry into phases 6-10 does not need to re-render a `Collector` to
+    recover what was already said; `_execute_prepared` extends the same list
+    rather than replacing it, which the frozen-field note below covers.
+
     Frozen on purpose: phases 6-10 must not write back into what phases 1-5
     pinned. That is the property `resume` will rest on. `plan` is the one name
     phases 6-10 re-bind (`_apply_execution_order` under `order: randomized`),
     which is why `_execute_prepared` unpacks to locals rather than reading
-    attributes: a frozen field cannot be re-bound.
+    attributes: a frozen field cannot be re-bound. `findings` is the other
+    exception in spirit, not in mechanism — it is never re-bound either, only
+    extended in place, exactly as a `list` field being mutated through a
+    frozen dataclass always can be.
     """
 
     config_path: Path
@@ -2220,6 +2231,12 @@ class Prepared:
     upstream_ledger: UpstreamLedger
     upstream_resolver: UpstreamResolver
     cells: dict[tuple[tuple[str, str], ...], frozenset[str]] | None
+    # A plain `list[dict[str, str]]` rather than a quoted one: unlike `conditions`
+    # above, both `list` and `dict` are builtins, not `TYPE_CHECKING`-only imports,
+    # so this annotation is valid when evaluated at runtime (no `from __future__
+    # import annotations` in this module). `_prepare_run` fills it; `_execute_prepared`
+    # extends it — the same list, never reassigned, because the field is frozen.
+    findings: list[dict[str, str]]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2641,6 +2658,19 @@ def _resumed_allocation(prepared: "Prepared", document: dict[str, Any]) -> "Prep
     )
 
 
+def _disclose(c: Collector, into: list[dict[str, str]], *, file: TextIO | None = None) -> None:
+    """Print a collector exactly as before, and keep what it said.
+
+    One call rather than a print plus an append: `c.disclosed()` already
+    redacts with the same `redact` call `render` makes, so the list this
+    appends to and the screen this prints to cannot disagree about a
+    credential. `file` defaults to stdout, matching `print`'s own default;
+    pass `sys.stderr` at the sites that printed there before.
+    """
+    print(c.render(), file=file)
+    into.extend(c.disclosed())
+
+
 def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     """Phases 1-5 of a run, for every command that is a second entry into them.
 
@@ -2657,12 +2687,13 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     decision (H6b Decision 12) that lives one line from this one.
     """
     c = Collector()
+    findings: list[dict[str, str]] = []
     experiment = _preloaded_experiment(config_path)
     # phases 1-2: resolve, walk up, load, validate
     doc = validate_config(config_path, c, experiment=experiment)
     if c.findings:
         print(config_path)
-        print(c.render())
+        _disclose(c, findings)
     if doc is None or c.has_errors:
         return EXIT_WRONG
 
@@ -2679,7 +2710,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         dirty_c.error(
             "E-CODE-DIRTY", "src/** or templates/**", "uncommitted changes; commit them first"
         )
-        print(dirty_c.render())
+        _disclose(dirty_c, findings)
         return EXIT_WRONG
     if experiment is None:  # phase 3: entrypoint imports
         # Unreachable in practice — a failed import is `E-ENTRYPOINT-IMPORT` and a
@@ -2759,7 +2790,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         roster_c.credentials = credentials
         roster_code = exc.code if isinstance(exc, PublishableError) else "E-RESOLVER-RAISED"
         roster_c.error(roster_code, "data.units", str(exc))
-        print(roster_c.render(), file=sys.stderr)
+        _disclose(roster_c, findings, file=sys.stderr)
         return EXIT_WRONG
     # Carried only when the input path actually merged rows. A run whose STEP does
     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
@@ -3096,7 +3127,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
             "applied; the run would otherwise publish sha256:e3b0c442… — "
             "the digest of nothing — as its code_hash",
         )
-        print(empty_c.render())
+        _disclose(empty_c, findings)
         return EXIT_WRONG
     ch = code_hash_of(hashed)
     ph = parameters_hash(doc)
@@ -3119,7 +3150,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
             "no uv.lock found; the environment is not pinned, and "
             "`reproduce` will not be able to restore it",
         )
-        print(warn_c.render())
+        _disclose(warn_c, findings)
 
     # H8a Decision 2: one `UpstreamResolver` and one `UpstreamLedger` for the
     # whole run, built from this config's own `output_dir` and the
@@ -3140,6 +3171,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
     return Prepared(
         config_path=config_path,
         c=c,
+        findings=findings,
         doc=doc,
         repo_root=repo_root,
         git=git,
@@ -3267,6 +3299,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
     upstream_ledger = prepared.upstream_ledger
     upstream_resolver = prepared.upstream_resolver
     cells = prepared.cells
+    findings = prepared.findings
 
     # phase 6: the run directory. `resume` re-enters an EXISTING one, which is
     # why `E-RUN-ID-EXHAUSTED` is unreachable from it — it allocates nothing.
@@ -3466,7 +3499,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 dispatch_c.credentials = credentials
                 dispatch_code = exc.code if isinstance(exc, PublishableError) else "E-PLUGIN-LOAD"
                 dispatch_c.error(dispatch_code, "experiment_type", str(exc))
-                print(dispatch_c.render(), file=sys.stderr)
+                _disclose(dispatch_c, findings, file=sys.stderr)
                 return EXIT_WRONG
             # H9c task 9 (Ruling BB): the recorded expectation, when the
             # CONFIG'S OWN DIRECTORY holds an `apparatus.expected.json` —
@@ -3497,7 +3530,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                     expectation_c = Collector()
                     expectation_c.credentials = credentials
                     expectation_c.error(exc.code or "E-IO-FAILED", str(expected_path), str(exc))
-                    print(expectation_c.render(), file=sys.stderr)
+                    _disclose(expectation_c, findings, file=sys.stderr)
                     return EXIT_WRONG
             observer = apparatus.Observer(
                 probe_name=declared_probe,
@@ -3725,7 +3758,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 # second answer.
                 probe_c.credentials = credentials
                 probe_c.error(exc.code, "experiment_type", str(exc))
-                print(probe_c.render(), file=sys.stderr)
+                _disclose(probe_c, findings, file=sys.stderr)
                 # H7d Part B task 8 (Decision 6): `E-APPARATUS-RAISED` — the
                 # apparatus itself unreachable — is the one code in this
                 # containment's filter that earns exit 5. The four Decision 9
@@ -3771,7 +3804,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             stop_c = Collector()
             stop_c.credentials = credentials
             stop_c.error(stop.code, "experiment_type", stop.message)
-            print(stop_c.render(), file=sys.stderr)
+            _disclose(stop_c, findings, file=sys.stderr)
             # Decision 4: with NO results, nothing was paid for, and the
             # command keeps Part A's shape — no `run.yaml`, `latest`
             # untouched. **"No results" now means neither this attempt's nor a
@@ -5186,11 +5219,11 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # completed by the time `aggregate` runs) is deliberately left
             # alone — unlike `E-INPUT-CHANGED` below, which does set
             # `status = "failed"` for a different reason (the data a
-            # completed run rested on is no longer what it read). This is
-            # printed to stdout only: `run.yaml` has no diagnostics channel
-            # to carry a finding that isn't a metric, an interval, or a
-            # status.
-            print(aggregate_c.render())
+            # completed run rested on is no longer what it read). Printed to
+            # stdout as before, and now also carried into `run.yaml`'s
+            # `findings` block (task 3) — a finding that isn't a metric, an
+            # interval, or a status is no longer disclosed to the screen only.
+            _disclose(aggregate_c, findings)
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
@@ -5203,7 +5236,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 f"{len(changed_inputs)} {noun} changed since the manifest was built "
                 f"at run start: {', '.join(changed_inputs)}",
             )
-            print(drift_c.render())
+            _disclose(drift_c, findings)
 
         # Populated from the declaration this run actually resolved through, not
         # from the machine's installed set: a run's provenance is what it used.
@@ -5316,18 +5349,17 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
 
-        # `W-APPARATUS-UNANSWERED`, once at run end: `run.yaml` has no
-        # diagnostics channel of its own — the same reason `aggregate_c`'s
-        # findings print to stdout rather than joining the document — so
-        # this is a FRESH `Collector` (never `c`, already rendered and
-        # printed) rendered to stdout. A warning never changes the exit code,
+        # `W-APPARATUS-UNANSWERED`, once at run end: a FRESH `Collector`
+        # (never `c`, already rendered and printed) rendered to stdout and,
+        # like `aggregate_c`'s findings above, carried into `run.yaml`'s
+        # `findings` block (task 3). A warning never changes the exit code,
         # on `W-ENV-UNLOCKED`'s own precedent.
         if observer is not None:
             warn_c = Collector()
             warn_c.credentials = credentials
             observer.warn_unanswered(warn_c)
             if warn_c.findings:
-                print(warn_c.render())
+                _disclose(warn_c, findings)
 
     point_latest(output_dir, run_dir)
     print(f"run.yaml → {run_dir / 'run.yaml'}")

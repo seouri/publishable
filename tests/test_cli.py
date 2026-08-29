@@ -24939,7 +24939,7 @@ def test_h9b_the_allocation_override_replaces_four_fields_and_round_trips_the_re
     edited = _h9b_swapped(recorded)
     prepared = _prepare_run(Path(doc["cfg"]), allow_dirty=False)
     assert isinstance(prepared, Prepared)
-    assert len(dataclasses.fields(Prepared)) == 37
+    assert len(dataclasses.fields(Prepared)) == 38
 
     overridden = _resumed_allocation(prepared, edited)
     moved = {"group_axes", "holdout_plan", "eval_roster", "arm_members_map"}
@@ -29780,3 +29780,26 @@ def test_the_unevaluable_warning_reads_the_record_rather_than_re_deriving_it():
     src = inspect.getsource(cli._execute_prepared)
     assert 'entry.get("unevaluable")' in src
     assert "W-HYPOTHESIS-UNEVALUABLE" in src
+
+
+def test_every_run_path_finding_is_disclosed_not_just_printed():
+    """`_prepare_run` and `_execute_prepared` must route every collector through
+    `_disclose`, never through a bare `print(c.render())`.
+
+    A missed site is invisible to every assertion about `run.yaml`: it still
+    prints, so nothing on screen looks wrong, but its finding never reaches the
+    list `Prepared.findings` rides on. The pin has to live at the source level
+    for exactly that reason — this is the one shape of check that can see a
+    missed site at all.
+    """
+    import inspect
+    import re
+
+    from publishable import cli
+
+    pattern = re.compile(r"print\(\s*[A-Za-z_][A-Za-z0-9_]*\.render\(\)")
+    for fn in (cli._prepare_run, cli._execute_prepared):
+        src = inspect.getsource(fn)
+        assert not pattern.search(src), (
+            f"{fn.__name__} prints a collector directly instead of calling _disclose"
+        )

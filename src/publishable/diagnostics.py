@@ -75,3 +75,20 @@ class Collector:
         warning_noun = "warning" if n_warn == 1 else "warnings"
         lines.append(f"{total} {problem_noun} ({n_err} {error_noun}, {n_warn} {warning_noun})")
         return "\n".join(lines)
+
+    def disclosed(self) -> list[dict[str, str]]:
+        """This collector's findings as plain dicts, redacted the same way `render` is.
+
+        One implementation of redaction, read by both the screen (`render`) and
+        whatever persists these findings (`run.yaml`'s `findings` block), so the two
+        surfaces cannot drift apart.
+        """
+        return [
+            {
+                "level": f.level,
+                "code": f.code,
+                "path": f.path,
+                "message": redact(f.message, self.credentials) or f.message,
+            }
+            for f in self.findings
+        ]
