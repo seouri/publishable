@@ -29,14 +29,6 @@ is what `.githooks/install` is for. The guarantee is the workflow plus the
 branch ruleset on `main` that requires it; a green hook is never evidence that
 CI passed.
 
-**The mechanical pass is `tests/test_repo_docs.py`, so `pytest` owns it.** Links,
-anchors, duplicate slugs, stray whitespace and table shape are asserted over
-`README.md`, `CLAUDE.md` and `docs/*.md` — not `docs/superpowers/`, which the
-pass never governs. Being tests rather than a checker is what puts them behind
-the **required** `suite` check without any script living in this repository, and
-`tests/` is absent from the sdist, so nothing is shipped. A deleted document
-fails a guard rather than quietly shrinking what the other three iterate.
-
 **A bypass is reported, not prevented.** `pre-push` records every commit its
 four checks passed, and `.githooks/reference-transaction` prints a banner when
 a push carries a commit that is not in that record — `--no-verify`, or hooks
@@ -217,7 +209,7 @@ Every instance below came from the same move: answering with something *correlat
 
 Editing one document is almost never a one-file change. Both passes below run before an edit is finished; the second is the one that catches real defects, and no tooling substitutes for it. The **cross-document** pass governs the four documents only — a [feasibility analysis](#feasibility-analyses) is exempt from it and subject to the mechanical pass in full.
 
-**Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep the four documents, this file, and any feasibility analysis for what should no longer exist.
+**Mechanical.** `tests/test_repo_docs.py` asserts these over `README.md`, this file, and `docs/*.md` — never `docs/superpowers/` — so `uv run pytest`, and the **required** `suite` check behind it, is what runs them: every relative link and `#anchor` resolves, no two headings in a file produce the same anchor, every table's rows match its header's column count and no row is empty, and no line carries trailing whitespace, a tab, or invisible unicode. Fenced code blocks are skipped in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. **They are tests rather than a kept checker**, which is what the *ships no tooling* rule is actually about — `tests/` is absent from the sdist, so nothing is kept and nothing ships, and a deleted document fails a guard rather than quietly shrinking what the rest iterate. Anything they do not cover is still a throwaway grep written fresh each time, because each pass wants slightly different checks: after removing or renaming any string, grep the four documents, this file, and any feasibility analysis for what should no longer exist.
 
 **Both passes govern those files only — never the [development record](#the-development-record).** A spec records what was decided when it was written and a scoping what was measured on its date; retro-editing either destroys the evidence they exist to hold. Correct one the way this repo corrects a published claim: append the correction and say what it replaces. The one exception is `spec-defects.md`, a live list, where a closed gap is **removed** rather than left to mislead — struck until 2026-08-28, when the accumulated closures were deleted outright and the file's own preamble took over recording what the rule is and what went.
 
