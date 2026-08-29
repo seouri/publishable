@@ -6,7 +6,7 @@ Everything below was measured while doing the 0.1.0 release on 2026-08-26, and t
 
 ## The one thing to understand first
 
-**A green test suite says nothing about the distribution.** `[tool.pytest.ini_options]` sets `pythonpath = ["."]`, so all 3444 tests import from `src/`. A wheel that dropped `readme_templates/*.tmpl` would pass every one of them and then fail on the first `publishable new` a stranger ran. So the release gate is not `pytest`; it is building the artifacts and driving the **installed console script from outside this repository**.
+**A green test suite says nothing about the distribution.** `[tool.pytest.ini_options]` sets `pythonpath = ["."]`, so all 3574 tests import from `src/`. A wheel that dropped `readme_templates/*.tmpl` would pass every one of them and then fail on the first `publishable new` a stranger ran. So the release gate is not `pytest`; it is building the artifacts and driving the **installed console script from outside this repository**.
 
 ## Order
 
@@ -58,7 +58,7 @@ before anything reaches PyPI. Run them by hand first if you would rather not
 spend a push on a formatting slip.
 
 ```bash
-uv run pytest        # 3444 passed, 1 skipped, 2 xfailed as of 0.1.0
+uv run pytest        # 3571 passed, 1 skipped, 2 xfailed — 2026-08-29, at 0.2.4
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
@@ -87,7 +87,15 @@ Read both listings rather than trusting `[tool.hatch.build.targets.*]`. Two thin
 
 **The sdist has an explicit `include` because the default swept 1160 files** — `.claude/settings.local.json`, the whole `.superpowers/sdd/` ledger, `docs/superpowers/` and `standards/`. It is 70 files now.
 
-**`tests/` is deliberately not in the sdist**, and that was measured rather than assumed: with the suite included, the tarball unpacked outside any repository and run gave **2 failed, 3442 passed**. Both failures are properties of the unpacked tarball — one command test reaches `E-GIT-NO-REPO` because an unpacked sdist is not a git repository, and one `.parquet` golden digest moves because a fresh resolve is not this repo's `uv.lock`. A suite that fails on unpack is worse than no suite.
+**`tests/` is deliberately not in the sdist**, and that was measured rather than assumed. Re-measured on 2026-08-29 at 0.2.4, by adding `tests` to the `include`, building, unpacking outside any repository and running: **5 failed, 3566 passed**. Every failure attributed rather than counted:
+
+| Failures | Cause |
+|---|---|
+| 1 command test | `E-GIT-NO-REPO` — an unpacked sdist is not a git repository |
+| 1 `.parquet` golden digest | a fresh resolve is not this repo's `uv.lock` |
+| 3 tutorial pins in `test_scaffold.py` | `FileNotFoundError` on `docs/tutorial-writing-a-plugin.md`, which the `include` above does not carry — it ships the three normative documents and not the tutorial |
+
+The first two are properties of the unpacked tarball; the third is a document the sdist deliberately omits, and it is the count that grew — the figure was **2 failed, 3442 passed** when first measured, so the argument got stronger rather than staler. A suite that fails on unpack is worse than no suite.
 
 Then drive it. Install the **wheel** into a throwaway venv outside the repository and walk the arc:
 
