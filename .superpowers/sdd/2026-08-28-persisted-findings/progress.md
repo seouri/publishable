@@ -94,3 +94,10 @@ scheduled a background wait for their own 7-minute test run and returned without
 committing; Task 4 had an explicit "no monitors, foreground only" line and did it anyway. The
 instruction is being read too late, inside the gate section. For the remaining tasks it goes in the
 FIRST line of the dispatch. Cost if wrong: a resume message per task, which is what it has cost.
+Task 4 review: PASS both verdicts, no findings. The reviewer rendered a findings-free record at
+BOTH commits and compared the outputs directly — byte-identical, established by construction rather
+than by reading — computed the two candidate sorts over the order fixture to confirm it really
+discriminates, and mutated `_finding_rows` to sort by code to prove the order test fails. It also
+noticed that `fixture_r`'s real run DOES emit findings and checked why the existing pins survive
+anyway (they use filtered lookups, not whole-row equality) rather than accepting "unaffected".
+Task 4: complete (commits aa12e21, 8091f32).
