@@ -29,13 +29,13 @@ is what `.githooks/install` is for. The guarantee is the workflow plus the
 branch ruleset on `main` that requires it; a green hook is never evidence that
 CI passed.
 
-**The hook also runs the mechanical pass when the tools are there.** `pre-push`
-passes `README.md`, `CLAUDE.md` and `docs/*.md` — not `docs/superpowers/`, which
-the pass never governs — through the link, anchor/whitespace and table checkers
-in `~/.claude/tools/`, and fails the push on a finding. They live outside this
-repository because it ships no tooling, so **their absence is a skip with a
-notice, never a failure**: a hook that refused to push because a personal script
-is missing on a fresh clone would cost more than the defects it catches.
+**The mechanical pass is `tests/test_repo_docs.py`, so `pytest` owns it.** Links,
+anchors, duplicate slugs, stray whitespace and table shape are asserted over
+`README.md`, `CLAUDE.md` and `docs/*.md` — not `docs/superpowers/`, which the
+pass never governs. Being tests rather than a checker is what puts them behind
+the **required** `suite` check without any script living in this repository, and
+`tests/` is absent from the sdist, so nothing is shipped. A deleted document
+fails a guard rather than quietly shrinking what the other three iterate.
 
 **A bypass is reported, not prevented.** `pre-push` records every commit its
 four checks passed, and `.githooks/reference-transaction` prints a banner when
