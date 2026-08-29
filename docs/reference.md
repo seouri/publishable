@@ -816,6 +816,15 @@ results:                                       # scientific; see "Statistical re
     step04_compare_methods: {best_method: spearman}
   hypotheses:                                  # see "Pre-registration"
     - {id: h1, kind: confirmatory, supported: true}
+
+findings:                                      # absent ENTIRELY on a clean run — never
+                                               #   `findings: []`, which would claim a disclosure
+                                               #   was checked for and found none — present with one
+                                               #   entry per finding raised while this run executed,
+                                               #   in the order raised
+  - {level: warning, code: W-ENV-UNLOCKED, path: environment,
+     message: "no uv.lock found; the environment is not pinned, and `reproduce`
+               will not be able to restore it"}
 ```
 
 `provenance.upstream` is shown above with one entry because this run consumed one — the ordinary
@@ -870,6 +879,22 @@ repeat axis. Omitting the entry and writing `std: null` are both defensible succ
 choosing between them is a decision about what a record should carry rather than a reconciliation
 between two rules that disagree — so the asymmetry is named here rather than defended, and this
 paragraph changes with it.
+
+**`findings` is the run's own disclosures, persisted rather than left to scrollback.** Every
+finding a run raises through a `Collector` — `W-ENV-UNLOCKED`, `W-APPARATUS-UNANSWERED`,
+`W-STATS-CORRECTED-THIN` and the rest of [§ Warnings core reports](#warnings-core-reports), and an
+error a run reports on its way to `status: failed` such as [`E-INPUT-CHANGED`](#errors-core-raises)
+— lands here, one entry per finding, `{level, code, path, message}`, in the order it was raised.
+`level` is not always `warning`: a run that fails because its input manifest moved still writes a
+record, and that record's own `findings` entry reads `level: error`. The message is redacted
+through the identical call [`render`'s terminal output already passes through](#exit-codes-and-diagnostics),
+so a record can never disclose a declared credential a screen would have redacted. The key is
+**absent, not present-and-empty**, on a clean run — `findings: []` would claim a disclosure was
+checked for and found none, which is a different fact from there being nothing to disclose.
+`publishable report` renders each entry as a `finding` row, verbatim and in the record's own
+order — no re-sorting by level, no re-redaction, no grouping — because the record already settled
+that question once. Every run-time finding, not only an unevaluable hypothesis's `unevaluable`
+field, now survives past the terminal it printed to.
 
 ### What `status` means, and when a run keeps going
 
@@ -3972,6 +3997,17 @@ configs/cohort-pilot/config.yaml
 ```
 
 The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one namespace rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry and the ones [`validate` reports](#errors-validate-reports) are drawn from the same vocabulary, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different languages. They are written as two tables because a raise and a printed finding are documented by different things — what raises it, versus what reports it — and not because a code belongs to one or the other; nothing keys on which table a code is listed in. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
+
+**`run`, `draft` and `resume` persist their own findings; every other command does not.** The three
+that execute write a [`findings:` block](#the-two-files) into the `run.yaml` they produce, one entry
+per finding raised while that run executed — so a finding printed at the terminal survives into the
+record whoever reads it later opens. No other command writes a record to put one in: `validate`,
+`dry-run`, `report`, `freeze`, `diff`, `study`, `docs` and `reproduce` print their findings and keep
+none of them. That costs less than it looks: a `validate` run against a config that later becomes a
+run directory is re-derivable, because the run directory holds a byte copy of the `config.yaml` it
+was started from — re-running `validate` against it reproduces the identical findings on demand,
+which is why the persisted boundary falls where `run.yaml` gets written rather than anywhere
+earlier.
 
 A local filesystem failure — an unwritable `output_dir`, a full disk, or a `diff` operand path that doesn't exist — is reported as `E-IO-FAILED` and exits `1`. **The identifier is wider than that clause and than that exit code**, and the places it reaches are worth naming rather than counting: at [`reproduce`](#reproducing-on-another-device), an operand path that cannot be read or parsed, a record carrying no `config` mapping, no usable `config.metadata.name` or one that resolves out of the checkout, a record whose `provenance.apparatus.facts` is not a mapping, and a config re-read that fails — all exit `1`; at `reproduce` again, a **`git clone` that failed** and a **`uv sync --locked` that failed**, in either the record form's checkout or the config form's repository, which exit `5`, because those two reached something outside the machine and got an answer; and at `run` and `draft`, a `configs/<name>/apparatus.expected.json` that will not parse as the mapping it must be, at exit `1`. **No code is minted for any of them**: each is a path or a file core was handed and could not use, which is what this identifier already means, and a second identifier per surface would be a namespace per command. It is not a `ContractError`: nothing in your declarations asked for it, and no `except` in a step improves it. **A creation command refusing to overwrite an existing file exits `1` for a related reason** — [creation commands take arguments](#creation-commands), and refusing is how one stays safe to re-run. It's one rule shared by every generator with something to protect, not a rule per file it writes: `publishable new` reports `E-PROJECT-EXISTS` and **`plugin new` reports the same code** — the two commands that bring a whole tree into existence share one refusal rather than minting a second for the same fact — `generate experiment` reports `E-EXPERIMENT-EXISTS`, `generate step` reports `E-STEP-EXISTS`, `generate template` reports `E-TEMPLATE-EXISTS`, `generate report` reports `E-REPORT-EXISTS`, and [`study new`](#building-one) reports `E-STUDY-EXISTS`. `E-ARTIFACT-EXISTS` is a different thing wearing a similar name — [`io.write`/`io.path` onto a target `run` is already writing to](#errors-core-raises), not a creation command refusing to start, and it carries `ArtifactExistsError` rather than joining this family.
 

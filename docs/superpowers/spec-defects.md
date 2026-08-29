@@ -20,6 +20,8 @@ of this file's job now, and it changes how three things read:
   later filing was closed by code in the same session and removed under this same rule, which nets
   to 151 of which 61 are `OPEN`.** **Recounted again 2026-08-28, after the `unevaluable` work filed one
   new entry: 152 of which 62 are `OPEN`** — a filing rather than a reopening, and the count moves with it.
+  **Recounted again 2026-08-28: the `persisted-findings` slice closed the run-time-warnings-are-never-
+  written entry by code and removed it, netting to 151 of which 61 are `OPEN`.**
   What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
@@ -6490,49 +6492,6 @@ block, no computed cross-run level, and no new artifact field exist: the "Propos
 is not built, and nothing in the code changed. A reader who wants the mechanism this entry describes
 should not go looking for it — the gap is closed by naming the limit in prose, exactly the route
 the entry's own "What a study can and cannot say today" section already named as available.
-
-## OPEN — a run-time warning is never written to `run.yaml`, so every disclosure core makes during a run is terminal-only — **Owner: unassigned**
-
-**Found by:** building `W-HYPOTHESIS-UNEVALUABLE`, 2026-08-28. **Measured against commit `a06a733`**
-by grepping a completed `run.yaml` from `2026-08-28-gcl-measurement` for every `W-` code and for a
-`warnings:`/`findings:` key: there are none, and no passage in `reference.md` says there should be.
-
-Core reports a dozen-odd warnings while a run executes — `W-STATS-CORRECTED-THIN`,
-`W-STATS-CONTRAST-THIN`, `W-STATS-CONTRAST-RESAMPLE-THIN`, `W-STATS-CONTRAST-UNPAIRED-DERIVED`,
-`W-STEP-RETURN-DISCARDED`, `W-STEP-ESTIMATE-N` among them. Each names something a reader of the
-result needs in order to read it correctly, and each exists only in the terminal of whoever started
-the run. The record keeps the *consequence* — a `null` bound, an absent metric block, a `delta: null`
-beside two healthy side counts — and drops the sentence explaining it.
-
-**Why it matters more here than in a typical tool.** `design-principles.md` § Design goals opens by
-naming the failure this project exists to prevent: "the true record of what ran is scattered across a
-shell history, a Slack message, a half-remembered `--temperature 0.7`". A warning that lives only in
-scrollback is precisely that shape, reintroduced by core rather than by the user. The co-author, the
-reviewer, and the author six months later all read `run.yaml`; none of them sees the warning.
-
-**Why it is not simply "add a `warnings:` block".** Two real questions, and neither is free:
-
-- **Which collector.** A run builds several `Collector`s at different phases, and only some carry
-  `credentials`, which is what `render` redacts against. A record-bound warning must pass through the
-  same redaction as a printed one, and a collector that was never given the credential values redacts
-  nothing — so persisting findings from every collector alike would be a new way for a declared
-  credential to reach a file, which is the one thing `design-principles.md` says is never captured.
-- **What it does to `diff` and to the bit-stability oracles.** `run.yaml` is compared field-by-field
-  by `diff` and pinned whole by tests; adding a block that varies with, say, how many draws survived
-  makes two otherwise identical runs differ in the record. That may be correct — they *did* differ —
-  but it is a deliberate change to what "identical" means, not a formatting addition.
-
-**Partially closed, for one case, deliberately.** The hypothesis half was closed on 2026-08-28 by
-recording the reason as a field on the entry itself — `unevaluable: metric_absent |
-condition_unresolved` — rather than by persisting the warning. That route was chosen because a
-pre-registered confirmatory hypothesis reaching no verdict is the single disclosure a reader most
-needs from the record alone, and because the fact is small and closed-vocabulary. It is **not** a
-template for the rest: most warnings carry a number or a name that would not fit a closed field, and
-adding one field per warning would be a second record schema growing beside the first.
-
-**What this project ships with.** Every warning except the hypothesis case is disclosed at run time
-and nowhere else. A reader who needs to know whether a run drew a thin resample, discarded a wide
-step's return, or declined a contrast must have the run's output, not just its record.
 
 ## OPEN — a `compare: {to: constant}` hypothesis's bound test is never answerable under a declared correction method, for a metric recorded under BOTH `weight_by` and `cluster_by` — **Owner: unassigned, and no slice follows**
 
