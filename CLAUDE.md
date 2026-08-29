@@ -29,6 +29,14 @@ is what `.githooks/install` is for. The guarantee is the workflow plus the
 branch ruleset on `main` that requires it; a green hook is never evidence that
 CI passed.
 
+**The hook also runs the mechanical pass when the tools are there.** `pre-push`
+passes `README.md`, `CLAUDE.md` and `docs/*.md` — not `docs/superpowers/`, which
+the pass never governs — through the link, anchor/whitespace and table checkers
+in `~/.claude/tools/`, and fails the push on a finding. They live outside this
+repository because it ships no tooling, so **their absence is a skip with a
+notice, never a failure**: a hook that refused to push because a personal script
+is missing on a fresh clone would cost more than the defects it catches.
+
 **A bypass is reported, not prevented.** `pre-push` records every commit its
 four checks passed, and `.githooks/reference-transaction` prints a banner when
 a push carries a commit that is not in that record — `--no-verify`, or hooks
