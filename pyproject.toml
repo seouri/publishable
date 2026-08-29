@@ -75,17 +75,17 @@ artifacts = ["src/publishable/readme_templates/*.tmpl", "src/publishable/py.type
 #
 # `tests/` is deliberately NOT here, and it was measured rather than assumed:
 # the suite was included, the sdist unpacked outside any repository, and
-# `uv run pytest` run against it — 5 failed, 3566 passed, re-measured on
-# 2026-08-29 at 0.2.4. Two are properties of the unpacked tarball rather than
-# of the code: one command test reaches `E-GIT-NO-REPO` because an unpacked
-# sdist is not a git repository, and one `.parquet` golden digest moves because
-# a fresh resolve is not this repo's `uv.lock`. The other three are
-# `test_scaffold.py`'s tutorial pins, which read
-# `docs/tutorial-writing-a-plugin.md` — a file the `include` below does not
-# carry, since it ships the three normative documents and not the tutorial.
-# The figure was 2 failed, 3442 passed when first measured, so what grew is
-# the argument. A suite that fails on unpack is worse than no suite, so the
-# tests stay in the repository, where they pass.
+# `uv run pytest` run against it — 2 failed, 3566 passed, 4 skipped,
+# re-measured on 2026-08-29 at 0.2.4. Both failures are properties of the
+# unpacked tarball rather than of the code: one command test reaches
+# `E-GIT-NO-REPO` because an unpacked sdist is not a git repository, and one
+# `.parquet` golden digest moves because a fresh resolve is not this repo's
+# `uv.lock`. Three of the skips are `test_scaffold.py`'s tutorial pins, whose
+# subject `docs/tutorial-writing-a-plugin.md` the `include` below does not
+# carry — they skip only when it is absent AND the tree is not a git checkout,
+# so deleting it in a checkout still fails rather than going quiet. A suite
+# that fails on unpack is worse than no suite, so the tests stay in the
+# repository, where they pass.
 [tool.hatch.build.targets.sdist]
 include = [
     "src/publishable",

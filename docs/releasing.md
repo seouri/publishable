@@ -87,15 +87,16 @@ Read both listings rather than trusting `[tool.hatch.build.targets.*]`. Two thin
 
 **The sdist has an explicit `include` because the default swept 1160 files** — `.claude/settings.local.json`, the whole `.superpowers/sdd/` ledger, `docs/superpowers/` and `standards/`. It is 70 files now.
 
-**`tests/` is deliberately not in the sdist**, and that was measured rather than assumed. Re-measured on 2026-08-29 at 0.2.4, by adding `tests` to the `include`, building, unpacking outside any repository and running: **5 failed, 3566 passed**. Every failure attributed rather than counted:
+**`tests/` is deliberately not in the sdist**, and that was measured rather than assumed. Re-measured on 2026-08-29 at 0.2.4, by adding `tests` to the `include`, building, unpacking outside any repository and running: **2 failed, 3566 passed, 4 skipped**. Both failures attributed rather than counted:
 
-| Failures | Cause |
+| Failure | Cause |
 |---|---|
 | 1 command test | `E-GIT-NO-REPO` — an unpacked sdist is not a git repository |
 | 1 `.parquet` golden digest | a fresh resolve is not this repo's `uv.lock` |
-| 3 tutorial pins in `test_scaffold.py` | `FileNotFoundError` on `docs/tutorial-writing-a-plugin.md`, which the `include` above does not carry — it ships the three normative documents and not the tutorial |
 
-The first two are properties of the unpacked tarball; the third is a document the sdist deliberately omits, and it is the count that grew — the figure was **2 failed, 3442 passed** when first measured, so the argument got stronger rather than staler. A suite that fails on unpack is worse than no suite.
+Both are properties of the unpacked tarball rather than of the code, which is the same finding the first measurement recorded as **2 failed, 3442 passed**.
+
+**It read 5 failed for part of 2026-08-29**, and the three extra were `test_scaffold.py`'s tutorial pins hitting `FileNotFoundError` on `docs/tutorial-writing-a-plugin.md` — a file the `include` above deliberately does not carry, shipping the three normative documents and not the tutorial. Those three now skip when the tutorial is absent **and** the tree is not a git checkout, so they are three of the four skips above. The second half of that condition is what keeps the skip from failing open: delete the tutorial in a checkout and they still run, and still fail. A suite that fails on unpack is worse than no suite.
 
 Then drive it. Install the **wheel** into a throwaway venv outside the repository and walk the arc:
 
