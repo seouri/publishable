@@ -113,6 +113,92 @@ def test_a_present_lockfile_is_captured_and_hashed_with_no_warning(tmp_path: Pat
     assert "W-ENV-UNLOCKED" not in capsys.readouterr().out
 
 
+def test_w_env_unlocked_names_no_host_path(tmp_path: Path, capsys):
+    """Task 1 of the persisted-findings slice: `W-ENV-UNLOCKED` is a run-path
+    warning, and a run-path message must never interpolate a host filesystem
+    path — it is the one host-identifying string a run-path message could
+    otherwise leak. Located by the diagnostic's own header line and read from
+    the continuation beneath it, as `test_h9c_arm_f_...` does, so a
+    neighbouring line could not satisfy the assertion instead.
+
+    Mutation (production code): restore the `f"no uv.lock found at
+    {repo_root}; ..."` interpolation in `cli.py` and this fails, because
+    `root` (this test's own tmp_path-derived repo) then appears verbatim in
+    the message.
+    """
+    root, cfg, results = build(tmp_path)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    headers = [i for i, line in enumerate(lines) if "warning W-ENV-UNLOCKED" in line]
+    assert len(headers) == 1, out
+    message = lines[headers[0] + 1].strip()
+    assert str(root.resolve()) not in message, message
+    assert str(root) not in message, message
+    # The information the path used to carry stays present under the new wording.
+    assert "the environment is not pinned" in message, message
+    assert message.endswith("`reproduce` will not be able to restore it"), message
+
+
+def test_no_run_path_warning_or_error_interpolates_a_host_path():
+    """Task 1's invariant, checked at the source level rather than against one
+    run's stdout: no `.warn(` or `.error(` call inside `_prepare_run` or
+    `_execute_prepared` may interpolate `repo_root`, `input_dir`, `output_dir`,
+    or a `Path(...)` construction into its message. Both methods are swept —
+    the first scoping pass covered only `.warn(` and missed that
+    `E-INPUT-CHANGED`, an `.error(`, would have been the same fault had
+    `verify_manifest` not already returned relative paths.
+
+    `E-INPUT-CHANGED` interpolates `changed_inputs` (a list of paths relative
+    to `input_dir`, per `manifest.verify_manifest`) and a `noun` string —
+    neither is one of the four swept names, so this sweep does not flag it;
+    that absence is the fixture proving the sweep discriminates rather than
+    rejecting every `.error(` in sight.
+
+    Mutation (production code): add a temporary `f"... {repo_root} ..."` (or
+    `{input_dir}`, `{output_dir}`, `Path(...)`) inside a `.warn(`/`.error(`
+    call in either function and this fails; remove it and this passes again.
+    """
+    import ast
+
+    import publishable.cli as cli_module
+
+    source = Path(cli_module.__file__).read_text()
+    tree = ast.parse(source)
+    swept_names = {"repo_root", "input_dir", "output_dir"}
+
+    def offending_calls(fn: ast.FunctionDef) -> list[str]:
+        offenders = []
+        for node in ast.walk(fn):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("warn", "error")
+            ):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and sub.id in swept_names:
+                    offenders.append(f"line {node.lineno}: interpolates {sub.id!r}")
+                elif (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "Path"
+                ):
+                    offenders.append(f"line {node.lineno}: interpolates a Path(...)")
+        return offenders
+
+    targets = {"_prepare_run", "_execute_prepared"}
+    functions = [
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in targets
+    ]
+    assert {f.name for f in functions} == targets, "both target functions must exist in cli.py"
+
+    found: list[str] = []
+    for fn in functions:
+        found.extend(f"{fn.name} {msg}" for msg in offending_calls(fn))
+    assert found == [], found
+
+
 def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
     _, cfg, results = build(tmp_path)
     assert main(["run", str(cfg)]) == EXIT_OK

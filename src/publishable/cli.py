@@ -3116,7 +3116,7 @@ def _prepare_run(config_path: Path, *, allow_dirty: bool) -> "Prepared | int":
         warn_c.warn(
             "W-ENV-UNLOCKED",
             "environment",
-            f"no uv.lock found at {repo_root}; the environment is not pinned, and "
+            "no uv.lock found; the environment is not pinned, and "
             "`reproduce` will not be able to restore it",
         )
         print(warn_c.render())

@@ -20851,7 +20851,7 @@ def test_h9a_arm_b_runs_full_stdout_line_by_line(tmp_path: Path, capsys):
     )
     assert normalized.splitlines() == [
         "  warning W-ENV-UNLOCKED       environment",
-        "          no uv.lock found at <tmp>/proj; the environment is not pinned, and "
+        "          no uv.lock found; the environment is not pinned, and "
         "`reproduce` will not be able to restore it",
         "1 problem (0 errors, 1 warning)",
         "run.yaml → <tmp>/results/<run_dir>/run.yaml",

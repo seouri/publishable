@@ -56,8 +56,8 @@ Next:  publishable run configs/correlation-pilot/config.yaml
        [Enter] to run it · q to stop here
 
   warning W-ENV-UNLOCKED       environment
-          no uv.lock found at ~/publishable-demo; the environment is not
-          pinned, and `reproduce` will not be able to restore it
+          no uv.lock found; the environment is not pinned, and `reproduce`
+          will not be able to restore it
 1 problem (0 errors, 1 warning)
 run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
 
