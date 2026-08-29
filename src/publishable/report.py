@@ -495,6 +495,37 @@ def _execution_rows(run: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _finding_rows(run: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Task 4: the top-level `findings:` block, absent entirely on a clean
+    run (`run_record.assemble_run_yaml`'s own "absent, not null"), rendered
+    one row per entry, in the order the record holds it. This function
+    reads and reshapes nothing else about an entry — `level`, `code`,
+    `path`, `message` are copied verbatim, never sorted, grouped by level,
+    filtered or re-redacted, because the record is already redacted and
+    already in emission order (`Collector.disclosed()`, the call sites'
+    own sequence) — a second ordering decision here would be a second,
+    possibly disagreeing, answer to a question `run_record` already
+    settled once.
+    """
+    rows: list[dict[str, Any]] = []
+    findings = run.get("findings")
+    if not isinstance(findings, list):
+        return rows
+    for entry in findings:
+        if not isinstance(entry, Mapping):
+            continue
+        rows.append(
+            {
+                "kind": "finding",
+                "level": entry.get("level"),
+                "code": entry.get("code"),
+                "path": entry.get("path"),
+                "message": entry.get("message"),
+            }
+        )
+    return rows
+
+
 def attrition_section(run: Mapping[str, Any]) -> Section:
     """§ The five standard sections #4: `provenance.units.n`; each metric's
     own `n`; every execution's `status` across `shared`, `conditions[]`
@@ -503,7 +534,11 @@ def attrition_section(run: Mapping[str, Any]) -> Section:
     renders what it holds rather than coercing it to a boolean (task 6 step
     4's own mutation: `bool([])` is `False`, and a section that printed
     `false` for an empty list would be indistinguishable from one that
-    printed `false` for a genuinely boolean field elsewhere).
+    printed `false` for a genuinely boolean field elsewhere); and, last,
+    the top-level `findings:` block (persisted-findings task 4), one row
+    per entry in the order the record holds it, absent from this section's
+    rows entirely when `run` carries no `findings` key at all — a clean
+    run's Attrition table is therefore unchanged from before this task.
 
     Does **not** claim `nondeterministic` — see the filing in
     `docs/superpowers/spec-defects.md`, "`nondeterministic` is documented
@@ -525,6 +560,7 @@ def attrition_section(run: Mapping[str, Any]) -> Section:
             )
     rows.extend(_metric_n_rows(run))
     rows.extend(_execution_rows(run))
+    rows.extend(_finding_rows(run))
     return Section(title="Attrition", body={"rows": rows})
 
 

@@ -1575,6 +1575,89 @@ def test_attrition_section_does_not_mention_nondeterministic(fixture_r: dict[str
         assert "nondeterministic" not in row
 
 
+# --- persisted-findings task 4: `report` renders the `findings:` block -----
+
+
+def test_attrition_section_renders_findings_with_level_and_code_visible(
+    fixture_r: dict[str, Any],
+):
+    """A record carrying `findings` renders them as `kind: finding` rows,
+    with `level` and `code` — the two fields a reader scans for — present
+    on the row, not merely folded into `message` text."""
+    run = dict(fixture_r["run"])
+    run["findings"] = [
+        {
+            "level": "warning",
+            "code": "W-ENV-UNLOCKED",
+            "path": "environment",
+            "message": "no uv.lock found",
+        },
+        {
+            "level": "error",
+            "code": "E-INPUT-CHANGED",
+            "path": "data.input_dir",
+            "message": "1 path changed since the manifest was built",
+        },
+    ]
+    rows = attrition_section(run).body["rows"]
+    finding_rows = [r for r in rows if r["kind"] == "finding"]
+    assert len(finding_rows) == 2
+    codes = {r["code"] for r in finding_rows}
+    levels = {r["level"] for r in finding_rows}
+    assert codes == {"W-ENV-UNLOCKED", "E-INPUT-CHANGED"}
+    assert levels == {"warning", "error"}
+    warning_row = next(r for r in finding_rows if r["code"] == "W-ENV-UNLOCKED")
+    assert warning_row["path"] == "environment"
+    assert warning_row["message"] == "no uv.lock found"
+
+
+def test_attrition_section_preserves_findings_emission_order(fixture_r: dict[str, Any]):
+    """`report` sorts nothing: this fixture's three entries are arranged so
+    that a sort by `code` OR a sort by `level` each produces a different
+    order than emission, so either mistake fails this assertion rather than
+    passing it by coincidence.
+
+    Emission order: [W-ZEBRA (warning), W-ALPHA (error), W-MID (warning)].
+    - Sorting by `code` ascending gives [W-ALPHA, W-MID, W-ZEBRA] — a
+      different order.
+    - Sorting by `level` (either alphabetically, "error" before "warning",
+      or the reverse) reorders the "error" entry relative to its emitted
+      middle position — a different order either way.
+    Three elements are needed, not two: two elements can only ever rule out
+    one wrong ordering at a time, and this test must rule out two (by-code,
+    by-level) at once.
+    """
+    run = dict(fixture_r["run"])
+    run["findings"] = [
+        {"level": "warning", "code": "W-ZEBRA", "path": "a", "message": "first"},
+        {"level": "error", "code": "W-ALPHA", "path": "b", "message": "second"},
+        {"level": "warning", "code": "W-MID", "path": "c", "message": "third"},
+    ]
+    rows = attrition_section(run).body["rows"]
+    finding_rows = [r for r in rows if r["kind"] == "finding"]
+    assert [r["code"] for r in finding_rows] == ["W-ZEBRA", "W-ALPHA", "W-MID"]
+
+
+def test_attrition_section_with_no_findings_key_renders_as_before(fixture_r: dict[str, Any]):
+    """`absent, not null`: a clean run carries no `findings` key at all
+    (`run_record`'s own rule), and this section must not manufacture a
+    `finding` row, an empty findings sub-table, or any other trace of the
+    block for such a record. `fixture_r`'s own real run carries findings of
+    its own (its generated project is genuinely unlocked and genuinely thin
+    on some strata), so the clean case is built explicitly here by removing
+    the key, rather than assumed of the fixture."""
+    run = dict(fixture_r["run"])
+    run.pop("findings", None)
+    assert "findings" not in run
+    before = attrition_section(run).body["rows"]
+    assert [r for r in before if r["kind"] == "finding"] == []
+
+    with_key = dict(run)
+    with_key["findings"] = []
+    after = attrition_section(with_key).body["rows"]
+    assert before == after
+
+
 # ---------------------------------------------------------------------------
 # H8c task 7 — two renderers over one section stream, `E-REPORT-FORMAT`, and
 # the section order pinned from a real render
