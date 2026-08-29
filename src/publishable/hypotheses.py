@@ -316,10 +316,12 @@ def verdict_for(
     answered at the level asked for, where a raw-bound verdict would look
     answered and be over-supported. That choice over a warning is the project's
     own standard — a number that looks handled and is not is worse than an
-    honest absence — and it is also the only one available to a pure function
-    with no diagnostics channel: `run.yaml` has nowhere to carry a finding, so
-    a warning printed to stdout would leave the record itself still claiming a
-    verdict it cannot support.
+    honest absence — and it is also the only one available to `evaluate`, a pure
+    function taking no `Collector`: even now that `run.yaml` has a `findings`
+    block (`run_record` task 3), nothing here has a channel to reach it, so a
+    warning a CALLER printed to stdout would still leave this function's own
+    return — the record's actual source for `supported`/`ci95_corrected` —
+    claiming a verdict it cannot support.
 
     `p_value_corrected` never enters `number` or `supported`: `evaluate_on`
     names three bounds and none is a p-value, so it travels straight through to

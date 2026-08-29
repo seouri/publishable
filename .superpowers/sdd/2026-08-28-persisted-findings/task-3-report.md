@@ -78,3 +78,39 @@ None. The brief's oracle section anticipated exactly this ("determine it first..
 literal gains a findings block"), and the wider set of key-list-pinning tests that also broke is
 exactly what the brief's "Ledger note from Task 1" discipline point told me to grep for and fix — not
 a disagreement, an expected consequence of the same design decision applied consistently.
+
+## Review fixes (post-PASS, three findings)
+
+1. **MEDIUM — stale comment, second home.** `cli.py` ~5178's "Neither substitutes for the
+   other — run-time findings are not written to the record at all" was falsified by this same
+   commit (`aggregate_c`'s `W-HYPOTHESIS-UNEVALUABLE` now reaches `run.yaml` via `_disclose`).
+   Rewrote to justify the field-plus-warning split on the two readers/two shapes it still is
+   (structured, hypothesis-keyed field vs. a human-readable sentence for whoever is watching the
+   run), not on findings never reaching the record. Swept the whole tree for the same claim:
+   `grep -rn "not written to the record\|never reach(es)? the record\|no diagnostics channel\|
+   findings.*never reach\|warnings.*never reach\|not.*written to.*run\.yaml\|screen only"
+   --include='*.py' --include='*.md' .` Two more LIVE, non-record homes found and fixed:
+   `src/publishable/hypotheses.py` (a pure `evaluate`/`_tested_number` comment — kept the true half,
+   "no `Collector` reaches this pure function," dropped the now-false "`run.yaml` has nowhere to
+   carry a finding") and a test-fixture template's own comment in `tests/test_cli.py`
+   (`_AGGREGATE_LEAKING_TEMPLATE`, describing `W-STATS-AGGREGATE-FAILED`, which is disclosed through
+   `aggregate_c` the same way). Remaining hits are in `docs/reference.md` (normative — Task 6 "the
+   documents"), `docs/feasibility-growth-chart-literacy.md` and `docs/superpowers/spec-defects.md`
+   (dated analysis / live gap list — also Task 6's), and inside `docs/superpowers/plans/*.md` and
+   `.superpowers/sdd/*/progress.md`/`task-*-report.md` (development record — never retro-edited per
+   `CLAUDE.md`). Left untouched, out of this task's scope.
+2. **LOW — no end-to-end absent-when-empty witness.** Added
+   `test_persisted_findings_task3_a_real_uv_lock_leaves_no_findings_key` in `tests/test_cli.py`,
+   reusing `_h6a_pin_project`'s real hand-written `uv.lock` fixture (the only one in the suite) for a
+   genuine `main(["run", ...])` whose `run.yaml` has no `findings` key at all. Mutation (same as
+   before, `out["findings"] = findings if findings is not None else []`, `cp` backup first): PASS →
+   `AssertionError: assert 'findings' not in {...}` (1 failed); reverted via `cp`, re-ran →
+   1 passed.
+3. **LOW — over-narrowed scope.** `test_a_condition_scoped_step_returning_a_metric_warns`'s raw-text
+   check now excludes only `findings` —
+   `yaml.safe_dump({k: v for k, v in run.items() if k != "findings"})` — restoring `execution` and
+   `layout` to the scanned text instead of the earlier `results`-only narrowing.
+
+Gate: `uv run pytest -q` → 3564 passed, 1 skipped, 2 xfailed (3563 + 1 new). `ruff check .`: All
+checks passed. `ruff format --check .`: 101 files already formatted (one reformat applied to
+`tests/test_cli.py` mid-fix, then re-verified). `uv run mypy`: Success, 56 source files.

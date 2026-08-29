@@ -5175,7 +5175,12 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
         # the field is what a co-author or a reviewer sees months later in
         # `run.yaml`, and this is what the person who can still fix the config
         # sees while the run is in front of them. Neither substitutes for the
-        # other — run-time findings are not written to the record at all.
+        # other, and that stays true even though `aggregate_c` now ALSO reaches
+        # `run.yaml` (the `findings` block, task 3): the field is a structured,
+        # hypothesis-keyed reason a reader can find without scanning prose, and
+        # the warning is a human-readable sentence aimed at the person watching
+        # the run happen. Two shapes for two readers, not one fact that used to
+        # reach only one of them.
         for entry in hypothesis_verdicts:
             reason = entry.get("unevaluable")
             if reason is None:

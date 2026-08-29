@@ -11874,9 +11874,12 @@ class CredAssay(BaseTemplate):
 
     def aggregate(self, units, cfg):
         # A template's own exception reaches stdout through
-        # `W-STATS-AGGREGATE-FAILED`, never through `run.yaml` — `run_record`
-        # has no diagnostics channel. So this is a leak the step-error path
-        # cannot see and the render boundary must catch.
+        # `W-STATS-AGGREGATE-FAILED`, which now also reaches `run.yaml`'s
+        # `findings` block (persisted-findings task 3) — but the credential
+        # in THIS message is what the test below is about: it is built from
+        # a raw exception string before `Collector.render`'s redaction ever
+        # runs, so it is a leak the step-error path cannot see and the render
+        # boundary must catch, on either surface.
         raise RuntimeError("upstream rejected key " + os.environ["PUBLISHABLE_TEST_AZURE"])
 """
 
@@ -19667,6 +19670,31 @@ def test_h6a_arm_a_the_ordinary_path_does_not_move(tmp_path: Path, monkeypatch):
     run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
     assert run_dir.name.endswith("_f6a935c")
     assert yaml.safe_load((run_dir / "run.yaml").read_text())["code_hash"] == _H6A_RUN_DIGEST
+
+
+def test_persisted_findings_task3_a_real_uv_lock_leaves_no_findings_key(
+    tmp_path: Path, monkeypatch
+):
+    """persisted-findings task 3 review, finding 2: 'absent when empty' had no
+    end-to-end witness — every OTHER fixture in this suite lacks a `uv.lock`,
+    so `W-ENV-UNLOCKED` fires on every real `run.yaml` the suite produces and
+    the absent case is never observed through an actual run, only through
+    `assemble_run_yaml` called directly (`test_run_record.py`).
+
+    `_h6a_pin_project` is the one fixture already in this file that writes a
+    real `uv.lock` (H6a's own reason: `uv_lock_hash` needs fixed bytes to be a
+    literal) — reused here, not edited, and not one of H6a's own guard-pin
+    arms, so adding an assertion to a fresh call of it is not a guard-pin
+    edit. `min_reported_n: 5` against 20 units and two 10-unit groups clears
+    `W-STATS-COLUMN-THIN` too, so this run's `findings` has nothing at all to
+    carry.
+    """
+    cfg = _h6a_pin_project(tmp_path / "runnable", monkeypatch, with_env=False)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next((tmp_path / "runnable" / "results").glob("run_*"))
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert run_doc["status"] == "completed"
+    assert "findings" not in run_doc
 
 
 def _h6a_live_include(repo_root: Path):
@@ -28801,11 +28829,13 @@ def test_a_condition_scoped_step_returning_a_metric_warns(tmp_path, capsys):
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     per_repeat = run["results"]["conditions"][0]["per_repeat"]
     assert "step02_fit" not in per_repeat, "a condition-scoped return reached per_repeat"
-    # Scoped to `results` rather than the whole file (persisted-findings task 3):
-    # `findings` now legitimately quotes `accuracy` inside this very warning's own
-    # message (Decision 2 — a disclosure lands in the record), so the raw-text
-    # check narrows to the one block the discarded value must never reach.
-    assert "accuracy" not in yaml.safe_dump(run["results"])
+    # Excludes exactly `findings` (persisted-findings task 3 review, finding 3):
+    # that block now legitimately quotes `accuracy` inside this very warning's
+    # own message (Decision 2 — a disclosure lands in the record), so scoping
+    # down to `results` alone would also stop checking `execution` and `layout`
+    # for no reason connected to that collision. Excluding only the one block
+    # that collides keeps everything else in scope.
+    assert "accuracy" not in yaml.safe_dump({k: v for k, v in run.items() if k != "findings"})
     assert any(f["code"] == "W-STEP-RETURN-DISCARDED" for f in run.get("findings", []))
 
 
