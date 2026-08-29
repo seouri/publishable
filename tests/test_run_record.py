@@ -168,3 +168,64 @@ def test_attempts_falls_back_to_one_for_a_triple_the_mapping_omits():
     left to a comment nobody can check."""
     doc = assemble_run_yaml(**_repeat_kwargs(), attempts={})
     assert _attempts_of(doc) == [1, 1]
+
+
+# --- persisted-findings task 3: `assemble_run_yaml`'s new `findings` block --
+
+
+def test_findings_are_recorded_in_order_with_all_four_fields():
+    """A run with findings carries them in the record, in the same order they
+    arrived — `run_record` "assembles only", so it neither sorts, filters, nor
+    re-derives what `Collector.disclosed()` already produced. Two entries,
+    one of each level, so the level is asserted rather than assumed constant
+    — Decision 2's whole point is that `level` is not always `"warning"`."""
+    findings = [
+        {
+            "level": "warning",
+            "code": "W-ENV-UNLOCKED",
+            "path": "environment",
+            "message": "no uv.lock found",
+        },
+        {
+            "level": "error",
+            "code": "E-INPUT-CHANGED",
+            "path": "data.input_dir",
+            "message": "1 path changed since the manifest was built",
+        },
+    ]
+    doc = assemble_run_yaml(**_repeat_kwargs(), findings=findings)
+    assert doc["findings"] == findings
+
+
+def test_a_clean_run_has_no_findings_key_at_all():
+    """`absent, not null` (Decision 2): no `findings:` key on a clean run —
+    never `findings: []`, which would claim a disclosure was checked for and
+    found none. This is the rule `weighted_by` and `unevaluable` already
+    follow.
+
+    Both the omitted-argument default and an explicit empty list take this
+    path, since a caller with nothing to disclose has no reason to build one
+    over the other.
+    """
+    assert "findings" not in assemble_run_yaml(**_repeat_kwargs())
+    assert "findings" not in assemble_run_yaml(**_repeat_kwargs(), findings=[])
+
+
+def test_findings_survive_a_yaml_round_trip():
+    """The entries are written with `yaml.safe_dump` (`cli.py`'s own call),
+    so a round trip through it must reproduce the same list of plain dicts —
+    proving the block is made of exactly the scalars `yaml.safe_dump` and
+    `yaml.safe_load` agree on, nothing richer that would silently degrade."""
+    import yaml
+
+    findings = [
+        {
+            "level": "warning",
+            "code": "W-STATS-COLUMN-THIN",
+            "path": "limits.min_reported_n",
+            "message": "condition 0, step 'x': recorded column 'y' carries a number for 8 unit(s)",
+        },
+    ]
+    doc = assemble_run_yaml(**_repeat_kwargs(), findings=findings)
+    round_tripped = yaml.safe_load(yaml.safe_dump(doc, sort_keys=False))
+    assert round_tripped["findings"] == findings

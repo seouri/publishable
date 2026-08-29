@@ -5345,6 +5345,14 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # `None` on every other entry, which is what makes
             # `_execution_block` write the `1` it always wrote.
             attempts=attempts,
+            # `findings` as accumulated up to THIS point — `assemble_run_yaml`
+            # omits the key entirely when empty. A disclosure added to this
+            # same list AFTER this call (`W-APPARATUS-UNANSWERED` below) is,
+            # by construction, never in the record: that warning fires only
+            # once `run.yaml` already exists (§ Warnings core reports), which
+            # is itself the second, independent witness that the record phase
+            # was reached.
+            findings=findings,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.

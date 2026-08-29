@@ -296,6 +296,7 @@ def assemble_run_yaml(
     contrasts: list[dict[str, Any]] | None = None,
     hypotheses: list[dict[str, Any]] | None = None,
     attempts: dict[tuple[str, int | None, str | None], int] | None = None,
+    findings: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     # `attempts` is `_execution_block`'s own parameter, threaded and not read
     # here: `resume` hands the per-triple record counts it read off
@@ -307,7 +308,7 @@ def assemble_run_yaml(
     # condition entry's documented shape (`reference.md`'s worked example) has no
     # plain `n` sibling to `per_repeat`. A parameter this function would only
     # discard is worse than not having it.
-    return {
+    out: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "status": status,
@@ -322,3 +323,15 @@ def assemble_run_yaml(
             results, aggregated, condition_meta, vs_baseline, contrasts, hypotheses
         ),
     }
+    # Absent when empty, on `weighted_by`'s and `unevaluable`'s own precedent
+    # (`_results_block` above) — never `findings: []`, which would claim a
+    # disclosure was checked for and found none. This module assembles only:
+    # the list arrives already redacted (`Collector.disclosed()`) and already
+    # in emission order (the call sites' own sequence); nothing here sorts,
+    # filters, or re-derives it. `level` is not always `"warning"` —
+    # `E-INPUT-CHANGED` renders an error through a collector and the run
+    # still writes a record with `status: failed`, so this key is `findings`,
+    # not `warnings`.
+    if findings:
+        out["findings"] = findings
+    return out

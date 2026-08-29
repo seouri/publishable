@@ -15160,7 +15160,15 @@ def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
     is blind to a key written only on a STOP path, since arms B and C (both
     truncations) assert no key list at all. A later batch adding a
     stop-only key is invisible to this pin; read `run.yaml`'s shape for that
-    case directly rather than assuming this test covers it."""
+    case directly rather than assuming this test covers it.
+
+    **persisted-findings task 3**: `findings` now trails the list, present
+    (not absent) because this fixture's own project has no `uv.lock`
+    (`W-ENV-UNLOCKED`) and 8 units is below `limits.min_reported_n`'s default
+    of 10 (`W-STATS-COLUMN-THIN`) — two real findings, in the order they were
+    disclosed, not zero. This is still a "clean" run in the sense the other
+    two arms are not (it completes, exit 0), so the key is present here and
+    the entries are asserted rather than merely tolerated."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
@@ -15191,6 +15199,28 @@ def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
         "layout",
         "execution",
         "results",
+        "findings",
+    ]
+    assert run["findings"] == [
+        {
+            "level": "warning",
+            "code": "W-ENV-UNLOCKED",
+            "path": "environment",
+            "message": (
+                "no uv.lock found; the environment is not pinned, and `reproduce` "
+                "will not be able to restore it"
+            ),
+        },
+        {
+            "level": "warning",
+            "code": "W-STATS-COLUMN-THIN",
+            "path": "limits.min_reported_n",
+            "message": (
+                "condition 0, step 'step01_summarize_units': recorded column "
+                "'placeholder_score' carries a number for 8 unit(s), below "
+                "limits.min_reported_n (10)"
+            ),
+        },
     ]
 
     results_entries = sorted(p.name for p in doc["results_dir"].iterdir())
@@ -15367,6 +15397,15 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     # Task 12's own key-list pin, re-asserted whole on a STOP path this time
     # (arm A only asserted it on a clean run — see that test's own docstring
     # on the boundary this closes).
+    #
+    # persisted-findings task 3: `findings` now trails the list — this run
+    # discloses TWO findings before phase 9 (§ Decision 2, § Decision 3's 12
+    # sites): `W-ENV-UNLOCKED` (no `uv.lock` in this fixture's project) from
+    # `_prepare_run`'s own collector, and the `E-APPARATUS-CHANGED` ERROR this
+    # docstring already describes above, from the fresh `stop_c` disclosed
+    # right before this assertion's own comment says a stop is printed. That
+    # error is why `status` is `"failed"` and it is exactly the case Decision
+    # 2 names: a record written beside an error, not only beside a warning.
     assert list(run.keys()) == [
         "schema_version",
         "run_id",
@@ -15379,6 +15418,24 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
         "layout",
         "execution",
         "results",
+        "findings",
+    ]
+    assert run["findings"] == [
+        {
+            "level": "warning",
+            "code": "W-ENV-UNLOCKED",
+            "path": "environment",
+            "message": (
+                "no uv.lock found; the environment is not pinned, and `reproduce` "
+                "will not be able to restore it"
+            ),
+        },
+        {
+            "level": "error",
+            "code": "E-APPARATUS-CHANGED",
+            "path": "experiment_type",
+            "message": "condition `00`'s fact `pinned` changed: r1 → r2",
+        },
     ]
 
     # `provenance.apparatus.facts` is the FIRST ANSWERED value per
@@ -16226,6 +16283,12 @@ def test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit(tmp_path):
     `status`-only assertion would not — plus `status == "completed"`,
     `expect_exit == EXIT_OK` (asserted inside `run_a_project` itself), and
     `len(executions.jsonl) == len(execution_order)`.
+
+    persisted-findings task 3: `findings` trails the list here too — this
+    fixture's project has no `uv.lock` and its 8 units are below
+    `limits.min_reported_n`'s default of 10, so `W-ENV-UNLOCKED` and
+    `W-STATS-COLUMN-THIN` both fire, exactly as in
+    `test_a_clean_run_completes_with_the_full_run_yaml_shape` above.
     """
     doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, units=8)
     run_dir = doc["run_dir"]
@@ -16242,6 +16305,11 @@ def test_h8a_arm_a_a_clean_run_top_level_shape_status_and_exit(tmp_path):
         "layout",
         "execution",
         "results",
+        "findings",
+    ]
+    assert [f["code"] for f in run_doc["findings"]] == [
+        "W-ENV-UNLOCKED",
+        "W-STATS-COLUMN-THIN",
     ]
     assert run_doc["status"] == "completed"
     sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
@@ -16816,7 +16884,13 @@ def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
     and does not depend on H8a's docstring surviving unedited. Not new
     coverage; carried forward deliberately.
 
-    H6b guard-pin arm Q: sole authorized editor NONE.
+    H6b guard-pin arm Q: sole authorized editor NONE — within H8b. Edited by
+    persisted-findings task 3, which is a different, later slice adding a new
+    optional `findings` block to `assemble_run_yaml`'s document (Decision 2):
+    this fixture's project has no `uv.lock` (one `W-ENV-UNLOCKED`) and sweeps
+    two conditions, each with 8 units below `limits.min_reported_n`'s default
+    of 10 (one `W-STATS-COLUMN-THIN` per condition), so `findings` trails the
+    key list with three entries.
     """
     doc = run_a_project(
         tmp_path,
@@ -16838,6 +16912,12 @@ def test_h8b_arm_c_the_records_key_lists_status_and_exit(tmp_path):
         "layout",
         "execution",
         "results",
+        "findings",
+    ]
+    assert [f["code"] for f in run_doc["findings"]] == [
+        "W-ENV-UNLOCKED",
+        "W-STATS-COLUMN-THIN",
+        "W-STATS-COLUMN-THIN",
     ]
     assert list(run_doc["provenance"].keys()) == [
         "git",
@@ -20509,6 +20589,11 @@ def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
     `run_record.py`'s emission of `results.conditions[i].is_baseline` (flip
     the boolean it writes) — production code, not the test — and this arm
     must fail; it does (checked before this test was finalized).
+
+    persisted-findings task 3: this fixture's project has no `uv.lock`, so
+    `W-ENV-UNLOCKED` is the one entry `findings` now carries (`units=20`
+    still keeps `W-STATS-COLUMN-THIN` off, per the paragraph above) — four
+    new leaves, captured the same way as everything else here.
     """
     doc = run_a_project(
         tmp_path,
@@ -20600,6 +20685,14 @@ def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
             "execution.conditions.1.steps.step01_summarize_units.seed47.wall_seconds",
             "<normalized>",
         ),
+        ("findings.0.code", "W-ENV-UNLOCKED"),
+        ("findings.0.level", "warning"),
+        (
+            "findings.0.message",
+            "no uv.lock found; the environment is not pinned, and `reproduce` "
+            "will not be able to restore it",
+        ),
+        ("findings.0.path", "environment"),
         ("layout.conditions", True),
         ("layout.repeats", True),
         ("parameters_hash", "<normalized>"),
@@ -23191,6 +23284,14 @@ _H9B_ARM_A_GOLDEN = [
     ("execution.conditions.1.steps.step02_step02_score.seed84.started_at", "<normalized>"),
     ("execution.conditions.1.steps.step02_step02_score.seed84.status", "completed"),
     ("execution.conditions.1.steps.step02_step02_score.seed84.wall_seconds", "<normalized>"),
+    ("findings.0.code", "W-ENV-UNLOCKED"),
+    ("findings.0.level", "warning"),
+    (
+        "findings.0.message",
+        "no uv.lock found; the environment is not pinned, and `reproduce` "
+        "will not be able to restore it",
+    ),
+    ("findings.0.path", "environment"),
     ("layout.conditions", True),
     ("layout.repeats", True),
     ("parameters_hash", "<normalized>"),
@@ -23290,6 +23391,10 @@ def test_h9b_arm_a_the_straight_through_golden(tmp_path: Path):
 
     `units=20` clears `limits.min_reported_n` (10), so no
     `W-STATS-COLUMN-THIN` side effect has to be kept in sync.
+
+    persisted-findings task 3: this fixture's project has no `uv.lock`, so
+    `_H9B_ARM_A_GOLDEN` carries the one `W-ENV-UNLOCKED` entry `findings`
+    gets, same as H9a arm A above.
 
     Mutation (production code, full suite): `run_record.py`'s `_execution_
     block` writing `"attempts": 1` cannot be caught here — `attempts` is on
@@ -28696,7 +28801,12 @@ def test_a_condition_scoped_step_returning_a_metric_warns(tmp_path, capsys):
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     per_repeat = run["results"]["conditions"][0]["per_repeat"]
     assert "step02_fit" not in per_repeat, "a condition-scoped return reached per_repeat"
-    assert "accuracy" not in (doc["run_dir"] / "run.yaml").read_text()
+    # Scoped to `results` rather than the whole file (persisted-findings task 3):
+    # `findings` now legitimately quotes `accuracy` inside this very warning's own
+    # message (Decision 2 — a disclosure lands in the record), so the raw-text
+    # check narrows to the one block the discarded value must never reach.
+    assert "accuracy" not in yaml.safe_dump(run["results"])
+    assert any(f["code"] == "W-STEP-RETURN-DISCARDED" for f in run.get("findings", []))
 
 
 def test_a_condition_scoped_step_returning_nothing_is_silent(tmp_path, capsys):
@@ -28855,6 +28965,14 @@ _TASK1_ORACLE_GOLDEN = [
     ("execution.conditions.2.steps.step01_summarize_units.seed61.started_at", "<normalized>"),
     ("execution.conditions.2.steps.step01_summarize_units.seed61.status", "completed"),
     ("execution.conditions.2.steps.step01_summarize_units.seed61.wall_seconds", "<normalized>"),
+    ("findings.0.code", "W-ENV-UNLOCKED"),
+    ("findings.0.level", "warning"),
+    (
+        "findings.0.message",
+        "no uv.lock found; the environment is not pinned, and `reproduce` "
+        "will not be able to restore it",
+    ),
+    ("findings.0.path", "environment"),
     ("layout.conditions", True),
     ("layout.repeats", True),
     ("parameters_hash", "<normalized>"),
@@ -29069,6 +29187,16 @@ def test_task1_bit_stability_oracle_over_the_correction_machinery(tmp_path: Path
     """The bit-stability oracle this slice's task 1 exists to lay down, BEFORE
     `correction.Member` grows a route for a condition's own metric
     (`compare: {to: constant}`). Captured at commit b5eb0ef.
+
+    persisted-findings task 3 (ABSORBED task 5): the literal MOVED. This
+    fixture's project has no `uv.lock`, so `_prepare_run`'s own collector
+    disclosed exactly one finding — `W-ENV-UNLOCKED` — before phase 9, and
+    `units=40` clears `limits.min_reported_n` so no `W-STATS-COLUMN-THIN`
+    joins it. That is the ONLY diff: four new leaves
+    (`findings.0.{code,level,message,path}`), inserted in their sorted
+    position between the last `execution.*` leaf and `layout.conditions`;
+    nothing above `execution.*` or at/after `layout.conditions` moved, and no
+    numeric value anywhere in the golden changed.
 
     Drives a real end-to-end run through `run_a_project` (`main(["run", ...])`,
     the installed console script's own entry point) with every piece the task
