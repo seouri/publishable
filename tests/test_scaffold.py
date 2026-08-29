@@ -13,9 +13,29 @@ from publishable.generators.experiment import generate_experiment, package_name
 from publishable.generators.step import generate_step
 from publishable.scaffold import scaffold_project
 
-_REPO_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
-_REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
-_TUTORIAL_MD = Path(__file__).resolve().parents[1] / "docs" / "tutorial-writing-a-plugin.md"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_PYPROJECT = _REPO_ROOT / "pyproject.toml"
+_REFERENCE_MD = _REPO_ROOT / "docs" / "reference.md"
+_TUTORIAL_MD = _REPO_ROOT / "docs" / "tutorial-writing-a-plugin.md"
+
+# The tutorial is NOT in the sdist: `[tool.hatch.build.targets.sdist]` ships the
+# three normative documents and not this one. So the three pins below cannot
+# read their subject from an unpacked tarball, where they fail with
+# `FileNotFoundError` — measured on 2026-08-29, three of the five failures a
+# tests-carrying sdist produces.
+#
+# **The condition is the absence AND the tree not being a checkout**, not the
+# absence alone. A bare `skipif(not exists)` fails open in the direction that
+# matters: delete or rename the tutorial in this repository and three pins would
+# go quietly green, which is the whole failure mode `_tutorial_fence` already
+# guards against inside the file. With `.git` in the condition, a missing
+# tutorial in a checkout still runs these tests and still fails loudly; only a
+# distribution, which is not a git repository and is not supposed to carry the
+# file, skips them.
+_needs_the_tutorial = pytest.mark.skipif(
+    not _TUTORIAL_MD.exists() and not (_REPO_ROOT / ".git").exists(),
+    reason="the tutorial is not shipped in the sdist; in a checkout its absence is a failure",
+)
 
 
 def test_new_creates_the_fixed_layout_and_a_first_commit(tmp_path: Path):
@@ -752,6 +772,7 @@ def _tutorial_fence(after: str, kind: str = "") -> str:
     return text[text.index("\n", fence) + 1 : text.index("```", fence + 3)]
 
 
+@_needs_the_tutorial
 def test_the_tutorials_plugin_tree_is_what_plugin_new_writes(tmp_path: Path):
     """Route B step 1's tree, both directions, against a real scaffold."""
     from publishable.plugin_scaffold import scaffold_plugin
@@ -760,6 +781,7 @@ def test_the_tutorials_plugin_tree_is_what_plugin_new_writes(tmp_path: Path):
     _assert_agreement(scaffold_plugin(tmp_path / "publishable-plate-assay"), named)
 
 
+@_needs_the_tutorial
 def test_the_tutorials_entry_point_table_is_what_plugin_new_declares(tmp_path: Path):
     """Route B step 2 quotes the generated `pyproject.toml`'s entry-point tables.
 
@@ -775,6 +797,7 @@ def test_the_tutorials_entry_point_table_is_what_plugin_new_declares(tmp_path: P
     assert documented["project"]["entry-points"] == written["project"]["entry-points"]
 
 
+@_needs_the_tutorial
 def test_the_tutorials_quote_of_the_shipped_test_omits_only_its_docstring(tmp_path: Path):
     """§ Testing a plugin quotes `tests/test_<stem>.py` and says it elides one
     docstring. Every other line must be there, in order.
