@@ -73,6 +73,20 @@ def _build_git_repo(repo: Path) -> Path:
     git("init", "-q", cwd=repo)
     git("config", "user.email", "test@example.com", cwd=repo)
     git("config", "user.name", "Test", cwd=repo)
+    # `git commit` fires `git maintenance run --auto`, which DETACHES: it takes
+    # `.git/objects/maintenance.lock` and releases it some milliseconds later,
+    # after the commit has already returned. The prototype below is copied ~1500
+    # times, so a copy that lists the directory while that lock exists and reads
+    # it after it is gone dies with `shutil.Error: [Errno 2]`. That is what took
+    # this suite red on its first CI run (2026-08-29, `ubuntu-latest`), where a
+    # loaded runner widens the window; it had never fired on this machine.
+    #
+    # Turning maintenance off is the half that stops the lock existing at all.
+    # `_copy_repo` refusing to copy locks is the half that survives one
+    # appearing anyway — a background process from outside this fixture, or a
+    # git that schedules maintenance somewhere new.
+    git("config", "gc.auto", "0", cwd=repo)
+    git("config", "maintenance.auto", "false", cwd=repo)
     git("add", ".", cwd=repo)
     git("-c", "commit.gpgsign=false", "commit", "-qm", "initial", cwd=repo)
     return repo
@@ -97,12 +111,23 @@ def _git_repo_prototype(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return _build_git_repo(tmp_path_factory.mktemp("git_repo_prototype") / "repo")
 
 
+def _copy_repo(src: Path, dst: Path) -> Path:
+    """Copy a git repository, skipping any lock file it happens to hold.
+
+    A `*.lock` is transient state belonging to whichever process holds it, so
+    copying one is wrong twice over: it can vanish between `copytree`'s listing
+    and its read, which raises, and if it does survive the copy it propagates a
+    lock no process holds into every copy made afterwards. See `_build_git_repo`
+    for the failure this fixed.
+    """
+    shutil.copytree(src, dst, symlinks=True, ignore=shutil.ignore_patterns("*.lock"))
+    return dst
+
+
 @pytest.fixture
 def git_repo(tmp_path: Path, _git_repo_prototype: Path) -> Path:
     """A real git repo with one commit. Provenance is never mocked."""
-    repo = tmp_path / "repo"
-    shutil.copytree(_git_repo_prototype, repo, symlinks=True)
-    return repo
+    return _copy_repo(_git_repo_prototype, tmp_path / "repo")
 
 
 _DIST_METADATA = """\
