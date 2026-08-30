@@ -263,7 +263,7 @@ Two readings of that table are worth stating, because both are easy to get backw
 
 ## The fifteen configs
 
-Every config below is **byte-identical to a file `publishable validate` accepted**, except that `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
+Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in three ways that are all presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used; two of E1's comments are shortened here, because the argument they carry is in the prose under that YAML; and E10's `description` writes `2×2` where the file holds `2x2`, since `×` is this repository's [house style](../CLAUDE.md#documentation-conventions) and a config's own text is not. What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
 
 Three conventions run through all fifteen. Every arithmetic figure is stated **before** the YAML, in the four quantities that matter: conditions, repeats, the execution count `validate` checks against `limits.max_executions`, and the **metered requests** — conditions × repeats × units, which is the only figure a deployment bills for. That last one is not what `dry-run` prints: `dry-run`'s `unit-executions` counts every step's handling of every unit, including the `run`-scoped roster summary and the `condition`-scoped serializer, neither of which issues a request. Both numbers are given, and they are different numbers on purpose.
 
@@ -307,7 +307,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [visit_tertile, sex]
+    attributes: [visit_tertile, sex, growth_dx_flag, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: between
     assign:
       visit_tertile: {method: by_attribute}
@@ -420,7 +420,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [visit_decile, sex]
+    attributes: [visit_decile, sex, growth_dx_flag, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -507,7 +507,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -618,7 +618,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -726,7 +726,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [status, match_set, sex]
+    attributes: [status, match_set, sex, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: between
     cluster_by: match_set
     assign:
@@ -838,7 +838,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -945,7 +945,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1052,7 +1052,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1161,7 +1161,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [true_count_band, sex]
+    attributes: [true_count_band, sex, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1260,7 +1260,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1368,7 +1368,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [status, match_set, sex]
+    attributes: [status, match_set, sex, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
     cluster_by: match_set
 
@@ -1462,7 +1462,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1596,7 +1596,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [visit_band, sex]
+    attributes: [visit_band, sex, clinician_concern, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1713,7 +1713,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [age_band, sex]
+    attributes: [age_band, sex, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: between
     assign:
       age_band: {method: by_attribute}
@@ -1832,7 +1832,7 @@ data:
   units:
     from: {resolver: growth_trajectory}
     key: patient_id
-    attributes: [sex, age_band]
+    attributes: [sex, age_band, synthetic_truth, visits_count_pre_dx, visits_span_days]
     allocation: within
 
 parameters:
@@ -1997,6 +1997,8 @@ files) with 2,550 lines of tests, fifteen configs, and a `publishable-growth-cha
 one resolver, one probe, and one writer/reader pair, and **no** template. `uv run pytest`: **212 passed**
 in the measurement repository, **30** in the plugin. Every command below was run through the project's
 own console script.
+
+**The fifteen YAML blocks above were resynced on 2026-08-29**, and only in one line each: their `data.units.attributes` lists still showed the stratifying columns alone, which is the state [gap 8](#gaps-this-analysis-found-in-the-specification) closed. The six-column lists they now show are what the runs measured here actually used, so the table above did not move — what moved is the document catching up to it.
 
 **The inputs are two files per config**, both generated by `tools/make_fixtures.py`: `index.csv`, the
 roster the `growth_trajectory` resolver reads, and `visits.csv`, the per-visit extract
