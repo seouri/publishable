@@ -25,6 +25,11 @@ of this file's job now, and it changes how three things read:
   **Recounted again 2026-08-29: the build-claim sweep over the four documents filed the `expand`
   numbering divergence, netting to 152 of which 62 are `OPEN`** — a filing rather than a reopening,
   and it closed nothing, so the count moves in one direction only.
+  **Recounted again 2026-08-30: re-deriving `feasibility-growth-chart-literacy.md` against the
+  source plan's restructure filed two — a config cannot name which comparisons are its family, and a
+  fixed-sequence gate has no expression — netting to 154 of which 64 are `OPEN`.** Both were found
+  by expressing a real plan and one of them was measured on seven configs, which is the route this
+  file's most useful entries have come by.
   What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
@@ -6606,3 +6611,67 @@ measured ordering quoted beside it. That sentence was verified by running at the
 is how this entry came to exist: a documented divergence with no entry here reads as an oversight
 rather than as a decision nobody has taken.
 
+## OPEN — a config cannot say WHICH comparisons are its family, so a run with one primary quantity and several supporting ones must either correct all of them or declare no family and be warned about it — **Owner: unassigned, and no slice follows**
+
+**Found by:** the `growth-chart-literacy` feasibility analysis, re-derived 2026-08-30 against the
+plan's restructure, and **measured**: seven of its fourteen configs carry
+`W-STATS-FAMILY` at `validate`, and two of them carry it into an executed run's `findings:` block.
+
+`statistics.correction` is a single switch over the whole run, and the family it applies to is
+comparisons × metrics — every non-baseline condition, every declared contrast, times every metric
+with an interval. A design that concludes on **one** pre-specified quantity with several supporting
+comparisons beside it has no way to say so. The two available spellings are both wrong for it:
+`holm` corrects the primary interval for supporting comparisons nobody reads a claim off, and
+`none` earns [`W-STATS-FAMILY`](../reference.md#warnings-core-reports), whose message — *"every
+interval reported is uncorrected"* — is **true and misleading in the same sentence**, because the
+design intended no family rather than forgetting one.
+
+**Why that is a gap and not a preference.** Core's argument for recording `family_size` and its
+breakout is that a family declared in a paper should be checkable against the record. Here the paper
+declares a family of one, or of none, and the record cannot represent either — so a reader checking
+the level finds `correction: null` on every interval and no way to tell a deliberate declaration
+from an omission. It is the same failure the `W-STATS-FAMILY` warning exists to prevent, arriving
+from the other direction.
+
+**Why it matters more than the count suggests.** Seven of fourteen configs carrying a warning by
+construction is the shape of *a warning readers learn to skip*, which this project names as a defect
+class in its own right. A reader who has learned to skip it will also skip the instance where a
+correction really was forgotten.
+
+**Proposed resolution, and its cost.** A per-hypothesis or per-contrast marker — a `family:` name, or
+a `primary: true` on one hypothesis — so that `correction` applies to the marked set and the rest are
+reported uncorrected without a warning. The cost is that it gives a config a second place to say
+something about multiplicity, and the current single switch is what makes `family_size` derivable
+from the sweep alone.
+
+**Why open.** The charter is complete and no slice follows. What ships is: declare `holm` and correct
+things you did not mean to, or declare `none` and be warned; state the intended family in the
+manuscript either way.
+
+## OPEN — a fixed-sequence gate between two hypotheses has no expression, so the structure protecting a study-level α lives outside the record — **Owner: unassigned, and no slice follows**
+
+**Found by:** the same analysis, 2026-08-30. **Read from the specification**, not measured — the run
+that would carry both hypotheses needs a deployment.
+
+`hypotheses` is a flat list. Each entry is evaluated on its own and each verdict is recorded on its
+own, and nothing expresses that one is read **only** in the branch where another is supported. The
+plan that found this concludes on one quantity through one gate — reject the physiology main effect's
+null, then read the shortcut reliance index — and spends no α on the second step precisely because of
+that ordering. In the record the two are coordinate confirmatory claims, and a reader who reads the
+second without the first has no signal that they should not.
+
+**Why that is a gap.** Pre-registration is the one place core takes a position on inferential
+discipline: a hypothesis carries the `parameters_hash` that declared it so a later addition cannot
+pass as a pre-registration. A fixed-sequence gate is the same kind of commitment — made in advance,
+checkable after the fact, and worthless if it can be quietly reinterpreted — and it is the structure
+doing the study-level error control in the design that found this, while the multiplicity families
+core *can* express are explicitly secondary to it.
+
+**Proposed resolution, and its cost.** A `gated_by: <id>` field on a hypothesis, with the verdict
+recording `unevaluable: gate_not_met` where the named hypothesis was not supported — reusing the
+[`unevaluable`](../reference.md#pre-registration) mechanism that already exists for a hypothesis
+that cannot reach a verdict. The cost is ordering: hypotheses would gain a dependency graph, which
+needs a cycle check and a rule for what a gate on an `exploratory` hypothesis means.
+
+**Why open.** The charter is complete and no slice follows. What ships is a `statement` field, which
+is prose, and a manuscript.
