@@ -4,6 +4,7 @@ from pathlib import Path
 
 from publishable.errors import ContractError
 from publishable.generators.experiment import package_name
+from publishable.generators.template import is_usable_name, unusable_name_message
 
 STEP_PY = """\
 from publishable import BaseStep
@@ -18,6 +19,24 @@ class Step(BaseStep):
 
 
 def generate_step(*, repo_root: Path, experiment: str, step_name: str) -> Path:
+    """Write the next-numbered step and register it in `experiment.py`.
+
+    **The name is checked before anything reaches disk**, and that ordering is
+    the whole of this guard's value. `step_name` lands in an import path and in
+    a derived class name, neither of which can be escaped, and the file it is
+    interpolated into — `src/<pkg>/experiment.py` — is one this command did not
+    create and may already declare a working pipeline. Checked afterwards, the
+    refusal would arrive on a project that no longer imports.
+    """
+    if not is_usable_name(step_name):
+        raise ContractError(
+            unusable_name_message(
+                step_name,
+                what="a step",
+                writes="both a module under `steps/` and a class name in `experiment.py`",
+            ),
+            code="E-GENERATE-NAME",
+        )
     pkg = package_name(experiment)
     steps_dir = repo_root / "src" / pkg / "steps"
     if not steps_dir.is_dir():

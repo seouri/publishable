@@ -76,15 +76,43 @@ def class_name(name: str) -> str:
 
 
 def is_usable_name(name: str) -> bool:
-    """Whether `templates/<name>.py` is a file discovery would actually read.
+    """Whether `<name>.py` is a file a generator can write and Python can import.
 
     An identifier because the file must be importable as a sibling helper is,
-    and because a name carrying a path separator would write outside
-    `templates/` altogether. Not `__`-prefixed because `discover_local` skips
-    those by the same convention `__init__.py` uses — a generator that wrote
-    one would write a file that never registers.
+    and because a name carrying a path separator would write outside the
+    directory the generator chose altogether. Not `__`-prefixed because
+    `discover_local` skips those by the same convention `__init__.py` uses — a
+    generator that wrote one would write a file that never registers.
+
+    **Read by three generators now, not one.** `generate template` was the first
+    caller; `generate step` and `generate experiment` read it because the same
+    value reaches an import path and a class name in the files they write, and
+    neither position can be escaped — `json.dumps` produces a valid string
+    literal for any value and a valid identifier for none.
     """
     return name.isidentifier() and not name.startswith("__")
+
+
+def unusable_name_message(name: str, *, what: str, writes: str) -> str:
+    """One message shape for the two generators that RAISE on a name.
+
+    `generate step` and `generate experiment`, not `generate template` — whose
+    own refusal is made at the CLI, exits `2` rather than raising, and names
+    `templates/<name>.py` specifically. That difference is deliberate and is
+    stated in `reference.md` § Errors core raises: every file `generate
+    template` writes is one it creates, so a CLI-level check bounds the damage,
+    while `generate step` rewrites a file it did not create and has to refuse
+    inside the function that would do the rewriting.
+
+    Named here rather than composed at each site so the two read alike, and so
+    the rule they share is stated once: what the generator would have written is
+    what the name has to be able to be.
+    """
+    return (
+        f"`{name}` cannot name {what} — it becomes {writes}, so it must be a "
+        "name Python can import and use as a class, and not one prefixed with "
+        "`__`; see docs/reference.md § Generators"
+    )
 
 
 def generate_template(*, repo_root: Path, name: str) -> Path:

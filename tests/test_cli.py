@@ -977,6 +977,48 @@ def test_generate_template_takes_exactly_one_name_and_writes_nothing_otherwise(
     assert sorted(p.name for p in templates.iterdir()) == before
 
 
+def test_generate_step_refuses_an_unusable_name_through_the_console_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """The wiring, not the guard — `generate_step`'s own tests pin the refusal,
+    and this pins that the CLI reaches it and reports it as a coded error at a
+    non-zero exit rather than swallowing it.
+
+    The file assertion is here as well as in the unit test on purpose: the
+    corruption this closes was of `experiment.py`, and this is the path a user
+    actually takes to it.
+    """
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "cohort-pilot",
+                "--template",
+                "generic",
+                "--input-dir",
+                str(tmp_path / "data"),
+                "--output-dir",
+                str(tmp_path / "results"),
+            ]
+        )
+        == EXIT_OK
+    )
+    capsys.readouterr()
+    experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
+    before = experiment_py.read_text()
+
+    assert main(["generate", "step", "cohort-pilot", 'foo"bar']) != EXIT_OK
+    err = capsys.readouterr().err
+    assert "E-GENERATE-NAME" in err, err
+    assert experiment_py.read_text() == before
+    compile(experiment_py.read_text(), str(experiment_py), "exec")
+
+
 GENERATED_REPORT = "src/cohort_pilot/report.py"
 
 

@@ -30,6 +30,10 @@ of this file's job now, and it changes how three things read:
   fixed-sequence gate has no expression — netting to 154 of which 64 are `OPEN`.** Both were found
   by expressing a real plan and one of them was measured on seven configs, which is the route this
   file's most useful entries have come by.
+  **Recounted again 2026-08-30, later the same day: the unescaped-name entry was closed by code and
+  removed, netting to 153 of which 63 are `OPEN`.** `generate step` and `generate experiment` now
+  refuse a name that cannot be an identifier before anything reaches disk, which is the fix that
+  entry's own "the check its owner must make" section specified.
   What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
@@ -4708,53 +4712,6 @@ record this entry is about, not to write it. The **writes** claim this entry res
 on is unchanged and still exactly five; only the bare "the grep returns five" phrasing is now
 false of a plain re-run. Say *writes*, not *the grep returns*, and the sentence survives readers
 being added without another correction.
-
-## OPEN — a user-supplied name or flag value is interpolated unescaped into a generated Python file, and `generate step` corrupts an existing file when it is — **Owner: whichever slice next touches `generators/step.py` or `generators/experiment.py`**
-
-Measured 2026-08-21 (H8c task 15's fix round, against `51fb7cb`/`37a8f68`), all through `main(...)`
-in scaffolded projects. **`generate report`**'s own instance (`generators/report.py`'s `REPORT_PY`
-template, `format = "{fmt}"` interpolated verbatim) is closed in this same fix round — `fmt` is now
-passed through `json.dumps` before it reaches the template, so the substituted text is already a
-quoted, escaped Python string-literal source rather than a raw value sitting between hand-written
-quotes, and every string `--format` can carry now writes a file that parses. **This entry is about
-what is still open: the identical root cause in `generators/step.py`, and the general absence of any
-name guard across the generator family except `generate template`'s `is_usable_name`.**
-
-`generate step cohort-pilot 'foo"bar'` exits `0`. The step file itself still compiles — the name
-lands inside a comment, `# TODO: implement foo"bar` — but `generators/step.py`'s rewrite of
-`src/cohort_pilot/experiment.py` interpolates the same raw name into an import line,
-`from .steps.step02_foo"bar import Step as Foo"bar`, and the result **does not parse**
-(`SyntaxError: unterminated string literal`). A name carrying a newline corrupts the same file
-differently (the import spans lines). **This is the worse half of the defect class, and worse than
-`generate report`'s own (now-closed) instance was**: `generate report` only ever writes ONE new file
-under a name the caller chose, so a bad value's damage is confined to a file nobody depended on yet
-and the caller can delete; `generate step` **rewrites `src/<pkg>/experiment.py`, a file it did not
-create**, that may already declare a working pipeline, and does so at exit `0` with no diagnostic —
-silently leaving a project non-importable until a human notices and repairs the rewrite by hand.
-
-`generators/experiment.py`'s own `name`/`package_name`/`class_name` reach the same absence of a
-guard (noted separately, "No name guard on `<experiment>`", verified with `../evil`, `a/b`, and
-`cohort pilot` — each reaches `E-EXPERIMENT-UNKNOWN` because `pkg_dir.is_dir()` bounds the blast
-radius to a directory that must already exist), but `generate experiment` never rewrites a file it
-did not just create, so it does not carry the corruption half of this entry — only the family's
-missing-guard half.
-
-**The check its owner must make.** A name reaching a Python *identifier* position (a class name, an
-import path segment) cannot be fixed by escaping the way `generate report`'s string-literal position
-was — `json.dumps` produces a valid string, never a valid identifier, for an arbitrary value. The fix
-has to be validation before any file is touched: extend `generators/template.py`'s `is_usable_name`
-— or an equivalent identifier check — to `generate step`'s `step_name` (checked before
-`experiment.py` is ever opened for writing, on the same "arity before anything reaches disk"
-precedent this slice's own `generate report` arm draws) and to `generate experiment`'s `name`. A
-one-line guard rejecting a non-identifier fixes `generate step`'s corruption outright; the
-`experiment`/`package_name` guard is lower-severity (bounded by `pkg_dir.is_dir()` today) but is the
-same root cause and should not ship separately from it.
-
-**Cost if wrong / if unclaimed:** the next reader of `generators/step.py` who adds a caller passing a
-name from anywhere other than a hand-typed CLI argument (a script, a UI, a plugin's own scaffolding)
-inherits a generator that silently corrupts an existing tracked file — the one class of failure
-`generate`'s own "greenfield only, refuses rather than overwrites" rule exists to prevent, reached
-here through a file the command did not classify as the thing it must not overwrite.
 
 ## PARTLY CLOSED 2026-08-23 (H6b task 5) — ~~`E-GIT-NO-REPO` is named in two normative § Errors cells for the first time on this branch, with no row of its own, and two call sites let it reach the user uncaught~~; the wider prose-only family stays OPEN — **Owner: unassigned**
 
