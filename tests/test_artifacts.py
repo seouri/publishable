@@ -435,6 +435,76 @@ def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
     assert io.rows() == [{"unit": "p0", "pred": 1}]
 
 
+def test_a_declared_attribute_only_a_LATER_unit_carries_still_collides(tmp_path: Path):
+    """The roster is what declares the namespace, not its first row.
+
+    A resolver's roster is projected onto `data.units.attributes` with
+    `if a in unit.attributes`, so a unit that does not carry an optional
+    attribute simply lacks the key — and `validate` admitted the config by
+    reading the **union** over yielded units, on the stated ground that a
+    declared attribute is "this column exists" rather than "every row filled it
+    in". A collision check reading one unit therefore refuses or permits by
+    yield order, and permits exactly when the recorded column would shadow an
+    attribute some units really do carry.
+
+    Asserted from the SECOND unit as well as the first, because the shadow is a
+    property of the table rather than of the row being written.
+    """
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList([Unit(key="p0"), Unit(key="p1", attributes={"site": "A"})])
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"site": "x"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+    io2 = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    with pytest.raises(ContractError) as second:
+        io2.record("p0", {"site": "x"})
+    assert second.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_a_column_no_unit_carries_is_still_recordable(tmp_path: Path):
+    """The union widens what collides and must not widen it to everything: a
+    recorded column is the ordinary case, and a check that refused any name
+    would be a guard nobody could satisfy."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList([Unit(key="p0"), Unit(key="p1", attributes={"site": "A"})])
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    io.record("p0", {"pred": 1})
+    assert io.rows() == [{"unit": "p0", "pred": 1}]
+
+
+def test_the_namespace_is_the_whole_roster_not_its_first_rows(tmp_path: Path):
+    """The attribute is carried by the LAST unit of a hundred and by no other.
+
+    A fixture of two distinguishes "reads the first unit" from "reads more than
+    the first unit" and nothing else — a check reading the first two, or the
+    first ten, would pass it. This one fails for every prefix short of the whole
+    roster.
+    """
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList(
+        [Unit(key=f"p{i:03d}") for i in range(99)] + [Unit(key="p099", attributes={"site": "A"})]
+    )
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    with pytest.raises(ContractError) as e:
+        io.record("p000", {"site": "x"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+
 def test_two_measurements_of_one_unit_are_both_kept(tmp_path: Path):
     sd = tmp_path / "run" / "s"
     sd.mkdir(parents=True)

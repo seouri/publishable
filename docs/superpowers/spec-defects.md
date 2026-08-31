@@ -34,6 +34,11 @@ of this file's job now, and it changes how three things read:
   removed, netting to 153 of which 63 are `OPEN`.** `generate step` and `generate experiment` now
   refuse a name that cannot be an identifier before anything reaches disk, which is the fix that
   entry's own "the check its owner must make" section specified.
+  **Recounted again 2026-08-30: the `io.record` collision-check entry was closed by code and removed
+  too, netting to 152 of which 62 are `OPEN`.** `_declared_attributes` reads the union over the
+  roster, which is the set `resolve_units` already validated against — the sibling that entry named.
+  **Its two H5a relatives stay open**: this closes the resolver-reachable depth of the question, not
+  the directly-constructed-`Unit` ones beside it.
   What went is exactly what said so:
   a struck `~~OPEN~~` heading, a heading declaring `RESOLVED`,
   `CLOSED`, `RETIRED`, `ANSWERED`, `RULED`, `NO DOCUMENT CHANGE` or `NOT A DEFECT`, or a body carrying a
@@ -5541,28 +5546,6 @@ callers to reach a new one mid-slice.
 and `report` together; whoever consolidates should note the drift above is the argument, since **three
 copies of one refusal that already disagree in one keyword are three copies that will disagree in a
 refusal next.**
-
-## OPEN — `io.record`'s collision check reads only the FIRST unit's attributes, so a resolver can bypass `E-STEP-KEY-COLLISION` from a config — **Owner: unassigned, the recorded-column namespace's owner (H5) is closed**
-
-**Measured at `dd408b5` on H9b's branch, filed after batches 3–4's review disproved a claim that this was
-*"reachable only from core's own API, never from a config"*.** It is config-reachable:
-
-- `resolve_units` checks declared attributes against the **union** of what a resolver yields, so a resolver
-  whose **first** unit lacks an attribute its **later** units carry **passes `validate`**;
-- `artifacts.record`'s `_declared_attributes` then reads **`self._units[0]` only**, so the collision check
-  never sees that attribute and a recorded column of the same name is **accepted rather than refused**.
-
-**Why this is the H5a value-hijack family rather than a new one.** H5a closed the case where a *directly
-constructed* `Unit` hijacks the identity column, and filed the residue; this is the same shape reached
-through a **resolver**, which is a config-declared surface rather than hand-written Python. **The fix is
-the sibling that already got it right**: `resolve_units` reads the union, and `_declared_attributes`
-should read the same set rather than one unit's.
-
-**Why H9b did not close it.** H9b's charter is `resume`; widening a shipped refusal so it catches configs
-that pass today is a behaviour change to `run`, and the slice that owned the recorded-column namespace
-(H5a/H5b) is closed. **Owner: unassigned, with the reason** — no remaining slice (H9c, H9d, H3c-3's
-remaining 14) names `io.record`'s collision check as its surface. Whoever takes it should read it beside
-H5a's two residue entries; **all three are one question asked at three depths.**
 
 ## OPEN — a resume stopped by an UNREACHABLE apparatus still writes no record, while one stopped by a MOVED fact now does — **Owner: unassigned, with the reason (the terminality of `run.yaml` is the reason, not the surface)**
 

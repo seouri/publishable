@@ -696,6 +696,12 @@ class StepIO:
         self._upstream = upstream
         self._recorded_keys: set[str] = set()
         self._units = units
+        # The roster is handed over whole and never reassigned, so the namespace
+        # a recorded column may not shadow is a fact about this execution and is
+        # read here rather than per `record` call. See `_declared_attributes`.
+        self._declared_attribute_names: frozenset[str] = frozenset(
+            name for unit in (units or ()) for name in unit.attributes
+        )
         self._rows: dict[str, dict[str, Any]] = {}
         self._skipped: dict[str, str] = {}
         # The `data.units.measurements` declaration itself, not a bool: task 5's
@@ -782,10 +788,22 @@ class StepIO:
                 code="E-STEP-UNIT-SETTLED",
             )
 
-    def _declared_attributes(self) -> set[str]:
-        if self._units is None or len(self._units) == 0:
-            return set()
-        return set(self._units[0].attributes)
+    def _declared_attributes(self) -> frozenset[str]:
+        """Every attribute name the ROSTER carries, not the first unit's.
+
+        The union, because that is what admitted the config: `resolve_units`
+        checks `data.units.attributes` against the union over a resolver's
+        yielded units — "a table header's *this column exists* rather than
+        *every row filled it in*" — and then projects each unit with
+        `if a in unit.attributes`, so a unit that does not carry an optional
+        attribute simply lacks the key. Reading one unit made this check refuse
+        or permit **by yield order**, and permit exactly when the recorded
+        column would shadow an attribute other units really carry.
+
+        Computed once, at construction: `record` is called once per unit, so a
+        union rebuilt inside it is quadratic in the roster.
+        """
+        return self._declared_attribute_names
 
     def record(self, unit_key: str, values: dict[str, Any], measurement: str | None = None) -> None:
         """Append one row, keyed by unit — or by `(unit, measurement)`.
