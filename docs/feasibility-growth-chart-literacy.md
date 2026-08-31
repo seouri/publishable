@@ -218,6 +218,10 @@ Core calls it at `dry-run`, at run start, before every execution and at `freeze`
 
 **Prompt text lives at `src/growth_chart/prompts/<id>.md`, and the choice of prompt is a parameter naming it.**
 
+**One file, two messages.** The plan fixes *"one system message and one user message per case, both fixed for the whole study and reproduced verbatim in the supplement"* — the system message stating the task, the reference frame and the output form, the user message carrying the serialized trajectory plus the child's sex and age at each point, and nothing else. So a prompt file carries both halves behind `<!-- system -->` and `<!-- user -->` markers, and the loader refuses a file that breaks the contract **at load rather than at first use**: a missing placeholder renders every unit's prompt identically, and a run that discovered that at analysis time would have paid for the whole sweep first. The sharpest of those refusals is a system half carrying a per-unit placeholder — a system message with a unit's sex in it is not *fixed for the study*, which is the property the supplement reproduces.
+
+**One file rather than two, and the reason is what `prompt.id` is.** The pair is one preregistered object frozen together; two files can be edited apart, and a stem that resolved to two things would make "the prompt" ambiguous exactly where a reader needs it not to be.
+
 ```python
 "prompt.id": Param(str, default="screen_v1",
                    choices=["screen_v1", "screen_v1_cot", "arith_probe_v1"],
@@ -229,6 +233,8 @@ Three consequences, each deliberate:
 - **Editing a prompt moves `code_hash`.** That is correct rather than inconvenient: a prompt change is a change in what produced the numbers, and a study whose prompt moved silently between E4 and E7 has no *same code, different parameters* claim left. It also means the prompts must be frozen at the same moment the pipeline is, which is what E3's decision rule already commits to.
 - **The prompt cannot live in `input_dir`.** It would then be covered by `input_manifest_hash` instead — filed with the patient data as something measured rather than as something written — and [`diff`](reference.md#operation-commands) would report a prompt change as a change of dataset. Data and code [never share a repository](design-principles.md#code-and-data-never-share-a-repo), and the corollary is that code never hides in the data directory either.
 - **Sweeping the prompt is sweeping an alias.** A swept value must render as `[A-Za-z0-9._+-]+`, which a path does not and a stem does — `E-SWEEP-VALUE-UNNAMEABLE` is what a config sweeping the text itself would earn, [measured below](#executability-on-this-build) on a list-valued parameter. The step resolves the stem to a file; the condition label stays `prompt_id=screen_v1_cot`, which is also what a figure legend needs.
+
+**The child's sex is a prompt input, not a serializer column, and that is a design decision worth naming.** Every growth reference is sex-specific, so it belongs in the user message beside the trajectory rather than in a per-visit row — a property of the child, not of a visit. It reaches the step as a declared unit attribute, which means a config that does not declare `sex` has it [dropped before any step sees it](#gaps-this-analysis-found-in-the-specification); the step refuses rather than rendering around the gap, because a prompt missing it asks the model to read a curve against a reference it has not been given the index for, and the run would complete.
 
 **The nine E3 serializations are not nine prompts.** They are two parameters — `serialize.features` and `serialize.format` — crossed by `sweep.grid`, with one renderer in `src/growth_chart/serialize.py` reading both. Writing them as nine prompt files would put the factorial structure inside a filename, where no `sweep` can see it and no contrast can name a main effect. The rule generalizes: **a prompt file per condition means the design has escaped the config.**
 
@@ -2055,52 +2061,63 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-30 against `publishable` commit `e83d56b`
+### Measured on 2026-08-31 against `publishable` commit `57b7504`
 
 Also pinned: the plan at `growth-chart-literacy@e6b43ab`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@1cd1ed4` and `publishable-growth-chart@28e368e`. **The plan's commit is
-pinned here for the first time, and its absence is why this document went stale invisibly**: every
-earlier version of this section named which `publishable` it had measured and never said which
-version of the plan it had read, so a restructure that rewrote 1,070 lines of the source left every
-claim here reading as current.
+`2026-08-28-gcl-measurement@4a2c1c0` and `publishable-growth-chart@1294b5b`. Pinning the plan's own
+commit began with the previous measurement, and the reason stands: every earlier version of this
+section named which `publishable` it had measured and never said which version of the plan it had
+read, so a restructure that rewrote 1,070 lines of the source left every claim here reading as
+current.
+
+**The measured tree is two commits past the last release, and the record cannot tell you that.** Both
+runs below write `publishable_version: 0.2.5`, because that field reports the installed
+distribution's version and the two commits after `v0.2.5` — a name guard on `generate step` and
+`generate experiment`, and `io.record`'s collision check reading the union over the roster rather
+than its first unit — are unreleased. **That is the argument for pinning a commit rather than a
+version in one sentence**, and it is worth reading beside the four release floors below: those tell
+you what an install gets, and the pin tells you what was run.
 
 Both sibling repositories install core as an **editable path dependency** with no version bound, so
 they execute this working tree rather than a release — which is what makes the measurements below
 current. The corrected bound these measurements depend on is **released in `v0.2.1`**: the
 `compare: {to: constant, value: N}` form itself shipped in 0.2.0, but the correctable `Member` that
 gives it a real corrected bound under `holm` or `bonferroni` landed after it, so an install of
-`publishable==0.2.0` still evaluates such a hypothesis on a bound as `supported: null`. Read every
-claim here against the commit rather than the version number, and take `0.2.1` as the floor for the
-corrected bound, `0.2.2` for [`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports),
-`0.2.3` for [`unevaluable`](reference.md#pre-registration) and its warning, and **`0.2.4`** for the
-persisted [`findings:` block](reference.md#the-two-files), `report`'s `finding` rows, and
-`W-ENV-UNLOCKED` no longer naming the repository path. Four floors for four releases, kept separate
-because a reader who installs one of them gets exactly what that one shipped. **`0.2.5` is released
-and adds a fifth floor to nothing**: its whole change under the hashed trees is a lock around
-`load_experiment`'s `sys.modules` window, which no config can observe.
+`publishable==0.2.0` still evaluates such a hypothesis on a bound as `supported: null`. Take `0.2.1`
+as the floor for the corrected bound, `0.2.2` for
+[`W-STATS-CONTRAST-UNPAIRED-DERIVED`](reference.md#warnings-core-reports), `0.2.3` for
+[`unevaluable`](reference.md#pre-registration) and its warning, and **`0.2.4`** for the persisted
+[`findings:` block](reference.md#the-two-files), `report`'s `finding` rows, and `W-ENV-UNLOCKED` no
+longer naming the repository path. Four floors for four releases, kept separate because a reader who
+installs one of them gets exactly what that one shipped. **`0.2.5` adds a fifth floor to nothing**:
+its whole change under the hashed trees is a lock around `load_experiment`'s `sys.modules` window,
+which no config can observe.
+
+**What moved since the 2026-08-30 measurement.** Two things, and they are of different kinds:
+
+- **The prompt specification is implemented.** It was written in the plan and not in the code: the
+  study sent one blob as a user turn, passed `system=None` at both call sites while the plugin's
+  transport had implemented a system message per provider, never rendered the child's sex, and chose
+  a reference frame it never stated. All four are closed, and the last clause of the same paragraph —
+  *"any such difference [in message envelope] is recorded"* — with them. **The previous measurement's
+  closing sentence, that the three prompt files "remain this analysis's own invention standing in for
+  the plan's specification", is retired**: they now implement it.
+- **Two core defects closed**, both found by asking this analysis's own question of core rather than
+  of the plan. Neither is in a release yet; see the paragraph above.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (256 lines),
-one `src/growth_chart/` package (3,355 lines over fifteen modules, seven step bodies and three prompt
-files) with 2,687 lines of tests, **fourteen** configs, a 472-line input generator, and a
-`publishable-growth-chart` plugin from `publishable plugin new` (393 lines, 526 of tests) installed as
+one `src/growth_chart/` package (3,461 lines over fifteen modules, seven step bodies and three prompt
+files) with 2,882 lines of tests, **fourteen** configs, a 480-line input generator, and a
+`publishable-growth-chart` plugin from `publishable plugin new` (429 lines, 621 of tests) installed as
 an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no**
-template. `uv run pytest`: **209 passed** in the measurement repository, **30** in the plugin.
-
-**The fourteen configs were rewritten on 2026-08-30, not resynced.** The previous measurement covered
-fifteen configs written against the pre-restructure plan; what changed is not a line each. The
-reference-standard gate left the config set entirely, the accuracy arms moved onto a referral label
-with a matched index date, five arms dropped their ground truth declaration, E3 gained a holdout, E9's
-bands were rebuilt around the peripubertal window, E5b's negatives were graded, and E10's roster lost
-the vendor the plan's governance does not permit. **Anything in this document quoting the earlier
-tree is superseded rather than supplemented.**
+template. `uv run pytest`: **218 passed** in the measurement repository, **36** in the plugin.
 
 **The inputs are two files per config**, `index.csv` and `visits.csv`, both generated by
-`tools/example_inputs.py` — which is now the **only** generator. There were two, one writing the
-rosters the configs read and one writing a differently-sized set beside them; the second is deleted,
-because two implementations of one specification eventually disagree and the disagreement is
-invisible until a run reports something odd. The trajectories come from the study's own constructor
-rather than from a generator local to the tool, for the same reason.
+`tools/example_inputs.py` — the only generator, since a second one writing a differently-sized set
+beside it was deleted on 2026-08-30: two implementations of one specification eventually disagree,
+and the disagreement is invisible until a run reports something odd. The trajectories come from the
+study's own constructor rather than from a generator local to the tool, for the same reason.
 
 **The fourteen configs, by running `publishable validate` on each.**
 
@@ -2121,30 +2138,32 @@ rather than from a generator local to the tool, for the same reason.
 | `e09-age-norm` | 0 errors, 1 warning — `W-STATS-FAMILY` |
 | `e10-cross-model-2x2` | ✓ valid |
 
-Four clean, ten carrying one warning each, **zero errors and zero of the fourteen refused**. The
-composition of those ten is itself the finding, and it moved: three are the documented
-[false positive](#gaps-this-analysis-found-in-the-specification) on a reporting stratum, and
-**seven are `W-STATS-FAMILY` by construction** — the plan puts those arms in no multiplicity family,
-`statistics.correction: none` is the only way a config says so, and core replies that every interval
-is uncorrected. That is true and it is not what the config meant; it is [gap 11](#gaps-this-analysis-found-in-the-specification),
-and ten of fourteen configs carrying a warning is what a warning readers learn to skip looks like
-before anyone has learned to skip it.
+Four clean, ten carrying one warning each, **zero errors and zero of the fourteen refused** — the
+same table the previous measurement produced, which is the point of running it again rather than a
+reason not to have. Seven of the ten are `W-STATS-FAMILY` by construction: the plan puts those arms
+in no multiplicity family, `statistics.correction: none` is the only way a config says so, and core
+replies that every interval is uncorrected. That is true and it is not what the config meant —
+[gap 11](#gaps-this-analysis-found-in-the-specification) — and ten of fourteen configs carrying a
+warning is what a warning readers learn to skip looks like before anyone has learned to skip it.
 
-**`publishable dry-run` on each is where every execution count in this document comes from.** It
-expands the sweep, builds the input manifest, probes the apparatus, and prints the step directories,
-the fixed files a run would write, and the unit-execution count. Across the fourteen: **62
-conditions, 450 executions, 106,260 unit-executions.** The comparison against the previous
-measurement's 455 executions over fifteen configs is not meaningful — different configs, different
-rosters — and is stated here only so a reader does not read the near-equality as stability.
+**A widened refusal in core was checked against this project rather than assumed harmless.** One of
+the two unreleased commits makes `io.record` refuse a recorded column shadowing **any** unit
+attribute the roster carries, where it previously read only the first unit's — so a config that ran
+before can now raise mid-execution. All fourteen still validate and both executable arms still
+complete: this project's rosters carry every declared column on every row, so the widening reaches
+nothing here. That is a measurement, not a reassurance about the change in general.
 
-**One dry-run number is worth reading twice.** E3 prints *19,500 unit-executions (65 executions ×
-**300** units handed to each)* against a 600-unit roster, which is `data.units.holdout` narrowing
-every denominator to the test partition, visible before anything executes.
+**`publishable dry-run` on each is where every execution count in this document comes from.** Across
+the fourteen: **62 conditions, 450 executions, 106,260 unit-executions**, unchanged — the prompt
+work moved what a request contains and not how many are issued. E3 still prints *19,500
+unit-executions (65 executions × **300** units handed to each)* against a 600-unit roster, which is
+`data.units.holdout` narrowing every denominator to the test partition, visible before anything
+executes.
 
 **Two configs have executed, and both reach a verdict.** E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and both were run with `publishable run` against a clean tree, so both records
-are citable rather than drafts:
+are citable rather than drafts (`draft: false`, `git.code_dirty: false`):
 
 | | Verdict | Rests on |
 |---|---|---|
@@ -2154,28 +2173,45 @@ are citable rather than drafts:
 **The numbers are the synthetic fixture's and mean nothing** — but E6's is worth reading anyway,
 because a zero-width interval on a paired contrast looks like a defect and is not. The two arms are
 `llm_matched` and `llm_matched_minus_count`, both fitted on a sample **matched on the pre-index visit
-count** (7.98 against 7.95 across the arms); each scores AUROC **0.891**, the fitted scores differ by
-8 × 10⁻¹⁰, no cross-class ordering moves, and the difference is therefore exactly zero in every one
-of the 2,000 draws. Withholding a feature the design equalized costs nothing, which is what matching
-means — and the fixture had to be corrected before that sentence was true, because its caliper was
-drawn on the referred member only, making the count systematically higher in one arm. A one-sided
-caliper is an imbalance wearing the name of a tolerance. E6 also reports `n.completed: 595` against a
-roster of 600 — five units carry an incomplete feature row and land in `ineligible` — which is the
-four-way `n` doing its job on a run nobody was watching for it.
+count**; each scores AUROC **0.891**, no cross-class ordering moves, and the difference is therefore
+exactly zero in every one of the 2,000 draws. Withholding a feature the design equalized costs
+nothing, which is what matching means — and the fixture had to be corrected before that sentence was
+true, because its caliper was drawn on the referred member only, making the count systematically
+higher in one arm. A one-sided caliper is an imbalance wearing the name of a tolerance. E6 also
+reports `n.completed: 595` against a roster of 600 — five units carry an incomplete feature row and
+land in `ineligible` — which is the four-way `n` doing its job on a run nobody was watching for it.
 
-**Both records carry a populated `findings:` block, and that is the first time.** The previous
-measurement reported the block absent on every executed run and had to verify the populated case by
-restoring a contrast that warned. It needs no contrivance now: each run raises its own
-`W-STATS-FAMILY`, and each record carries exactly that finding at `level: warning` with the message
-the screen printed. What the block is for — a run's diagnostics surviving into the record a reader
-trusts — is exercised by the ordinary case rather than by a probe.
+**Both records carry a populated `findings:` block**, each holding the `W-STATS-FAMILY` its own run
+raised, at `level: warning`, with the message the screen printed. The block needs no contrivance to
+populate here, which it did two measurements ago.
 
 **The two arms that execute are the two the plan puts in no family**, which costs this measurement
-something worth naming: **no executed run exercises a correction**. The previous measurement could
-claim a Holm-corrected clustered contrast end to end; this one cannot, because every config declaring
-`holm` is a screening arm needing a deployment. That is a property of the restructured plan rather
-than a regression in core — the corrected path is exercised by core's own suite — and it is stated
-here rather than papered over.
+something worth naming: **no executed run exercises a correction**. Every config declaring `holm` is
+a screening arm needing a deployment. That is a property of the restructured plan rather than a
+regression in core — the corrected path is exercised by core's own suite — and it is stated here
+rather than papered over.
+
+**What a deployment would receive, rendered through the real prompt file and the real serializer:**
+
+```
+=== SYSTEM ===
+You are reviewing pediatric growth trajectories as part of a primary-care screening step.
+… Percentiles and z-scores are stated against the CDC 2000 (LMS) reference. …
+Answer with a single JSON object and nothing else: {"growth_issues": true}
+
+=== USER ===
+Sex: female
+
+The measurements:
+
+| age | weight z | height z | BMI | BMI pct |
+| 3y3mo | -0.40 | -0.30 | 15.5 | 34 |
+| 4y3mo | -1.60 | -1.40 | 15.0 | 12 |
+```
+
+Task, frame and output contract in the system message; trajectory, sex and age at each point in the
+user message; nothing else. **No request has been issued to a deployment**, so this is a rendering
+rather than a transcript.
 
 **The plugin's three registries dispatch.** `data.units.from: {resolver: growth_trajectory}` resolves
 every roster at `validate`; `apparatus_probe = "growth_llm_deployment"` is called at `dry-run` and its
@@ -2185,13 +2221,10 @@ have executed are the non-LLM arms — the suffix-dispatch rule it relies on is
 [measured in the tutorial](tutorial-writing-a-plugin.md) rather than here.
 
 **The credential check, measured on E10 with `.env` moved aside.** `validate` reports per condition
-and by name. What the roster change did to this measurement is the interesting part: the earlier
-roster included an Anthropic deployment and demanded three variables, and **the plan's governance
-does not permit that endpoint** — inference runs on the HMS Azure API and on local weights, and
-nothing else may receive cohort-derived data. So the roster is three Azure deployments and two local
-checkpoints, `validate` demands exactly `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` across the
-twelve Azure conditions, and **nothing at all for the eight `ollama` conditions**, whose
-`requires_env` entry is `[]`.
+and by name: exactly `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` across the twelve Azure
+conditions, and **nothing at all for the eight `ollama` conditions**, whose `requires_env` entry is
+`[]`. The roster is what the plan's governance permits — three Azure deployments and two local
+checkpoints — and an earlier roster's Anthropic arm, which demanded a third variable, is gone with it.
 
 **The apparatus probe's unanswered facts, measured on E10 at `dry-run`.** The local arms' probe
 returns `None` for both declared facts, in each `ollama` condition, and core reports it rather than
@@ -2202,7 +2235,7 @@ condition `03_schedule=sparse__provider=ollama__deployment=llama-4-70b__baseline
 `model_version` came back `null` on 1 of 1 probes
 ```
 
-**Three refusals probed deliberately** at the earlier measurement, each by copying a config, editing
+**Three refusals probed deliberately** at an earlier measurement, each by copying a config, editing
 one line, and re-running `validate`. All three are properties of core rather than of the plan, and
 none of them moved:
 
@@ -2212,56 +2245,61 @@ none of them moved:
 | A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN` alone, naming the label that matched no condition — one error, not two |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
 
-**What rewriting the pipeline for the restructured plan found.** Five things, none of them visible to
+**What writing this pipeline against the plan has found.** Six things, none of them visible to
 `validate`, to `dry-run`, or to reading:
 
-**1. Deleting an experiment leaves an unread parameter behind, and the second-order effect is a check
+**1. A specification written in prose and not in code fails silently, and the study's own prompt was
+the instance.** The plan fixes one system message and one user message per case, with the reference
+frame stated and the child's sex carried. The code sent one blob, `system=None`, no sex and no
+stated frame — and nothing failed, because nothing could: a prompt is a string, and a string that is
+missing a clause is still a string. **Sex is the one that would have changed answers**, since every
+growth reference is sex-specific and E9's whole design rests on a peripubertal window defined
+sex-specifically. This is the same defect class as [an unread parameter](#the-stimulus-arm-has-to-be-constructed-somewhere)
+one layer out: there, a declared field no step read; here, a declared *commitment* no code read.
+What closes it is the same shape too — the contract is checked at load, so a prompt that would render
+identically for every unit is refused before the sweep is paid for.
+
+**2. Deleting an experiment leaves an unread parameter behind, and the second-order effect is a check
 that cannot fail.** E1's removal orphaned four surfaces at once — `model.kind: agreement`,
-`truth.rater`, and the `kappa` and `agreement_raw` its template derived — every one of which would
-have gone on validating, expanding no sweep and reaching no step, which is
-[the defect this project keeps producing](design-principles.md#every-declarable-field-has-a-reader).
-Removing them was straightforward. What was not: `growth_label.validate`'s rule that a config fitting
-a model needs a `holdout` or a `fold` was written as *unless the kind is `agreement`*, and with that
-kind gone the exception is vacuous — the rule reads as conditional and is unconditional, and its test
-was asserting a branch nothing can now reach. It is now written and tested unconditionally.
+`truth.rater`, and the `kappa` and `agreement_raw` its template derived. Removing them was
+straightforward; what was not is that `growth_label.validate`'s rule that a config fitting a model
+needs a `holdout` or a `fold` was written as *unless the kind is `agreement`*, and with that kind
+gone the exception is vacuous — the rule reads as conditional and is unconditional, and its test was
+asserting a branch nothing can now reach.
 
-**2. A derived metric recomputed on every bootstrap draw makes an O(n²) `aggregate` an O(n² × draws)
-run.** `growth_label.aggregate` computed its AUROC by the pairwise definition — every positive against
-every negative — which is fine on the 100-unit rosters the earlier measurement used and is two billion
-comparisons at E2's thousand units and 2,000 draws. The run does not fail; it does not finish. The
-rank form is the same number, and the general lesson is core's rather than this template's: **a
-template's `aggregate` is called once per resample per condition**, so its complexity is multiplied by
-a number the config chooses.
+**3. A derived metric recomputed on every bootstrap draw makes an O(n²) `aggregate` an O(n² × draws)
+run.** `growth_label.aggregate` computed its AUROC by the pairwise definition, which is fine on a
+100-unit roster and is two billion comparisons at E2's thousand units and 2,000 draws. The run does
+not fail; it does not finish. The general lesson is core's rather than this template's: **a
+template's `aggregate` is called once per resample per condition**, so its complexity is multiplied
+by a number the config chooses.
 
-**3. A holdout gives the estimate for free and refuses the selection.** Core narrows every denominator
-to the test partition, which is exactly what E3's split is for — but it also means the selection half
-is never screened, and a format selected on nothing is not a selection. The step asks for
-`io.units.train` and screens it too, writing that half's accuracy as an artifact rather than through
-`io.record`. Both halves are then reportable and only one of them is a metric, which is the correct
-division and is not the obvious one.
+**4. A holdout gives the estimate for free and refuses the selection.** Core narrows every
+denominator to the test partition, which is exactly what E3's split is for — and it also means the
+selection half is never screened, and a format selected on nothing is not a selection. The step asks
+for `io.units.train` and screens it too, writing that half's accuracy as an artifact rather than
+through `io.record`. Both halves are then reportable and only one of them is a metric.
 
-**4. `io.units.train` raises rather than returning empty, and a step has to catch the right thing.**
+**5. `io.units.train` raises rather than returning empty, and a step has to catch the right thing.**
 Twelve of the fourteen configs declare no split at all, so the selection-half branch has to be
 ordinary rather than exceptional. `E-STEP-UNITS-UNAVAILABLE` is the direct question — *is a split
 declared* — and a bare `except Exception` around it would have answered *did anything go wrong in the
-partition*, which is the same substitution [this repository keeps making](../CLAUDE.md#answering-a-question-with-a-proxy)
-in other guises.
+partition*, which is [the same substitution](../CLAUDE.md#answering-a-question-with-a-proxy) in
+another guise.
 
-**5. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
+**6. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
 every two-condition screening arm produces those counts. Gating it on the *shape* of the sweep would
 have reported E4b's and E5d's flips as false positives, which they are not; the gate is on the arm's
-own `stimulus.physiology` being `true_negative`, which is the direct question, and a mutation of it
-fails the test that pins it.
+own `stimulus.physiology` being `true_negative`.
 
 **What is still not measured.** Twelve of the fourteen have not executed, because they need a
 deployment: `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised, the
-`.transcript.jsonl` writer has never been driven by a write, and every cost figure below is arithmetic
-rather than an anchor. **What blocks that is no longer an open item in the plan** — the cohort, the
-variable derivations, the roster and the prompt are all specified now — it is that the study is
-pre-data by design and its own registration is what comes next. The three prompt files under
-`src/growth_chart/prompts/` remain this analysis's own invention standing in for the plan's
-specification, which describes one system and one user message rather than naming a file.
+`.transcript.jsonl` writer has never been driven by a write, no `envelope` has been recorded from a
+real call, and every cost figure below is arithmetic rather than an anchor. **What blocks that is not
+in the plan and not in this tooling** — the cohort, the variable derivations, the roster and the
+prompt are all specified now, and the prompt is implemented — it is a deployment, a credential, and
+a study that is pre-data by design.
 
 ### The two templates, as loaded
 
