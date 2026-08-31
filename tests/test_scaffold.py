@@ -114,6 +114,78 @@ def test_generate_experiment_refuses_paths_inside_the_repo(tmp_path: Path):
     assert e.value.code == "E-DATA-IN-REPO"
 
 
+def test_generate_step_refuses_a_name_that_cannot_be_an_identifier(tmp_path: Path):
+    """The name lands in an import path and a class name, and neither position
+    can be escaped: a value that is not an identifier makes `experiment.py`
+    unparseable, and `experiment.py` is a file this command did not create.
+
+    **Both halves are asserted, and the second is the one that matters.**
+    Refusing after the step file is written would still leave a stray module;
+    refusing after the rewrite would leave a project that does not import. The
+    check has to run before anything reaches disk, so the test reads the
+    directory and the file rather than only the exception.
+    """
+    root = scaffold_project(tmp_path / "my-study")
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
+    before = experiment_py.read_text()
+    steps_dir = root / "src" / "cohort_pilot" / "steps"
+    before_files = sorted(p.name for p in steps_dir.glob("step[0-9][0-9]_*.py"))
+
+    with pytest.raises(ContractError) as e:
+        generate_step(repo_root=root, experiment="cohort-pilot", step_name='foo"bar')
+    assert e.value.code == "E-GENERATE-NAME"
+
+    assert experiment_py.read_text() == before, "the rewrite reached a file it did not create"
+    assert sorted(p.name for p in steps_dir.glob("step[0-9][0-9]_*.py")) == before_files
+    # And the file still parses, which is the fault this guard exists to
+    # prevent — an unchanged-bytes assertion alone would pass on a rewrite that
+    # happened to be reverted rather than never made.
+    compile(experiment_py.read_text(), str(experiment_py), "exec")
+
+
+@pytest.mark.parametrize("step_name", ['foo"bar', "fit-model", "with space", "a/b", "__dunder"])
+def test_generate_step_refuses_every_name_that_would_not_import(tmp_path: Path, step_name: str):
+    """One shape per way the old interpolation broke: a quote, a hyphen, a
+    space, a path separator, and the `__` prefix discovery skips."""
+    root = scaffold_project(tmp_path / "my-study")
+    generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
+    )
+    with pytest.raises(ContractError) as e:
+        generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
+    assert e.value.code == "E-GENERATE-NAME"
+
+
+def test_generate_experiment_refuses_a_name_that_cannot_be_a_package(tmp_path: Path):
+    """`src/<pkg>/` has to be importable, and the class name has to parse. The
+    damage here is bounded — every file this command writes is one it creates —
+    but the root cause is the step generator's, and a project scaffolded into
+    `src/foo"bar/` is unusable at exit 0, which is the same silence."""
+    root = scaffold_project(tmp_path / "my-study")
+    with pytest.raises(ContractError) as e:
+        generate_experiment(
+            repo_root=root,
+            name='foo"bar',
+            template_name="generic",
+            input_dir=str(tmp_path / "data"),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert e.value.code == "E-GENERATE-NAME"
+    assert not (root / "configs" / 'foo"bar').exists()
+    assert not (root / "src" / 'foo"bar').exists()
+
+
 def test_generate_step_refuses_a_duplicate_name(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     generate_experiment(

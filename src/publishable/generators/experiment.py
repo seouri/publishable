@@ -6,6 +6,7 @@ from pathlib import Path
 
 from publishable.docs import merge_into_readme
 from publishable.errors import ContractError
+from publishable.generators.template import is_usable_name, unusable_name_message
 from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
 from publishable.templates.registry import (
@@ -91,6 +92,22 @@ def generate_experiment(
     output_dir: str,
     plugin: str | None = None,
 ) -> Path:
+    # The name, before anything else in this function — before `uv_add`, which
+    # is the first thing here with a side effect outside the process. `name`
+    # becomes `src/<pkg>/`, an import path, and a class name; a value that
+    # cannot be an identifier scaffolds a package nothing can import and a
+    # class line that does not parse, at exit 0. Bounded damage compared with
+    # `generate step`'s, since every file here is one this command creates —
+    # and the same root cause, which is why the two guards ship together.
+    if not is_usable_name(package_name(name)):
+        raise ContractError(
+            unusable_name_message(
+                name,
+                what="an experiment",
+                writes="`src/<package>/`, an import path and a class name",
+            ),
+            code="E-GENERATE-NAME",
+        )
     # Installed first, and before `_claims` resolves anything: the whole point
     # of `--plugin` is that the template it names comes from the package being
     # installed, so resolving first would refuse a name the install is about
