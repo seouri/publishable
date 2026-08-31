@@ -195,10 +195,8 @@ Three separate mechanisms carry it, and each is doing a different job.
 
 ```python
 @register_probe("growth_llm_deployment")
-def probe(cfg) -> Apparatus:
-    if cfg.parameters.llm.provider == "ollama":
-        return Apparatus(facts={"model_version": None, "system_fingerprint": None})
-    return Apparatus(facts=_deployment_metadata(cfg))   # one metadata request, read not computed
+def probe(cfg, *, fetch=_http) -> Apparatus:
+    return Apparatus(facts=deployment_facts(cfg, fetch=fetch))   # one metadata read, never a completion
 ```
 
 ```python
@@ -206,7 +204,13 @@ def probe(cfg) -> Apparatus:
     apparatus_facts = ["model_version", "system_fingerprint"]
 ```
 
-Core calls it at `dry-run`, at run start, before every execution and at `freeze`, and **a fact that moves from its first answered observation fails the run**. That gate is what a growth-chart study most needs and least has: a hosted deployment re-tuned in the middle of E10 would otherwise be reported as cross-model heterogeneity. A fact the probe cannot answer is recorded `null` and counted rather than read as a change, which E10's local arm exercises — again a build claim, and again [dated below](#executability-on-this-build).
+Core calls it at `dry-run`, at run start, before every execution and at `freeze`, and **a fact that moves from its first answered observation fails the run**. That gate is what a growth-chart study most needs and least has: a hosted deployment re-tuned in the middle of E10 would otherwise be reported as cross-model heterogeneity. A fact the probe cannot answer is recorded `null` and counted rather than read as a change.
+
+**What each fact is, and why one of them is never answered here.** The probe reads a *metadata* endpoint rather than issuing a completion, because core probes before every execution and E10 has 142 of them. What moves under a stable name differs by provider and each is read for what it is: an Azure deployment name is site-specific and says nothing about the model behind it, so the model is what is read there, and a local checkpoint has no version string and does have a digest — the plan's own *"weights revision or hash"*, and what a swapped model file moves.
+
+**`system_fingerprint` is `None` from every probe, and that is a property of the fact rather than a gap in the implementation.** It is returned on a completion response and by nothing else, so no metadata read can produce it — and a probe that guessed one would put a fabricated fact under a gate that *fails runs*. So the two halves of the plan's per-call provenance requirement land in two places: the model version is an apparatus fact under the gate, and **the fingerprint is logged per call** in the request transcript, from the response the transport already parses. The plan asks for the fingerprint per call anyway, on the grounds that *"a fingerprint that changes mid-study is a silent covariate on everything collected after it"*; what this arrangement adds is that the *other* fact cannot drift unnoticed at all.
+
+**A probe that cannot reach its endpoint answers `null` rather than raising**, including when a credential is absent, and the cost of that choice is worth stating: an endpoint permanently unreachable yields `null` forever, and an unanswered fact is outside the gate. Core's per-condition count of unanswered observations is what keeps that visible, and `validate`'s own credential refusal — by variable and by condition — is the better diagnostic for the case that actually recurs. All of this is a build claim, and it is [dated below](#executability-on-this-build).
 
 **What the deployment costs is a per-unit measurement, not a usage report.** The request step records `prompt_tokens`, `completion_tokens`, `latency_ms` and `attempts` through `io.record`, one row per patient, so each becomes [`basis: units`](reference.md#the-unit-table-is-the-inference-base) with an `n`, a `ci95` and a `repeat_spread`. Written to a side file they would have no denominator; on the unit table, "the dense-schedule arm costs 340 more prompt tokens per patient" is a claim with an interval on it.
 
@@ -2061,10 +2065,10 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-31 against `publishable` commit `57b7504`
+### Measured on 2026-08-31 against `publishable` commit `d8cc86a`
 
 Also pinned: the plan at `growth-chart-literacy@e6b43ab`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@4a2c1c0` and `publishable-growth-chart@1294b5b`. Pinning the plan's own
+`2026-08-28-gcl-measurement@68a0a95` and `publishable-growth-chart@c70c14e`. Pinning the plan's own
 commit began with the previous measurement, and the reason stands: every earlier version of this
 section named which `publishable` it had measured and never said which version of the plan it had
 read, so a restructure that rewrote 1,070 lines of the source left every claim here reading as
@@ -2093,7 +2097,11 @@ installs one of them gets exactly what that one shipped. **`0.2.5` adds a fifth 
 its whole change under the hashed trees is a lock around `load_experiment`'s `sys.modules` window,
 which no config can observe.
 
-**What moved since the 2026-08-30 measurement.** Two things, and they are of different kinds:
+**What moved, and the pattern is worth naming before the list.** This section has now been
+re-measured twice in two days, and **both times because implementing something the plan specified
+changed what the tooling does** — not because core moved under it. A dated section whose job is to
+say what the tool does today has turned out to be the thing that catches a commitment nobody had
+built:
 
 - **The prompt specification is implemented.** It was written in the plan and not in the code: the
   study sent one blob as a user turn, passed `system=None` at both call sites while the plugin's
@@ -2102,16 +2110,24 @@ which no config can observe.
   *"any such difference [in message envelope] is recorded"* — with them. **The previous measurement's
   closing sentence, that the three prompt files "remain this analysis's own invention standing in for
   the plan's specification", is retired**: they now implement it.
+- **The apparatus probe is implemented**, and it was the same defect one layer down. It returned
+  `os.environ.get("GROWTH_PROBE_MODEL_VERSION", "2026-05-01")`, so **the gate this document sells
+  hardest was comparing a constant against itself** and a re-tuned deployment was invisible. It now
+  issues one metadata read per provider; `system_fingerprint` is `None` from every probe because no
+  metadata read can produce it, and the study logs it per call instead. See the passage above for
+  what that arrangement buys and costs.
 - **Two core defects closed**, both found by asking this analysis's own question of core rather than
   of the plan. Neither is in a release yet; see the paragraph above.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (256 lines),
-one `src/growth_chart/` package (3,461 lines over fifteen modules, seven step bodies and three prompt
-files) with 2,882 lines of tests, **fourteen** configs, a 480-line input generator, and a
-`publishable-growth-chart` plugin from `publishable plugin new` (429 lines, 621 of tests) installed as
+one `src/growth_chart/` package (3,469 lines over fifteen modules, seven step bodies and three prompt
+files) with 2,917 lines of tests, **fourteen** configs, a 480-line input generator, and a
+`publishable-growth-chart` plugin from `publishable plugin new` (591 lines, 846 of tests) installed as
 an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no**
-template. `uv run pytest`: **218 passed** in the measurement repository, **36** in the plugin.
+template. `uv run pytest`: **220 passed** in the measurement repository, **48** in the plugin. The
+plugin grew by half again in a day, and all of it is the probe: a fact under a gate that fails runs
+is worth more test than a fact nobody reads.
 
 **The inputs are two files per config**, `index.csv` and `visits.csv`, both generated by
 `tools/example_inputs.py` — the only generator, since a second one writing a differently-sized set
@@ -2226,14 +2242,22 @@ conditions, and **nothing at all for the eight `ollama` conditions**, whose `req
 `[]`. The roster is what the plan's governance permits — three Azure deployments and two local
 checkpoints — and an earlier roster's Anthropic arm, which demanded a third variable, is gone with it.
 
-**The apparatus probe's unanswered facts, measured on E10 at `dry-run`.** The local arms' probe
-returns `None` for both declared facts, in each `ollama` condition, and core reports it rather than
-failing:
+**The apparatus probe's unanswered facts, measured on E10 at `dry-run`, and the number moved for a
+good reason.** Every fact comes back unanswered now — **forty lines, twenty conditions × two facts** —
+where the previous measurement reported eight, the `ollama` ones. That is not a regression: the
+twelve Azure lines were previously *answered* with a planted environment variable, and the probe now
+tries to reach a deployment and reports that it could not, because this tree has no credentials.
+`system_fingerprint` is unanswered in every condition by construction, since no metadata read
+produces one. Core reports each rather than failing:
 
 ```
-condition `03_schedule=sparse__provider=ollama__deployment=llama-4-70b__baseline`'s fact
-`model_version` came back `null` on 1 of 1 probes
+condition `00_schedule=sparse__provider=azure_openai__deployment=gpt-4.1-mini-2026-04-14__baseline`'s
+fact `model_version` came back `null` on 1 of 1 probes
 ```
+
+**A tree with no deployment is exactly where an apparatus gate should look empty**, and until today
+it looked full. The first credentialed `dry-run` is what turns twelve of those forty lines into an
+answered fact, and the gate starts from there.
 
 **Three refusals probed deliberately** at an earlier measurement, each by copying a config, editing
 one line, and re-running `validate`. All three are properties of core rather than of the plan, and
@@ -2245,7 +2269,7 @@ none of them moved:
 | A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN` alone, naming the label that matched no condition — one error, not two |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
 
-**What writing this pipeline against the plan has found.** Six things, none of them visible to
+**What writing this pipeline against the plan has found.** Seven things, none of them visible to
 `validate`, to `dry-run`, or to reading:
 
 **1. A specification written in prose and not in code fails silently, and the study's own prompt was
@@ -2259,7 +2283,18 @@ one layer out: there, a declared field no step read; here, a declared *commitmen
 What closes it is the same shape too — the contract is checked at load, so a prompt that would render
 identically for every unit is refused before the sweep is paid for.
 
-**2. Deleting an experiment leaves an unread parameter behind, and the second-order effect is a check
+**2. The same defect had a second instance, and it was under the guarantee this document sells
+hardest.** The apparatus probe returned an environment variable with a default, so the gate that
+*fails a run whose deployment moved* compared a constant against itself. Both instances — the prompt
+and the probe — share a shape worth naming, because it is not the one this project usually files: not
+a declared field no step reads, but **a declared field whose reader returns a placeholder**. The
+first kind is findable by grepping call sites, which is the remedy `design-principles.md` names. The
+second is not: the call site exists, the value is well-formed, the run completes, and only reading
+the body tells you the answer was manufactured. What found it here was asking, of each guarantee this
+analysis claims, *which line performs it* — and the probe's answer was a comment saying a real probe
+would.
+
+**3. Deleting an experiment leaves an unread parameter behind, and the second-order effect is a check
 that cannot fail.** E1's removal orphaned four surfaces at once — `model.kind: agreement`,
 `truth.rater`, and the `kappa` and `agreement_raw` its template derived. Removing them was
 straightforward; what was not is that `growth_label.validate`'s rule that a config fitting a model
@@ -2267,27 +2302,27 @@ needs a `holdout` or a `fold` was written as *unless the kind is `agreement`*, a
 gone the exception is vacuous — the rule reads as conditional and is unconditional, and its test was
 asserting a branch nothing can now reach.
 
-**3. A derived metric recomputed on every bootstrap draw makes an O(n²) `aggregate` an O(n² × draws)
+**4. A derived metric recomputed on every bootstrap draw makes an O(n²) `aggregate` an O(n² × draws)
 run.** `growth_label.aggregate` computed its AUROC by the pairwise definition, which is fine on a
 100-unit roster and is two billion comparisons at E2's thousand units and 2,000 draws. The run does
 not fail; it does not finish. The general lesson is core's rather than this template's: **a
 template's `aggregate` is called once per resample per condition**, so its complexity is multiplied
 by a number the config chooses.
 
-**4. A holdout gives the estimate for free and refuses the selection.** Core narrows every
+**5. A holdout gives the estimate for free and refuses the selection.** Core narrows every
 denominator to the test partition, which is exactly what E3's split is for — and it also means the
 selection half is never screened, and a format selected on nothing is not a selection. The step asks
 for `io.units.train` and screens it too, writing that half's accuracy as an artifact rather than
 through `io.record`. Both halves are then reportable and only one of them is a metric.
 
-**5. `io.units.train` raises rather than returning empty, and a step has to catch the right thing.**
+**6. `io.units.train` raises rather than returning empty, and a step has to catch the right thing.**
 Twelve of the fourteen configs declare no split at all, so the selection-half branch has to be
 ordinary rather than exceptional. `E-STEP-UNITS-UNAVAILABLE` is the direct question — *is a split
 declared* — and a bare `except Exception` around it would have answered *did anything go wrong in the
 partition*, which is [the same substitution](../CLAUDE.md#answering-a-question-with-a-proxy) in
 another guise.
 
-**6. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
+**7. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
 every two-condition screening arm produces those counts. Gating it on the *shape* of the sweep would
 have reported E4b's and E5d's flips as false positives, which they are not; the gate is on the arm's
@@ -2295,8 +2330,9 @@ own `stimulus.physiology` being `true_negative`.
 
 **What is still not measured.** Twelve of the fourteen have not executed, because they need a
 deployment: `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised, the
-`.transcript.jsonl` writer has never been driven by a write, no `envelope` has been recorded from a
-real call, and every cost figure below is arithmetic rather than an anchor. **What blocks that is not
+`.transcript.jsonl` writer has never been driven by a write, **no `envelope`, `model_version` or
+`system_fingerprint` has been recorded from a real call**, no apparatus fact has ever been *answered*,
+and every cost figure below is arithmetic rather than an anchor. **What blocks that is not
 in the plan and not in this tooling** — the cohort, the variable derivations, the roster and the
 prompt are all specified now, and the prompt is implemented — it is a deployment, a credential, and
 a study that is pre-data by design.
