@@ -889,6 +889,7 @@ hypotheses:
 - **Deviation-preserving** — the visits across which the crossing becomes legible are identified before resampling and retained in every arm; the sparse arm drops only non-carrying visits. Not a parameter, because an arm that could switch it off would be an arm whose sparse condition measures something else.
 - **Noise-matched** — `stimulus.resample_noise: matched` returns interpolated points carrying measurement error at the within-child SD, so a dense arm cannot be identified by being smoother than a sparse one.
 - **Availability-matched** — `stimulus.height_availability: 0.538` holds the share of displayed visits carrying a height at the cohort rate in every arm, so densifying a schedule does not also make the record more complete.
+- **Interpolated with a monotone spline**, which the plan asks for by name and which is a fourth constraint of the same kind rather than a numerical preference. A dense arm displays twenty points resampled from about six, so a linear interpolant renders it piecewise-linear between the real visits — collinear runs with visible knots — and the three-point sparse arm cannot carry that structure. *Monotone* matters separately: an ordinary cubic overshoots near a plateau followed by a drop, and an overshoot on a z path is a percentile crossing the child never had, invented by the resampling in the arm whose claim is that the physiology did not move.
 
 **A trajectory too sparse to keep its carrying visits is excluded from the roster, not skipped in one arm.** The plan says to exclude them before use and report the count. Both routes exist here and they are not equivalent: [`io.skip`](reference.md#the-unit-table-is-the-inference-base) would land them in `ineligible` and report the count for free, but it fires in the sparse arm only, and a contrast is computed over the intersection of both sides' completed units — so the pairing would silently narrow in exactly the arm the exclusion came from. A roster filter keeps every unit in all three conditions and pays for the count by having to state it.
 
@@ -2065,11 +2066,11 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-08-31 against `publishable` commit `7938f97`
+### Measured on 2026-09-04 against `publishable` commit `3f77082`
 
 Also pinned: the plan at `growth-chart-literacy@e6b43ab`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@200a734` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
-differ in `docs/` alone — `git diff --stat d8cc86a..7938f97 -- src templates` is empty, so
+`2026-08-28-gcl-measurement@66f946e` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
+differ in `docs/` alone — `git diff --stat 7938f97..3f77082 -- src templates` is empty, so
 `code_hash` over the two hashed trees is identical across them. That is the three-hash split doing
 its job on this document rather than on a run: a measurement is of a *tree*, and naming the commit
 lets a reader check which parts of it could have moved. Pinning the plan's own
@@ -2101,43 +2102,33 @@ installs one of them gets exactly what that one shipped. **`0.2.5` adds a fifth 
 its whole change under the hashed trees is a lock around `load_experiment`'s `sys.modules` window,
 which no config can observe.
 
-**What moved, and the pattern is worth naming before the list.** This section has now been
-re-measured twice in two days, and **both times because implementing something the plan specified
-changed what the tooling does** — not because core moved under it. A dated section whose job is to
-say what the tool does today has turned out to be the thing that catches a commitment nobody had
-built:
+**What moved, and the pattern is worth naming.** This section has been re-measured four times in six
+days, and **every time because implementing something the plan specified changed what the tooling
+does** — not once because core moved under it. A dated section whose job is to report what the tool
+does today has turned out to be what catches a commitment nobody built. Four such commitments have
+now been implemented and are no longer claims this document has to hedge:
 
-- **The prompt specification is implemented.** It was written in the plan and not in the code: the
-  study sent one blob as a user turn, passed `system=None` at both call sites while the plugin's
-  transport had implemented a system message per provider, never rendered the child's sex, and chose
-  a reference frame it never stated. All four are closed, and the last clause of the same paragraph —
-  *"any such difference [in message envelope] is recorded"* — with them. **The previous measurement's
-  closing sentence, that the three prompt files "remain this analysis's own invention standing in for
-  the plan's specification", is retired**: they now implement it.
-- **The apparatus probe is implemented**, and it was the same defect one layer down. It returned
-  `os.environ.get("GROWTH_PROBE_MODEL_VERSION", "2026-05-01")`, so **the gate this document sells
-  hardest was comparing a constant against itself** and a re-tuned deployment was invisible. It now
-  issues one metadata read per provider; `system_fingerprint` is `None` from every probe because no
-  metadata read can produce it, and the study logs it per call instead. See the passage above for
-  what that arrangement buys and costs.
-- **The output contract is implemented**, which is the third instance of the same defect and the last
-  clause of what the plan says about interacting with a model. A malformed answer was not retried,
-  and a refusal was told from a malformed answer by the parser and then treated identically — so the
-  distinction existed and bought nothing, because the asymmetry that gives it its purpose *is* the
-  retry. The 5% unusable-rate clause had no reader at all.
-- **Two core defects closed**, both found by asking this analysis's own question of core rather than
-  of the plan. Neither is in a release yet; see the paragraph above.
+| The plan's clause | What ran before |
+|---|---|
+| One system and one user message, carrying the child's sex and the reference frame | one blob as a user turn, `system=None`, no sex, a frame chosen and never stated |
+| The message envelope's difference across endpoints is recorded | the envelopes differed correctly and nothing recorded which was used |
+| The deployment is observed, and a moved fact fails the run | an environment variable with a default, so **the gate compared a constant against itself** |
+| A malformed answer is retried once; a refusal is not; the unusable rate is reported past 5% | neither was retried, so the parser's distinction between them bought nothing, and the rate had no reader |
+| Monotone spline interpolation on z-scores, documented | linear interpolation, documented as linear |
+
+**Two core defects closed in the same window**, both found by asking this analysis's own question of
+core rather than of the plan, and neither in a release yet; see the paragraph above.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (256 lines),
-one `src/growth_chart/` package (3,550 lines over fifteen modules, seven step bodies and three prompt
-files) with 3,104 lines of tests, **fourteen** configs, a 480-line input generator, and a
+one `src/growth_chart/` package (3,609 lines over fifteen modules, seven step bodies and three prompt
+files) with 3,234 lines of tests, **fourteen** configs, a 480-line input generator, and a
 `publishable-growth-chart` plugin from `publishable plugin new` (591 lines, 846 of tests) installed as
 an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no**
-template. `uv run pytest`: **230 passed** in the measurement repository, **48** in the plugin. The
-tests have grown faster than the code across these three days — 3,104 lines against 3,550 — and
-every clause implemented in that window was one the plan had written and nobody had built, which is
-the ratio that produces.
+template. `uv run pytest`: **236 passed** in the measurement repository, **48** in the plugin. The
+tests have grown faster than the code across these six days — 3,234 lines against 3,609 — and every
+clause implemented in that window was one the plan had written and nobody had built, which is the
+ratio that produces.
 
 **The inputs are two files per config**, `index.csv` and `visits.csv`, both generated by
 `tools/example_inputs.py` — the only generator, since a second one writing a differently-sized set
@@ -2282,8 +2273,8 @@ none of them moved:
 **What writing this pipeline against the plan has found.** Eight things, none of them visible to
 `validate`, to `dry-run`, or to reading:
 
-**1. A specification written in prose and not in code fails silently, and this pipeline produced two
-instances of it.** The plan fixes one system message and one user message per case, with the reference
+**1. A specification written in prose and not in code fails silently, and this pipeline produced
+three instances of it.** The plan fixes one system message and one user message per case, with the reference
 frame stated and the child's sex carried. The code sent one blob, `system=None`, no sex and no
 stated frame — and nothing failed, because nothing could: a prompt is a string, and a string that is
 missing a clause is still a string. **Sex is the one that would have changed answers**, since every
@@ -2300,6 +2291,15 @@ identically, and **the distinction existed and bought nothing**, because the asy
 its purpose is the retry. Its 5% unusable-rate clause had no reader at all. Both were invisible for
 the same reason the prompt was: nothing fails, because an unreadable answer routed to `ineligible` is
 a defensible thing to do with it — just not the thing that was written down.
+
+**The third is the interpolant.** §E5a asks for *monotone spline interpolation on z-scores*, and the
+resampler was linear — which matters in that arm specifically, because it displays twenty points
+resampled from about six and a linear interpolant makes them piecewise-linear between the real
+visits, with visible knots the three-point sparse arm cannot have. The arm's design is that the
+densities differ in the schedule and in nothing else, so an interpolant that advertises how many real
+points there were is a second signal riding the manipulation, and E7's utilization axis inherits it.
+The common thread across all three: **each was a defensible thing to do, and none was the thing that
+was written down.**
 
 **2. A neighbouring defect, of a different kind, under the guarantee this document sells hardest.**
 The apparatus probe returned an environment variable with a default, so the gate that *fails a run
@@ -2340,13 +2340,23 @@ declared* — and a bare `except Exception` around it would have answered *did a
 partition*, which is [the same substitution](../CLAUDE.md#answering-a-question-with-a-proxy) in
 another guise.
 
-**7. A refactor can delete a recorded field and leave every test green.** Extracting one contract
-helper so both halves of E3's split are screened alike dropped the transcript's `partition` marker,
-and the whole suite still passed: the selection-half tests assert unit keys and accuracy, and
-**neither can see a missing field**. It was found by grepping for the string afterwards, not by a
-failing test. The lesson is narrower than "write more tests" — a test that asserts *what a row says*
-cannot notice what the row stopped saying, so a field whose whole job is to distinguish two things
-needs a pin that reads it on both.
+**7. Three tests in this pipeline could not fail, and mutation found all three.** None was visible by
+reading, and the three are worth separating because the remedies differ:
+
+- **A deleted field nothing asserts.** Extracting one contract helper dropped the transcript's
+  `partition` marker and the whole suite still passed: the tests touching those rows assert unit keys
+  and accuracy, and **neither can see a missing field**. A test asserting *what a row says* cannot
+  notice what the row stopped saying.
+- **A probe point where both answers agree.** The pin for *"this is not the linear interpolant"* read
+  a segment's midpoint — where the cubic Hermite basis puts `h10(0.5) = −h11(0.5)`, the tangent terms
+  cancel, and the curve meets the chord exactly. It passed against both implementations.
+- **A fixture with no curvature to measure.** The arm-level version of the same pin built its
+  trajectory from a helper whose z path is a straight ramp, and every interpolant through collinear
+  knots is that same line — so counting collinear triples measured the fixture.
+
+The second and third are one trap in two guises, and it is the one this project files most often: **a
+fixture whose numbers agree with the thing it is meant to rule out.** What found them was running the
+mutation at the call site rather than trusting the assertion's name.
 
 **8. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
