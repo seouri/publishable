@@ -23166,6 +23166,105 @@ class Step(BaseStep):
 
 _H9B_CRASH_TRIP = 3
 
+# A condition-scoped writer and a repeat-scoped reader, for the resume defect
+# below. The writer is the *starter* step because `extra_step_source` overrides
+# every extra step with one template, and these two need different bodies.
+_SCOPED_WRITER_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        io.write("payload.json", {{"from": "a condition-scoped step"}})
+        # `{{}}`: a condition-scoped step has neither a unit nor a repeat to key
+        # a metric by, so anything returned here is discarded with a warning.
+        return {{}}
+"""
+
+_SCOPED_READER_STEP = """\
+# src/steps/{step_name}.py — generated, and runnable as-is
+import os
+from pathlib import Path
+
+from publishable import BaseStep
+
+_CONTROL = Path(__CONTROL__)
+_TRIP = __TRIP__
+
+
+def _tick():
+    if not _CONTROL.exists():
+        return
+    n = int(_CONTROL.read_text().strip() or "0") + 1
+    _CONTROL.write_text(str(n))
+    if n == _TRIP:
+        os._exit(9)
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        _tick()
+        payload = io.read_upstream("step01_summarize_units", "payload.json")
+        return {{"read_back": len(payload)}}
+"""
+
+
+def test_a_resume_still_resolves_a_condition_scoped_upstream_artifact(tmp_path: Path):
+    """`read_upstream` must resolve the same directory on a resume as on a run.
+
+    **The scope map is built from the plan, and `resume` narrows the plan.**
+    `execute_plan` derives `{e.step_name: e.scope for e in plan}`, and
+    `command_resume` filters out every triple that already completed before
+    handing that plan over — so a step whose executions all finished before the
+    crash vanishes from the map. `read_upstream` then reads a missing entry as
+    run scope and looks under `shared/`, where a condition-scoped step never
+    wrote, and the resumed execution dies on `FileNotFoundError`.
+
+    Found by resuming a real interrupted run, not by reading: no other resume
+    test in this file calls `read_upstream`, so nothing exercised the pair.
+
+    The shape matters — a condition-scoped step that completes, and a
+    repeat-scoped step that crashes after it and reads it on the way back. Both
+    scopes are needed: a run-scoped upstream would resolve to `shared/` and pass
+    for the wrong reason.
+    """
+    control = tmp_path / "crash-counter"
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "seed", "n": 2}],
+            "order": "as_declared",
+            "rationale": "two seeds",
+        },
+        units=4,
+        sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+        _starter_step=_SCOPED_WRITER_STEP,
+        extra_steps=["step02_read"],
+        extra_step_source=(
+            _SCOPED_READER_STEP.replace("__CONTROL__", repr(str(control))).replace(
+                "__TRIP__", str(_H9B_CRASH_TRIP)
+            )
+        ),
+    )
+    crashed = _h9b_crash_run(doc, control)
+    assert not (crashed / "run.yaml").exists(), "the crash left a finished record"
+
+    assert _h9b_resume(crashed) == EXIT_OK, (
+        "the resumed run did not complete; if it failed on a missing "
+        "`shared/step01_summarize_units/payload.json`, the scope map lost the "
+        "completed condition-scoped step when `resume` narrowed the plan"
+    )
+    ledger = [
+        json.loads(line) for line in (crashed / "executions.jsonl").read_text().splitlines() if line
+    ]
+    failed = [e for e in ledger if e.get("status") == "failed"]
+    assert not failed, f"executions failed on resume: {failed}"
+
 
 def _h9b_round_trip_project(tmp_path: Path, control: Path) -> dict[str, Any]:
     """Arm A's project, scaffolded, committed, and run STRAIGHT THROUGH once.

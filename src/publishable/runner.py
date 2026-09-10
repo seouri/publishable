@@ -498,6 +498,7 @@ def execute_plan(
     repeats: list[Repeat],
     digest: str,
     units: UnitList | None = None,
+    step_scopes: dict[str, str] | None = None,
     max_failed_fraction: float | None = None,
     fold_members: dict[str, frozenset[str]] | None = None,
     arm_members: "dict[int, frozenset[str]] | None" = None,
@@ -651,7 +652,16 @@ def execute_plan(
         by_index.items(), key=lambda entry: entry[0]
     )
     repeats_list = [r.label for r in repeats]
-    step_scopes = {e.step_name: e.scope for e in plan}
+    # **Every step in the run, not every step in `plan`.** `resume` hands this
+    # function a plan narrowed to the triples that have not completed, so a step
+    # whose executions all finished before the crash is absent from it — and
+    # `io.read_upstream` reads a missing entry as run scope and looks under
+    # `shared/`, where a condition- or repeat-scoped step never wrote. A resumed
+    # execution reading a completed upstream then died on `FileNotFoundError`.
+    # The caller passes the map built from the UNNARROWED plan; deriving it here
+    # is the fallback for callers with nothing to narrow.
+    if step_scopes is None:
+        step_scopes = {e.step_name: e.scope for e in plan}
 
     for execution in plan:
         # Before the step is constructed and before anything is executed

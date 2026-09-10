@@ -3589,6 +3589,10 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # BY CONSTRUCTION rather than relaxed (Decision 6), and its
             # docstring's claim that a short list with no recorded stop
             # reason is a core defect stays true of `resume` too.
+            # Built BEFORE the narrowing below, so a step whose executions all
+            # completed keeps its scope. `execute_plan` would otherwise derive
+            # this from the narrowed plan and lose it — see its own comment.
+            step_scopes = {e.step_name: e.scope for e in plan}
             if resumed is not None:
                 already = {
                     (r.execution.step_name, r.execution.condition_index, r.execution.repeat_label)
@@ -3601,6 +3605,7 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                 ]
             results = execute_plan(  # phase 7
                 plan=plan,
+                step_scopes=step_scopes,
                 run_dir=run_dir,
                 input_dir=input_dir,
                 cfgs=cfgs,
