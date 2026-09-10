@@ -210,7 +210,7 @@ Core calls it at `dry-run`, at run start, before every execution and at `freeze`
 
 **`system_fingerprint` is `None` from every probe, and that is a property of the fact rather than a gap in the implementation.** It is returned on a completion response and by nothing else, so no metadata read can produce it — and a probe that guessed one would put a fabricated fact under a gate that *fails runs*. So the two halves of the plan's per-call provenance requirement land in two places: the model version is an apparatus fact under the gate, and **the fingerprint is logged per call** in the request transcript, from the response the transport already parses. The plan asks for the fingerprint per call anyway, on the grounds that *"a fingerprint that changes mid-study is a silent covariate on everything collected after it"*; what this arrangement adds is that the *other* fact cannot drift unnoticed at all.
 
-**A probe that cannot reach its endpoint answers `null` rather than raising**, including when a credential is absent, and the cost of that choice is worth stating: an endpoint permanently unreachable yields `null` forever, and an unanswered fact is outside the gate. Core's per-condition count of unanswered observations is what keeps that visible, and `validate`'s own credential refusal — by variable and by condition — is the better diagnostic for the case that actually recurs. All of this is a build claim, and it is [dated below](#executability-on-this-build).
+**A probe that cannot reach its endpoint answers `null` rather than raising**, including when a credential is absent, and the cost of that choice is worth stating because it was paid: an endpoint permanently unreachable yields `null` forever, an unanswered fact is outside the gate, and **a single `null` cannot distinguish a wrong hostname from an unserved path from a stale api-version** — which is exactly the three-fault stack that took a day to unpick the first time this probe met a real resource. Core's per-condition count of unanswered observations is what keeps that visible, and `validate`'s own credential refusal — by variable and by condition — is the better diagnostic for the case that actually recurs. All of this is a build claim, and it is [dated below](#executability-on-this-build).
 
 **What the deployment costs is a per-unit measurement, not a usage report.** The request step records `prompt_tokens`, `completion_tokens`, `latency_ms` and `attempts` through `io.record`, one row per patient, so each becomes [`basis: units`](reference.md#the-unit-table-is-the-inference-base) with an `n`, a `ci95` and a `repeat_spread`. Written to a side file they would have no denominator; on the unit table, "the dense-schedule arm costs 340 more prompt tokens per patient" is a claim with an interval on it.
 
@@ -457,7 +457,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -575,7 +575,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 1024
     request_timeout_s: 120
@@ -695,7 +695,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -812,7 +812,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -935,7 +935,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1052,7 +1052,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1170,7 +1170,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1279,7 +1279,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1495,7 +1495,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1647,7 +1647,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1779,7 +1779,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1907,7 +1907,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-5.6
+    deployment: gpt-5.6-sol
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1950,7 +1950,7 @@ sweep:
     # two local checkpoints span two families and two tokenizers.
     - {llm.provider: azure_openai, llm.deployment: gpt-4.1}
     - {llm.provider: azure_openai, llm.deployment: gpt-5}
-    - {llm.provider: azure_openai, llm.deployment: gpt-5.6}
+    - {llm.provider: azure_openai, llm.deployment: gpt-5.6-sol}
     - {llm.provider: ollama, llm.deployment: gemma4-12b-it-qat}
     - {llm.provider: ollama, llm.deployment: qwen3.5-9b}
 
@@ -2072,10 +2072,10 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-10 against `publishable` commit `200a76f`
+### Measured on 2026-09-10 against `publishable` commit `6f38963`
 
 Also pinned: the plan at `growth-chart-literacy@7dafaeb`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@44d41a5` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
+`2026-08-28-gcl-measurement@61dd1a9` and `publishable-growth-chart@0529eed`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
 differ in `docs/` alone — `git diff --stat 7938f97..3f77082 -- src templates` is empty, so
 `code_hash` over the two hashed trees is identical across them. That is the three-hash split doing
 its job on this document rather than on a run: a measurement is of a *tree*, and naming the commit
@@ -2283,22 +2283,42 @@ conditions, and **nothing at all for the eight `ollama` conditions**, whose `req
 `[]`. The roster is what the plan's governance permits — three Azure deployments and two local
 checkpoints — and an earlier roster's Anthropic arm, which demanded a third variable, is gone with it.
 
-**The apparatus probe's unanswered facts, measured on E10 at `dry-run`, and the number moved for a
-good reason.** Every fact comes back unanswered now — **forty lines, twenty conditions × two facts** —
-where the previous measurement reported eight, the `ollama` ones. That is not a regression: the
-twelve Azure lines were previously *answered* with a planted environment variable, and the probe now
-tries to reach a deployment and reports that it could not, because this tree has no credentials.
-`system_fingerprint` is unanswered in every condition by construction, since no metadata read
-produces one. Core reports each rather than failing:
+**The apparatus probe answers, for the first time in this study's history.** Twelve of E10's twenty
+conditions now carry a real `model_version`, read from the deployment rather than planted:
+
+| Deployment | What the resource resolved it to |
+|---|---|
+| `gpt-4.1` | `gpt-4.1-2025-04-14` |
+| `gpt-5` | `gpt-5-2025-08-07` |
+| `gpt-5.6-sol` (primary) | `gpt-5.6-sol-2026-07-09` |
+
+**That is the gate's first observation, and the shape of the fact is what makes it a gate.** Asking
+about `gpt-5` returns the versioned snapshot behind it, so a deployment repointed at a newer model
+changes the fact while the deployment name does not — which is the silent change the plan wants
+caught and the reason this fact is observed rather than declared.
+
+**E10's `dry-run` reports 28 unanswered facts where the previous measurement reported 40**, and the
+remaining 28 are two designed absences rather than a shortfall: **twelve `system_fingerprint`s**,
+which no metadata read can produce and which the study logs per call instead, and **sixteen for the
+two local checkpoints**, whose weights are not on the machine that measured this. Core reports each
+rather than failing:
 
 ```
-condition `00_schedule=sparse__provider=azure_openai__deployment=gpt-4.1-mini-2026-04-14__baseline`'s
+condition `03_schedule=sparse__provider=ollama__deployment=gemma4-12b-it-qat__baseline`'s
 fact `model_version` came back `null` on 1 of 1 probes
 ```
 
-**A tree with no deployment is exactly where an apparatus gate should look empty**, and until today
-it looked full. The first credentialed `dry-run` is what turns twelve of those forty lines into an
-answered fact, and the gate starts from there.
+**Getting there took three faults off one endpoint, and two of them were this tooling's.** The
+credential and the api-version were correct throughout; a hostname in the environment was one
+character short, which resolved somewhere that accepted a connection and closed it without replying,
+so the failure read as a network fault rather than a typo. Under it: this probe asked for
+`/openai/deployments/{name}`, which that resource does not serve — 404, as is the deployments list —
+while `/openai/models/{name}` does and answers with the resolved id above; and the probe hard-coded
+an api-version while `AZURE_OPENAI_API_VERSION` sat in the environment unread, which is [the defect
+this document files most often](#executability-on-this-build), in its own plumbing. **A probe that
+answers `null` on every failure cannot tell you which of three things is wrong** — that is the cost
+of the design named in [§ LLM API access](#llm-api-access), paid in full here, and what closed it was
+reading a working project that used the same endpoint.
 
 **Three refusals probed deliberately** at an earlier measurement, each by copying a config, editing
 one line, and re-running `validate`. All three are properties of core rather than of the plan, and
@@ -2310,7 +2330,7 @@ none of them moved:
 | A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN` alone, naming the label that matched no condition — one error, not two |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
 
-**What writing this pipeline against the plan has found.** Nine things, none of them visible to
+**What writing this pipeline against the plan has found.** Ten things, none of them visible to
 `validate`, to `dry-run`, or to reading:
 
 **1. A specification written in prose and not in code fails silently, and this pipeline produced
@@ -2414,7 +2434,17 @@ after going stale invisibly once before, and this is the first time it has paid.
 uncomfortable and worth stating: **every claim here about a plan is only as fresh as the last time
 someone diffed it**, and nothing automates that.
 
-**9. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
+**9. A guard that reports one failure state cannot be debugged, and the bill arrives at the endpoint.**
+This probe answers `null` for every fault — unreachable, refused, unserved, credential absent — which
+is the right *record* behaviour and, on first contact with a real resource, left three faults stacked
+behind one indistinguishable symptom: a hostname one character short, a metadata path that resource
+does not serve, and a hard-coded api-version beside an unread declared one. **What separated them was
+a second project pointed at the same endpoint**, not anything in this tooling or its tests. The
+lesson is not to make the probe raise — a run must survive a network blip — but that a design whose
+failure states are deliberately collapsed needs a diagnostic path that is *not* the record: something
+that reports the status code, once, to the person setting it up.
+
+**10. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
 every two-condition screening arm produces those counts. Gating it on the *shape* of the sweep would
 have reported E4b's and E5d's flips as false positives, which they are not; the gate is on the arm's
@@ -2432,11 +2462,21 @@ argued from a 99.9th percentile that was 2.91 *because* the tail had already bee
 size is roughly 15,800 visits. That date is the first anchor this document has had for any real-data
 work, and nine of the fourteen runs read a real trajectory or scaffold.
 
+**The roster resolves, and the primary is `gpt-5.6-sol`.** The plan makes the largest Azure
+deployment primary and says every experiment implying a single model means that one, so the twelve
+single-model configs name it and E10's ladder carries all three. **`gpt-5.6` — the name this document
+carried for a day — does not exist on that resource**, which the probe reported as an unanswered fact
+rather than as an error, and which a catalogue read then explained: three `gpt-5.6-*` variants exist
+and no bare `gpt-5.6`. A roster whose names are checked against the resource before a run is a
+different thing from a roster that validates.
+
 **What is still not measured.** Twelve of the fourteen have not executed, because they need a
 deployment: `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised, the
 `.transcript.jsonl` writer has never been driven by a write, **no `envelope`, `model_version` or
-`system_fingerprint` has been recorded from a real call**, no apparatus fact has ever been *answered*,
-and every cost figure below is arithmetic rather than an anchor. **What blocks that is not
+`system_fingerprint` has been recorded from a real call**, and every cost figure below is arithmetic
+rather than an anchor. What is no longer on that list is the apparatus fact: twelve of them are
+answered, which leaves the gate with a first observation to compare against and the study one step
+short of a request. **What blocks that is not
 in the plan and not in this tooling** — the cohort, the variable derivations, the roster and the
 prompt are all specified now, and the prompt is implemented — it is a deployment, a credential, and
 a study that is pre-data by design.
