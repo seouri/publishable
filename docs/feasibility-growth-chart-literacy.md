@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `7dafaeb`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-09 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, and built the generator itself in the study repository. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `dc23ab6`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -40,7 +40,7 @@ The plan is at plan stage — no experiment in it has been run — so this table
 | "Holm-Bonferroni within each experiment family", with four families now declared and their `m` stated — 3, 4, 3, and the roster size — and **every other arm in no family at all** | [`statistics.correction: holm`](reference.md#sweeps-and-repeats), with the family size and its breakout recorded beside every interval. Two mismatches, both now measured: a family **cannot span runs**, which {E5a–d} needs, and core's family is *comparisons × metrics within one run*, which is a different and usually larger object than the plan's `m`. Declaring `correction: none` is how a config says "no family" and it earns a warning for saying it; see [the gaps](#gaps-this-analysis-found-in-the-specification) |
 | "Bootstrapped CIs … resampled at the patient level, not the observation level" | [`statistics.resample`](reference.md#what-isnt-a-repeat) over the per-unit table, where the unit *is* the patient by construction |
 | **Retracted by the plan itself.** An earlier §Power basis credited the k = 5 repeated runs with raising effective power; it now says "the k = 5 repeated runs buy no power, and nothing here credits them with any" | Repeats never enter `n`. Five seeds give a [`repeat_spread`](reference.md#repeat-kinds), and `n` counts units. This analysis said so before the plan did, and the plan reached it from the other end — that repeats within a case are highly correlated and are *identical* on local weights at a fixed seed. **The rule and the reason now agree**, which is the strongest form this row could take |
-| **Also retracted, and measured.** `visits_count_pre_dx` was the universal control; profiling found it truncates at the diagnosis for cases and equals the lifetime count for controls, running at AUROC 0.131 against 0.745. The plan replaced it with a **pre-index count on a matched index date** and says "the plan does not use this field" | A unit attribute either way: matched by [`cluster_by`](reference.md#clustered-units), stratified by [`report_by`](reference.md#reporting-strata), manipulated as a swept parameter — three spellings for the three things the plan does with it. What the tool never had was an opinion about *which* column; what it does have is [`input_manifest_hash`](reference.md#three-hashes) over the extract the column came from, so the replacement is legible in the record rather than in a methods paragraph |
+| **Also retracted, and measured.** `visits_count_pre_dx` was the universal control; profiling found it truncates at the diagnosis for cases and equals the lifetime count for controls, running at AUROC 0.075 against 0.488 — the latter being no separation at all, so the field's replacement is not a repair of a working comparison but a change of quantity. **The plan carried 0.131 against 0.745 until 2026-09-10**, figures that reproduce exactly on a case-control subset it rejects elsewhere and not at all on the cohort; that correction is what installed its measurement anchor. The plan replaced it with a **pre-index count on a matched index date** and says "the plan does not use this field" | A unit attribute either way: matched by [`cluster_by`](reference.md#clustered-units), stratified by [`report_by`](reference.md#reporting-strata), manipulated as a swept parameter — three spellings for the three things the plan does with it. What the tool never had was an opinion about *which* column; what it does have is [`input_manifest_hash`](reference.md#three-hashes) over the extract the column came from, so the replacement is legible in the record rather than in a methods paragraph |
 | "Do not resolve an anchor with a bare `grep`" — `scripts/check_anchors.py`, a pre-commit hook, and a seven-lane coordination protocol over one Markdown file | Not core's job, and it stays the plan's. Worth naming because most of what it coordinates is *design* state that a config makes explicit and a `run.yaml` makes permanent |
 | The model roster and prompt specification, now written (§Cross-Cutting): three Azure deployments differing in size, two to three local open-weight models, one fixed system and user message, and per-call provenance — deployment, model version, API version, `seed`, `system_fingerprint` | `parameters` and [`list-templates`](reference.md#operation-commands): the roster is a swept axis and the prompt is a parameter, so "enumerable from the text" becomes enumerable from the file that ran. The provenance the plan enumerates is split in two here on a rule the plan has no reason to have: what you *decide* is a `Param`, what you can only *observe* is an [apparatus fact](#llm-api-access), and a fingerprint that moves mid-study fails the run rather than being logged for someone to notice |
 | Three labels kept apart by naming discipline — the referral outcome, the panel's `growth concern`, the model's `growth_issues` | One is an input, one never enters a run at all, and one is an output. The referral label is a unit attribute carried onto the [unit table](reference.md#the-unit-table-is-the-inference-base); `growth_issues` is a recorded column; the panel's verdict is neither, because the panel adjudicates constructed pictures rather than the cases a model sees. Which label a run reads is `truth.label_source`, a parameter — and its third value is `none`, which is what the five arms reporting only whether the model's own answer moved declare |
@@ -2088,8 +2088,8 @@ where a superseded reading belongs.
 
 ### Measured on 2026-09-10 against `publishable` commit `8039611`
 
-Also pinned: the plan at `growth-chart-literacy@bea8984`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@73ad821` and `publishable-growth-chart@fac2295`. The previous revision
+Also pinned: the plan at `growth-chart-literacy@dc23ab6`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@83609e5` and `publishable-growth-chart@fac2295`. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
@@ -2545,10 +2545,32 @@ arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, 
 one run rather than by argument — the `.transcript.jsonl` writer has now been driven by a write,
 `envelope` and `model_version` have been recorded from real calls, and there is a latency anchor.
 `system_fingerprint` stays on it and may stay for good: Ollama returns none, so only a hosted
-completion can supply one. **What blocks the rest is not in the plan and not in this tooling** — the
-cohort, the variable derivations, the roster and the prompt are all specified, the prompt is
-implemented, and one checkpoint has answered — it is a hosted deployment, a credential, and a study
-that is pre-data by design.
+completion can supply one.
+
+**What blocks the rest is now two named registration items, and that is a sharper answer than this
+section could give before.** The roster, the prompt and the variable derivations are specified, the
+prompt is implemented, and one checkpoint has answered. What remains is not tooling:
+
+| Gate | What it holds | Measured by |
+|---|---|---|
+| **Item 4** — the age-conditioned concerning/healthy boundary | Seven of the twelve LLM configs declare `physiology: concerning` somewhere, including E3, the root of Layer A; so does E9's matched-magnitude pair. Nothing constructs a deviation without it | `generate_trajectories.py` and `panel_packet.py` both refuse, naming the item |
+| **Item 5** — the referral label, its index date and the window | Every config that reads a real trajectory | `cohort_inputs.py` refuses **all fourteen**, because every one declares `visits_pre_index` |
+
+**The second measurement is the one worth carrying, and it is a finding about the configs rather
+than about core.** The study's ingestion path was written this week and, run against the real
+attribute lists, it declines every arm: `visits_pre_index` is defined in the plan as a pre-index
+count on a matched index date, and six configs declare it while carrying `truth.label_source: none`,
+so they have no index for it to count against at all.
+
+**Core would catch that too.** These configs draw from `{resolver: growth_trajectory}`, and
+`data.units.attributes` naming a value no unit a resolver yielded is
+[`E-UNITS-ATTR-MISSING`](reference.md#errors-validate-reports) — met at `validate`, because `validate`
+dispatches a declared resolver to resolve the roster, and again at `run`, `draft` and `dry-run`, since
+a resolver is user code that may yield different attributes on a later call. So a roster resolved
+without that attribute is refused rather than silently dropping it and completing. That is the right behaviour and it is
+worth stating as a positive result: **the ambiguity the study owes an answer to is one the schema
+surfaces rather than absorbs.** What core cannot do is notice that a *declared and supplied* column
+means one thing in Layer C and nothing in Layer A, which is why the question is the plan's.
 
 ### The first real completions, and what they cost
 
