@@ -459,8 +459,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -577,8 +577,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 1024
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: arith_probe_v1
@@ -697,8 +697,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -814,8 +814,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -937,8 +937,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1054,8 +1054,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1172,8 +1172,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1281,8 +1281,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1497,8 +1497,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1649,8 +1649,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1781,8 +1781,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -1911,8 +1911,8 @@ parameters:
     provider: azure_openai
     deployment: gpt-5.6-sol
     temperature: 0.0
-    max_output_tokens: 512
-    request_timeout_s: 120
+    max_output_tokens: 8192
+    request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
   prompt:
     id: screen_v1
@@ -2086,21 +2086,20 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-10 against `publishable` commit `0fcf0e6`
+### Measured on 2026-09-10 against `publishable` commit `8039611`
 
 Also pinned: the plan at `growth-chart-literacy@bea8984`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@c8914e2` and `publishable-growth-chart@fac2295`. **One measurement in
-this section post-dates its own `publishable` pin**: the `E-NAME-DIR` message defect
-[below](#gaps-this-analysis-found-in-the-specification) was found while writing the smoke config
-and fixed in the same change as this revision, so it is measured against `0fcf0e6` plus that fix.
-Nothing else here depends on it — it moves one message string and no check.
+`2026-08-28-gcl-measurement@73ad821` and `publishable-growth-chart@fac2295`. The previous revision
+had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
+message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
+revision carries no such exception.
 
-**The `publishable` pin is the commit this section's own previous revision landed as**, and unlike
-the last three revisions this one does *not* leave the hashed trees alone: `src/publishable/validate.py`
-moves, so `code_hash` over `src/**` and `templates/**` differs between the pin and the change
-carrying this text. That is the three-hash split doing its job on this document rather than on a run
-— a measurement is of a *tree*, so a revision that touches one owes the reader a sentence saying
-which measurement could have moved, which is the sentence above. Pinning the plan's own
+**This revision changes `docs/` only**, so `code_hash` over `src/**` and `templates/**` is identical
+between the pin and the change carrying this text. What moved is a *sibling* repository's
+`templates/growth_screen.py` — the study's tree, not this one — which is why the two templates quoted
+below are re-synced against their files rather than carried forward. That is the three-hash split
+doing its job across repositories: a measurement is of a tree, and this document reads three of
+them. Pinning the plan's own
 commit began with the measurement before that, and the reason stands: every earlier version of this
 section named which `publishable` it had measured and never said which version of the plan it had
 read, so a restructure that rewrote 1,070 lines of the source left every claim here reading as
@@ -2571,8 +2570,11 @@ the plugin's registered writer, which is **the first exercise of suffix dispatch
 study**; `envelope: chat_system_message` landed on every call; the apparatus fact carried the
 digest rather than a name; `run.yaml` was written and the command exited `0`.
 
-**The fifth did not: six of seven calls returned an empty answer.** The config ran twice, before and
-after the two transport fixes below, and both runs produced the same seven-call shape:
+**The fifth did not: six of seven calls returned an empty answer** — and it was a configuration
+fault rather than a broken clause, which took three runs of this config to establish. The first two
+sat at a 512-token budget, before and after the two transport fixes below, and produced the same
+seven-call shape; the third and fourth, at 4,096 and at the 8,192 that shipped, each parsed four of
+four. The first two are what the diagnosis rests on:
 
 | | Run 1, before the fixes | Run 2, after |
 |---|---|---|
@@ -2587,8 +2589,8 @@ after the two transport fixes below, and both runs produced the same seven-call 
 
 **The two latency columns differ because the machine did, and that is the more useful reading.** Run
 1 overlapped this repository's own test suite; run 2 had the machine to itself. So ≈88 s is the
-unloaded cost of one call at this size and ≈117 s is its cost under an unrelated CPU-bound load —
-which is what makes the timeout finding below a marginal one rather than a broken one.
+unloaded cost of one *truncated* call and ≈117 s is the same call under an unrelated CPU-bound load.
+Neither is the cost of an answer — run 3 is, and it is 2.3× higher.
 
 **The record diagnoses itself, and only after the fixes.** `completion_tokens: 512` is exactly
 `llm.max_output_tokens`, and it sits beside `stop_reason: length` on all six empty rows; the one that
@@ -2606,6 +2608,8 @@ after 634 tokens. Nothing was wrong with the transport, the prompt, or the outpu
 correct, and the run still produced no answer. **A study that had shipped this configuration would
 have collected a 1-in-7 response rate on its local arms and had nothing in the record to explain
 it**, since the one unit that answered needed 487 of its 512 tokens and the margin was invisible.
+
+**Run 3 is the confirmation, and it is reported with the fixes it tested** — [below](#the-fifth-clause-and-the-two-numbers-that-fixed-it). Everything between here and there is what runs 1 and 2 established.
 
 **Three things follow, and only one of them is a defect.**
 
@@ -2625,32 +2629,115 @@ answered. It is now one `replace` call with the single field it owns. **An enume
 a filter with a maintenance obligation**, and this one had gone stale the moment a field was added
 above it.
 
-**`llm.request_timeout_s: 120` is marginal on this apparatus rather than wrong.** Unloaded, the
-slowest of seven calls took 97.4 s — 81% of the budget, and none exceeded it. Under an unrelated
-load on the same machine, two of seven did, and an earlier attempt at this config carries an
-Ollama-side `500` whose duration equals the client timeout exactly; the sequence is consistent with
-a client disconnect at the budget, though the `500` is the server's report and not a timeout the
+**`llm.request_timeout_s: 120` was marginal at a 512-token budget and unusable at a real one.**
+Unloaded, the slowest of seven truncated calls took 97.4 s — 81% of the budget, with none over it.
+Under an unrelated load on the same machine, two of seven exceeded it, and an earlier attempt carries
+an Ollama-side `500` whose duration equals the client timeout exactly; the sequence is consistent
+with a client disconnect at the budget, though the `500` is the server's report and not a timeout the
 step recorded. **A budget that holds only on an idle machine is one a multi-week arm will breach**,
-and it will breach it as a failed unit counted against `max_failed_fraction`. The template's own
-default is
-`Param(int, default=120, ge=1)`, sitting beside a `provider` list that offers `ollama` as a
-first-class choice: **the default is sized for a hosted endpoint while the template invites a local
-one.** The smoke config carries 600 with the reason attached; the fourteen study configs are
-unchanged, because which budget the roster runs under is a measurement decision the plan owns.
+and it breaches it as a failed unit counted against `max_failed_fraction`. Once the token budget was
+raised so that answers could finish, one call took **490 s** and the 120 s ceiling stopped being
+marginal at all. The template's own default was
+`Param(int, default=120, ge=1)` beside a `max_output_tokens` of 512, sitting next to a `provider`
+list that offers `ollama` as a first-class choice: **a pair sized for a hosted endpoint in a template
+that invites a local one.**
 
-**What this does to the cost table is the part worth carrying forward.** Every LLM figure in
-[§ Cost and execution summary](#cost-and-execution-summary) is arithmetic over request counts. There
-is now one anchor: **≈88 s per request at this size, sequentially, on an idle laptop.** E10's local
-arms are 2 checkpoints × 4 cells × 5 repeats × 200 units = **8,000 requests**, which is ≈196 hours —
-about **8 days** of continuous local compute — before the Azure arms are counted at all.
+#### The fifth clause, and the two numbers that fixed it
 
-**Every correction to that figure moves it upward, and the caveats are worth stating in that
-direction.** It is measured on **truncated** calls: six of the seven stopped at the token cap, so a
-budget large enough to produce answers costs more per call than this, not less. It is measured on
-one checkpoint of two, at four units rather than two hundred, with nothing else running — and the
-plan and these configs **specify no concurrency**, so whether 8 days is 8 days or 2 depends on a
-decision nobody has recorded. What the anchor settles is not the duration but the kind of problem:
-the local arms are **scheduling**, not rounding, and no request-count table could have shown that.
+**Both were raised, uniformly, and the two numbers are one decision rather than two.** Every config
+that issues a request now carries `max_output_tokens: 8192` and `request_timeout_s: 2400`, which is
+also the first time they have been uniform — eleven carried 512 and E3b carried 1,024, and 8,192 is
+above both so uniformity costs those arms nothing.
+
+**The budget was set three times in one afternoon, and the pattern is the finding rather than any one
+number.** Each measurement was wider than the last and each raised the largest need:
+
+| What was measured | Largest need |
+|---|---|
+| `gemma4:12b`, two direct probes | 634 tokens |
+| plus `qwen3.5:9b`, two direct probes | 2,170 |
+| plus four units through the pipeline | 2,393 — from `gemma4:12b`, the model the first probe had already sampled |
+| plus `arith_probe_v1` rendered on the heaviest unit | **3,493** |
+
+**The third row is the one to read twice.** It raised the figure using the *same model* the first row
+had sampled, which means the first probe's 634 was not a small sample of `gemma4:12b` — it was a
+small sample of `gemma4:12b`'s *easy* cases. A budget fitted to observed means would have been fitted
+to a tail nobody had seen, and would have been re-fitted at every widening. **A ceiling nobody
+reaches costs nothing, so the sizing question is which measurement was widest and not which was
+typical.**
+
+**E3b's 1,024 was not arbitrary, and finding out why took reading the prompt rather than the
+config.** Neither the plan nor this document explains it, which is what a first pass at this
+paragraph concluded and asserted; the reason is in `arith_probe_v1`, whose system half asks the model
+to *state the weight-for-age z-score for each visit shown, showing the calculation*, and only then
+emit the JSON object. That is a structurally longer answer than the one-field boolean every other arm
+asks for, so E3b is the arm with the least headroom at any uniform budget, and it is the one whose
+`stop_reason` counts are worth reading first. **Rendering that prompt on the heaviest unit and sending
+it to a local checkpoint needed 3,493 tokens over 656 s** — 9,512 characters of reasoning and 515 of
+answer, stopping on its own at an 8,192 cap. That is 85% of a 4,096 budget, which is what decided
+against 4,096. E3b itself names `azure_openai`, so this is `gemma4:12b` answering E3b's prompt rather
+than E3b's own model answering it, and the number is a shape rather than a prediction. **A parameter that differs for a reason living in a
+file the reader did not open is indistinguishable from one that differs for no reason** — which is
+an argument for a `rationale` beside a budget, not for flattening the value. The coupling is the part worth stating: **a timeout below the time it takes to generate the
+whole budget makes the timeout the real budget**, silently, because the config claims 8,192 tokens
+and the apparatus enforces whatever fits in the window. At the slowest sustained rate measured here —
+4.88 tokens a second — a fully-consumed 8,192-token budget takes ≈1,679 s, so 2,400 s leaves 43% of
+headroom. **900 s was the first answer and it was sized against the wrong model**: `qwen3.5:9b`
+sustains 7.4 tokens a second, and picking the faster of the two left 7% rather than 70%. Raising the
+budget without raising the timeout converts a truncation into a timeout and calls it progress.
+
+**Neither is a reservation, which is what makes the pair cheap.** Both are ceilings and a provider
+bills for tokens generated, so a model that stops on its own is unaffected: the pair costs more only
+where a call was being cut off, which is the case it exists to fix.
+
+**Re-running the arm that had failed is what settled it, and it moved a number this document had just
+stated.** With the new budget the same four units parsed **four of four, with no retries** — seven
+calls became four — and `W-STATS-AGGREGATE-FAILED` stopped firing, because a metric with answers in
+it has an interval. But the fourth unit spent **2,393 tokens over 490 s**, which is above
+`qwen3.5:9b`'s observed maximum and 3.8× what a two-sample probe of `gemma4:12b` *itself* had
+suggested — and `arith_probe_v1` then needed 3,493, which is what took the budget past 4,096
+altogether. **The tail is heavier than a small probe shows**, and 8,192 is 2.3× the largest figure any
+of the four measurements produced rather than 1.7× the third one's.
+
+**What `stop_reason` adds there is attribution, not counting, and the difference is worth being exact
+about.** A truncated call has no content, so `parse_screen` already returned `EMPTY` and `EMPTY`
+already entered `unusable = refused + malformed + empty` against the contract's 5% threshold — the
+guard was never blind to it, and this document's first draft of this paragraph said it was. What was
+missing is *which* of the three an unusable call was: a filtered response, a blank one and a
+truncated one are one number without `stop_reason` and three with it. The threshold does not read the
+new column and does not need to; a maintainer deciding whether to raise the budget again does.
+
+**What this does to the cost table is the part worth carrying forward, and it was measured twice
+because the first measurement was of the wrong thing.** Every LLM figure in [§ Cost and execution
+summary](#cost-and-execution-summary) is arithmetic over request counts. Against the 512-token budget
+the anchor was ≈88 s per request, which put E10's local arms — 2 checkpoints × 4 cells × 5 repeats ×
+200 units = **8,000 requests** — at about 8 days of continuous local compute. **That figure was
+measured on calls that produced no answer**, and it said so; the direction it was warned to move in
+is the direction it moved.
+
+**On calls that answer, the same arms come to ≈470 hours — about 20 days**, from means of 194 s
+(`gemma4:12b`, n = 4 through the pipeline at the shipped 8,192 budget) and 231 s (`qwen3.5:9b`,
+n = 2 by direct probe). That is
+**2.5× the truncated figure**, and the sample is small enough that the multiplier is the honest
+finding rather than the total: four calls and two calls, with one 490 s outlier carrying much of
+`gemma4`'s mean.
+
+**Three things still move it, and only one of them downward.** The plan and these configs **specify
+no concurrency**, which is the one factor that divides rather than multiplies and is a decision
+nobody has recorded. Two hundred units will have a heavier tail than four, since one call in four
+already needed 2,393 tokens. And this is two checkpoints of a roster whose Azure half has never been
+timed at all — E3b in particular, whose prompt asks for a per-visit calculation and needed 3,493
+tokens over 656 s when a local checkpoint answered it.
+
+**What does *not* move it is the budget, and that was worth running to find out.** The arm was run
+at 4,096 and again at the 8,192 that shipped, and the two runs are identical where it counts: the
+same four units, the same four token counts — 487, 557, 634 and 2,393 — every call stopping on its
+own, four of four parsed both times. **Doubling the ceiling changed nothing the model produced**,
+which is the "a ceiling is not a reservation" argument holding empirically rather than in principle.
+Latency differs by the few percent that separates two runs of the same work on a shared machine. What the anchor settles is not the duration but the kind of problem: **the local arms
+are scheduling, not rounding**, and no request-count table could have shown that — nor could the
+first anchor, which is why a cost figure taken from calls that failed is worth re-taking rather than
+carrying forward.
 
 **What is measured about the Azure arms is still nothing.** Three deployments resolve to versioned
 snapshots and none has been sent a prompt, so there is no latency anchor, no token count, and no
@@ -2693,8 +2780,49 @@ class GrowthScreenTemplate(BaseTemplate):
             str, pattern=r"^[A-Za-z0-9._+-]+$",
             help="REQUIRED. Deployment name; sweepable, so it may carry no slash"),
         "llm.temperature": Param(float, default=0.0, ge=0.0, le=2.0),
-        "llm.max_output_tokens": Param(int, default=512, ge=1),
-        "llm.request_timeout_s": Param(int, default=120, ge=1),
+        # **These two defaults are one decision, and 512/120 was the wrong pair
+        # for a template whose `provider` choices include `ollama`.** The budget
+        # caps a thinking-capable model's reasoning and its answer together, so
+        # the answer is what gets cut; at 512 it never begins, and the record
+        # reads `empty` with `stop_reason: length`.
+        #
+        # **Sized against the largest need measured, and that number moved twice
+        # on 2026-09-10 as the measurement got wider.** A two-sample probe of
+        # `gemma4:12b` said 557-634 tokens. Adding `qwen3.5:9b` said 2,170.
+        # Running four units through the pipeline said 2,393 — from `gemma4:12b`,
+        # the model the first probe had already sampled. And rendering
+        # `arith_probe_v1`, whose system half asks for a per-visit z-score
+        # *showing the calculation* before the JSON, said **3,493**. Each figure
+        # was the largest yet, and every widening of the sample raised it: the
+        # tail is heavier than a small probe shows, which is the argument for a
+        # budget with room rather than one fitted to observed means.
+        #
+        # 8,192 is 2.3x that largest need. 4,096 would be 85% consumed by the
+        # `arith_probe_v1` case alone, which is the arm with the longest answers
+        # and therefore the least headroom at any uniform budget.
+        #
+        # `stop_reason` makes a truncation **attributable**, which is not the
+        # same as countable and was first written here as though it were: a
+        # truncated call has no content, so `parse_screen` already returned
+        # `EMPTY` and `EMPTY` already entered
+        # `unusable = refused + malformed + empty` against the contract's 5%
+        # threshold. The guard was never blind to it. What was missing is which
+        # of the three an unusable call was — a filtered response, a blank one
+        # and a truncated one are one number without `stop_reason` and three
+        # with it.
+        #
+        # 2,400 s is what makes the budget reachable rather than nominal. At the
+        # slowest sustained rate measured here — 4.88 tokens a second, again
+        # `gemma4:12b` — a fully-consumed 8,192-token budget takes about 1,679 s,
+        # so **a timeout under that would silently become the real budget**: the
+        # config would claim 8,192 and the apparatus would enforce far less.
+        #
+        # Both are ceilings and neither is a reservation, which is what makes the
+        # pair cheap: a provider bills for tokens generated, so a model that
+        # stops on its own is unaffected and only a call that was being cut off
+        # costs more.
+        "llm.max_output_tokens": Param(int, default=8192, ge=1),
+        "llm.request_timeout_s": Param(int, default=2400, ge=1),
         "llm.backoff_secs": Param(list, item_type=int, default=[2, 8, 30],
                                   help="Retry schedule; its length is the attempt budget"),
         # --- the stimulus ---
@@ -2958,6 +3086,6 @@ class GrowthLabelTemplate(BaseTemplate):
 
 **No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 20 × 5 = 100 repeat-scoped executions come to 142 once every scope is counted — and it is the 100 that the check compares against the budget, not the 142. No config drew [`W-EXEC-BUDGET`](reference.md#warnings-core-reports), which is the warning that comparison raises and the only one this paragraph claims: ten of the fourteen carry a warning of another kind, as [§ Executability on this build](#executability-on-this-build) records. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
 
-**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈88 s per request on an idle machine, which puts E10's 8,000 local requests at roughly 8 days of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement and the four reasons it is a floor. **It anchors no metered figure in the table above**, because no Azure deployment has been sent a prompt: the 80,200 is still a request count and a price per request would be invented rather than measured.
+**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈206 s per request on an idle machine, against a budget large enough for the answers to finish, which puts E10's 8,000 local requests at roughly **20 days** of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement, the small samples it rests on, and the one factor that divides rather than multiplies. An earlier reading of ≈88 s and 8 days is superseded: it was taken from calls that were truncated before answering, and it is what re-taking a cost figure after a configuration fix is for. **It anchors no metered figure in the table above**, because no Azure deployment has been sent a prompt: the 80,200 is still a request count and a price per request would be invented rather than measured.
 
-**The token counts that run produced are degenerate, and it is worth saying why rather than quoting them.** Six of its seven calls stopped at the token cap, so `completion_tokens` reads 512 — the budget, not the answer's length. A column pinned to its own limit is evidence about the configuration and not about the model, which is exactly the reading that makes it useful for debugging and useless for costing. What remains measured is structural: a request is issued once per patient per condition per repeat, and every one lands in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`, so the first run against a hosted deployment produces the anchor the metered column still lacks.
+**The token counts are now real, and the first set was degenerate in a way worth recording.** In the run against a 512-token budget, six of seven calls stopped at the cap, so `completion_tokens` read 512 — the budget, not the answer's length. **A column pinned to its own limit is evidence about the configuration and not about the model**, which makes it exactly useful for debugging and useless for costing. Against a raised budget the same four units report 487, 557, 634 and 2,393, all stopping on their own, and the spread is the finding: one call in four needed nearly four times the median. What remains structural is the shape a hosted run would fill in — a request per patient per condition per repeat, each landing in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`.
