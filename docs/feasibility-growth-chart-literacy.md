@@ -455,7 +455,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -573,7 +573,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 1024
     request_timeout_s: 120
@@ -693,7 +693,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -810,7 +810,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -933,7 +933,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1050,7 +1050,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1168,7 +1168,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1277,7 +1277,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1493,7 +1493,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1645,7 +1645,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1777,7 +1777,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1858,7 +1858,9 @@ hypotheses:
 
 **The design decision.** Provider and deployment must move **together** — a deployment name is meaningless under the wrong provider, and their product would demand an Azure key for a local checkpoint — so they are one `sweep.paired` axis of five rows, crossed with the 2 × 2. That composition is also what makes the credential check useful: `validate` demands the union over the conditions the sweep actually resolves, which is the two Azure variables here and **nothing** for the local arms, reported per condition and by name.
 
-**The roster is swept by deployment name, and a name with a slash in it would be refused.** A swept value must render `[A-Za-z0-9._+-]+`, so `gpt-4.1-2026-04-14` and `llama-4-70b` are fine and a fully-qualified resource path is not; a study whose deployments are addressed by path sweeps an alias and resolves it in the step.
+**The roster is swept by deployment name, and this is where a real roster met that rule.** A swept value becomes a condition-directory name, so it must render `[A-Za-z0-9._+-]+`. The three Azure names the study will run — `gpt-4.1`, `gpt-5`, `gpt-5.6` — pass; **the two local ones did not**, because an Ollama tag carries a colon, and `gemma4:12b-it-qat` earns two refusals at `validate`: `E-PARAM-VALUE` against the template's own `pattern` and `E-SWEEP-VALUE-UNNAMEABLE` against the sweep rule. Both are [measured below](#executability-on-this-build).
+
+**The fix is worth stating because the obvious one is worse.** Sweeping an alias and resolving it to a tag in code needs a table that **two** readers consult — the request path and the apparatus probe, which asks the same endpoint what model it is — and a table stating one fact twice is what this analysis keeps filing against. So the alias is made where naming is free, in the local model registry (`ollama cp gemma4:12b-it-qat gemma4-12b-it-qat`), and one name means one model in the config, the condition directory, the request and the digest the probe reads back. A study whose deployments are addressed by a path that *cannot* be aliased at the registry is the case that still needs resolution in the step.
 
 **Per-model reliance indices and the heterogeneity test across them are refusals** — each index is already an interaction, and testing whether five of them differ is one level further out. Both are `summary`-step `Estimate`s. What core computes is every cell and every declared contrast, per model, which is the input those two need. The plan adds a rule core can carry for free: a model below E7's floor reports an **undefined** index rather than an extreme one, and the number of such models is itself a result — so the floor band is recorded per condition rather than being reconstructed later.
 
@@ -1903,7 +1905,7 @@ data:
 parameters:
   llm:
     provider: azure_openai
-    deployment: gpt-4.1-2026-04-14
+    deployment: gpt-5.6
     temperature: 0.0
     max_output_tokens: 512
     request_timeout_s: 120
@@ -1944,11 +1946,11 @@ sweep:
     # differing principally in size are the one cleanly identified contrast that
     # allows — vendor, tokenizer and hosting held fixed while scale varies — and
     # two local checkpoints span two families and two tokenizers.
-    - {llm.provider: azure_openai, llm.deployment: gpt-4.1-mini-2026-04-14}
-    - {llm.provider: azure_openai, llm.deployment: gpt-4.1-2026-04-14}
-    - {llm.provider: azure_openai, llm.deployment: gpt-5.1-2026-02-20}
-    - {llm.provider: ollama, llm.deployment: llama-4-70b}
-    - {llm.provider: ollama, llm.deployment: qwen3-72b}
+    - {llm.provider: azure_openai, llm.deployment: gpt-4.1}
+    - {llm.provider: azure_openai, llm.deployment: gpt-5}
+    - {llm.provider: azure_openai, llm.deployment: gpt-5.6}
+    - {llm.provider: ollama, llm.deployment: gemma4-12b-it-qat}
+    - {llm.provider: ollama, llm.deployment: qwen3.5-9b}
 
 replication:
   repeats:
@@ -1960,8 +1962,8 @@ statistics:
   correction: holm
   resample: {method: bootstrap, n: 2000}
   contrasts:
-    - {id: utilization_gpt41, of: "schedule=dense__provider=azure_openai__deployment=gpt-4.1-2026-04-14__baseline",
-       against: "schedule=sparse__provider=azure_openai__deployment=gpt-4.1-2026-04-14__baseline"}
+    - {id: utilization_gpt41, of: "schedule=dense__provider=azure_openai__deployment=gpt-5__baseline",
+       against: "schedule=sparse__provider=azure_openai__deployment=gpt-5__baseline"}
 
 limits:
   max_executions: 500
@@ -2069,7 +2071,7 @@ where a superseded reading belongs.
 ### Measured on 2026-09-04 against `publishable` commit `3f77082`
 
 Also pinned: the plan at `growth-chart-literacy@e6b43ab`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@66f946e` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
+`2026-08-28-gcl-measurement@2bfc22a` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
 differ in `docs/` alone — `git diff --stat 7938f97..3f77082 -- src templates` is empty, so
 `code_hash` over the two hashed trees is identical across them. That is the three-hash split doing
 its job on this document rather than on a run: a measurement is of a *tree*, and naming the commit
@@ -2236,6 +2238,8 @@ facts recorded per condition. The `.transcript.jsonl` writer/reader pair is regi
 points resolve at install, and **it is still not exercised by a write**, because the two runs that
 have executed are the non-LLM arms — the suffix-dispatch rule it relies on is
 [measured in the tutorial](tutorial-writing-a-plugin.md) rather than here.
+
+**The roster below is the study's own, as of 2026-09-09**: `gpt-4.1`, `gpt-5` and `gpt-5.6` filling the scale ladder with the largest designated primary — which is why every single-model config names `gpt-5.6` — and two local checkpoints spanning two families. The names are real; no request has been issued to any of them.
 
 **The credential check, measured on E10 with `.env` moved aside.** `validate` reports per condition
 and by name: exactly `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` across the twelve Azure
