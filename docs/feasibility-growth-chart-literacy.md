@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `e6b43ab`, which restructured it on 2026-08-30.** The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `7dafaeb`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-09 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, and built the generator itself in the study repository. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -401,7 +401,9 @@ hypotheses:
 
 **The problem.** Feature readability is sensitive to how numbers are written down, and number tokenization alone has been shown to invert model rankings — so a growth-chart result in one arbitrary format is not a result about growth charts. E3 crosses three feature derivations with three presentation formats and reports the spread as a headline caveat.
 
-**Its items are constructed now, and that is what moved E3 to the root of the core.** E3 scores classification accuracy, accuracy needs a correct answer, and on a real patient that answer would have to be an EHR label — which is what used to make E3 wait on E1. Drawn from the same synthetic family as E4b, the answer is known by construction, `truth.label_source: by_construction`, and nothing upstream of E3 remains.
+**Its items are constructed now, and that is what took the EHR label out of E3.** E3 scores classification accuracy, accuracy needs a correct answer, and on a real patient that answer would have to be an EHR label — which is what used to make E3 wait on E1's adjudication of that label. Drawn from the same synthetic family as E4b, the answer is known by construction: `truth.label_source: by_construction`.
+
+**It does not follow that nothing is upstream of E3, and this document said so for nine days.** The panel validates stimulus *categories*, and E3 draws its items from them, so **E3 inherits that validation and waits on it** — settled in the plan on 2026-09-09, which resolved four passages that had disagreed about exactly this. The consequence is a scheduling one and it is the sharpest fact in the dependency graph: E3 is the root of the core, so **the panel sits on the critical path to every Layer A arm**, and a category sent back for regeneration delays the core rather than three arms.
 
 **The design decision.** A full 3 × 3 factorial *with a designated reference cell* is the one shape a naive config gets wrong: listing the baseline's own value in the `grid` renders that cell twice, once as `00_baseline` and once as its own product row. The spelling that works is the specification's second baseline row — **fix the axis you are measuring and leave the axis you are stratifying over free**. `baseline: {serialize.features: derived}` with `grid` listing only `raw` and `raw_plus_derived` against all three formats gives three per-format baselines and six product cells: nine conditions, one per factorial cell, and `vs_baseline` is the feature-derivation contrast *within each format* for free. The three pairwise format contrasts at fixed derivation are declared, because no baseline produces them — and three is the plan's own `m` for the {E3 format contrasts} family.
 
@@ -1982,7 +1984,9 @@ hypotheses: []
 
 Five things in the plan look like pipelines and are not. Treating any of them as a run is the failure mode this section exists to catch — and one of the five **was** a run in this document's earlier reading, which is why it is first.
 
-**The stimulus-validation panel, which used to be E1.** Two to three blinded pediatricians independently adjudicating roughly 110 plotted curves, mixed with real ones as a realism check, is not something core executes. The earlier design — a 200-curve adjudication of an EHR label — at least produced a column a run could read; this one does not produce a column at all. The panel confirms that the constructed stimuli mean what they were built to mean, and its outcomes are a **gate a person passes**: a category whose consensus falls below 90% is regenerated and the arm consuming it is not run. Nothing about that reaches a config, and the two statistics the plan asks for — per-category agreement with exact binomial intervals, and the panel's ability to separate synthetic from real — are computed over pictures no run has units for.
+**The stimulus-validation panel, which used to be E1, and which gates more than it appears to.** What it validates is a *category* — E4b's two conditions, E5b's three negative strata, E9's two bands — and **an arm drawing its items from a validated category inherits that validation**, so E3 and E8 are gated by a panel whose sample contains no E3 or E8 curve. That reading was settled on 2026-09-09 after four passages of the plan disagreed, and it is what puts the panel on the critical path to the whole core.
+
+**The panel itself.** Two to three blinded pediatricians independently adjudicating roughly 110 plotted curves, mixed with real ones as a realism check, is not something core executes. The earlier design — a 200-curve adjudication of an EHR label — at least produced a column a run could read; this one does not produce a column at all. The panel confirms that the constructed stimuli mean what they were built to mean, and its outcomes are a **gate a person passes**: a category whose consensus falls below 90% is regenerated and the arm consuming it is not run. Nothing about that reaches a config, and the two statistics the plan asks for — per-category agreement with exact binomial intervals, and the panel's ability to separate synthetic from real — are computed over pictures no run has units for.
 
 **So the arm that left this vocabulary is the one that was never expressible in it, and the arm that replaced it is cheaper in every direction.** The plan's own arithmetic: validating the label at the scale its decision rule required needed roughly 5,650 adjudicated curves, against 110 for validating the stimuli — a fiftyfold reduction in clinician time, pointed at the assumption that is actually load-bearing. This document's earlier reading routed the kappa gap through a `summary`-step `Estimate` and disclosed what that cost; the honest summary now is that **the quantity was never worth the disclosure**, and the plan reached that conclusion from three directions of its own.
 
@@ -2068,10 +2072,10 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-04 against `publishable` commit `3f77082`
+### Measured on 2026-09-10 against `publishable` commit `200a76f`
 
-Also pinned: the plan at `growth-chart-literacy@e6b43ab`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@2bfc22a` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
+Also pinned: the plan at `growth-chart-literacy@7dafaeb`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@44d41a5` and `publishable-growth-chart@c70c14e`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
 differ in `docs/` alone — `git diff --stat 7938f97..3f77082 -- src templates` is empty, so
 `code_hash` over the two hashed trees is identical across them. That is the three-hash split doing
 its job on this document rather than on a run: a measurement is of a *tree*, and naming the commit
@@ -2104,9 +2108,32 @@ installs one of them gets exactly what that one shipped. **`0.2.5` adds a fifth 
 its whole change under the hashed trees is a lock around `load_experiment`'s `sys.modules` window,
 which no config can observe.
 
-**What moved, and the pattern is worth naming.** This section has been re-measured four times in six
-days, and **every time because implementing something the plan specified changed what the tooling
-does** — not once because core moved under it. A dated section whose job is to report what the tool
+**The plan moved for the first time since this document began pinning it, and the pin is what caught
+it.** Eight commits between `e6b43ab` and `7dafaeb`: an artifact profile of the augmented layer
+producing six findings, the generator restated on the age-2-or-later window, E5b's negative strata
+reworded, a generator *implementation* added to the study repository, and the panel-gate question
+settled. **Three of those reached this tooling, and none of them would have been noticed without
+re-reading the plan against its commit** — which is the entire argument for pinning it, made by the
+first instance rather than by assertion:
+
+| What the plan changed | What this tree carried | Now |
+|---|---|---|
+| Calibration targets restated on the age-2-or-later window (R41), and the process **parameters** separated from the sample **targets** they reproduce | the retired all-ages figures, read straight in as parameters — the exact conflation the plan names | `σ_b` 0.87, `σ_e` 0.43, `ρ` 0.62, reproducing 0.909 / 0.346 / 0.925 |
+| E5b's strata reworded (R45): a stratum is negative because **no sustained shift was applied**, not because no centile line is touched | `unambiguous` damped its noise to a quarter — a curve visibly smoother than a real one, which is the artifact the panel's adversarial half exists to catch | the same measurement variation as every other trajectory |
+| Panel validates **categories**; arms drawing from one inherit | this document said *"nothing upstream of E3 remains"* | E3 waits on the panel, and so does the whole core |
+
+**Measured after realigning: between-child 0.944, within-child 0.332, pooled lag-1 0.931 on the
+plan's own nine-visit annual schedule — all within 4% of its targets, inside its ±10% band.** That is
+worth more than a number agreeing with itself: the plan now carries `scripts/generate_trajectories.py`
+and this tree carries `construct.py`, and **two independent implementations of one specification
+agree to within 4%**. It is also the risk that arrangement creates, which [§ Where the shared
+machinery lives](#where-the-shared-machinery-lives) names in the other direction: two implementations
+eventually disagree, and the only thing that catches it is a check that reads the targets rather than
+the constants.
+
+**What moved before that, and the pattern is worth naming.** This section has been re-measured five
+times in ten days, and the first four were **because implementing something the plan specified
+changed what the tooling does** — not once because core moved under it. A dated section whose job is to report what the tool
 does today has turned out to be what catches a commitment nobody built. Four such commitments have
 now been implemented and are no longer claims this document has to hedge:
 
@@ -2123,8 +2150,8 @@ core rather than of the plan, and neither in a release yet; see the paragraph ab
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (256 lines),
-one `src/growth_chart/` package (3,609 lines over fifteen modules, seven step bodies and three prompt
-files) with 3,234 lines of tests, **fourteen** configs, a 480-line input generator, and a
+one `src/growth_chart/` package (3,643 lines over fifteen modules, seven step bodies and three prompt
+files) with 3,263 lines of tests, **fourteen** configs, a 480-line input generator, and a
 `publishable-growth-chart` plugin from `publishable plugin new` (591 lines, 846 of tests) installed as
 an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no**
 template. `uv run pytest`: **236 passed** in the measurement repository, **48** in the plugin. The
@@ -2188,6 +2215,15 @@ are citable rather than drafts (`draft: false`, `git.code_dirty: false`):
 |---|---|---|
 | [E2](#e2--the-utilization-baseline) | `auroc_count_only` **0.642**, `ci95` [0.605, 0.678] over 1,000 patients; `supported: true` on `ci95_lower` against 0.5 | `reported` — a `summary`-step `Estimate` |
 | [E6](#e6--the-non-llm-comparator) | delta **0.0**, `ci95` [0.0, 0.0], `method: paired_percentile_over_units_clustered`, `n_paired: 595` over 300 clusters; `supported: false` | `computed` — core built the contrast |
+
+**One of those two numbers did not move when the generator did, and the reason is worth a sentence
+rather than a shrug.** Realigning the calibration changed every z value in every roster, and E2's
+`auroc_count_only` came back **bit-identical** at 0.6415436558791847. That is correct: `count_only`
+reads `visits_pre_index` and nothing else, so a change to the curves cannot reach it. E6's did move —
+0.880 and 0.918 against 0.851 and 0.891 — because its feature set carries the z summaries. A number
+that holds still under a change that could not reach it is evidence the pipeline is wired the way it
+is documented, and the same number holding still under a change that *should* have reached it would
+have been the opposite.
 
 **The numbers are the synthetic fixture's and mean nothing** — but E6's is worth reading anyway,
 because a zero-width interval on a paired contrast looks like a defect and is not. The two arms are
@@ -2274,7 +2310,7 @@ none of them moved:
 | A contrast naming the baseline by its swept value rather than `baseline` | `E-STATS-CONTRAST-UNKNOWN` alone, naming the label that matched no condition — one error, not two |
 | `{kind: fold, k: 5, stratify_by: [visit_decile]}` | `E-REPL-FOLD-STRATIFY-UNKNOWN`: *a fold balances its folds on one declared attribute, named as a string* |
 
-**What writing this pipeline against the plan has found.** Eight things, none of them visible to
+**What writing this pipeline against the plan has found.** Nine things, none of them visible to
 `validate`, to `dry-run`, or to reading:
 
 **1. A specification written in prose and not in code fails silently, and this pipeline produced
@@ -2358,15 +2394,43 @@ reading, and the three are worth separating because the remedies differ:
   trajectory from a helper whose z path is a straight ramp, and every interpolant through collinear
   knots is that same line — so counting collinear triples measured the fixture.
 
-The second and third are one trap in two guises, and it is the one this project files most often: **a
-fixture whose numbers agree with the thing it is meant to rule out.** What found them was running the
-mutation at the call site rather than trusting the assertion's name.
+- **A check that compares a module with itself.** The generator's distributional test asserted its
+  output against the same constants the generator draws from, so it measured that the module equals
+  itself — and stayed green while those constants were the retired all-ages figures. It now checks
+  the plan's **targets**, which are deliberately different numbers from the parameters, at the plan's
+  own ±10% band; the retired parameters fail it.
 
-**8. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
+The middle two are one trap in two guises, and it is the one this project files most often: **a
+fixture whose numbers agree with the thing it is meant to rule out.** The last is its sibling — a
+fixture that *is* the thing under test. What found all four was running the mutation at the call site
+rather than trusting the assertion's name.
+
+**8. A pinned document catches an upstream change; an unpinned one absorbs it.** The plan moved
+eight commits in five days and three of those changes reached this tooling — a restated calibration,
+a reworded stratum, and a dependency this document had explicitly denied. **None was announced and
+none broke a test**, because the tooling had no way to know the specification had moved. What found
+them was re-reading the plan against its recorded commit, which is the practice this document adopted
+after going stale invisibly once before, and this is the first time it has paid. The corollary is
+uncomfortable and worth stating: **every claim here about a plan is only as fresh as the last time
+someone diffed it**, and nothing automates that.
+
+**9. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
 every two-condition screening arm produces those counts. Gating it on the *shape* of the sweep would
 have reported E4b's and E5d's flips as false positives, which they are not; the gate is on the arm's
 own `stimulus.physiology` being `true_negative`.
+
+**The roster is real and unreached.** `gpt-4.1`, `gpt-5` and `gpt-5.6` fill the scale ladder with the
+largest primary; two local checkpoints span two families. The two local tags carry a colon and so
+cannot be swept — `E-PARAM-VALUE` and `E-SWEEP-VALUE-UNNAMEABLE`, measured — and the alias is made in
+the local model registry rather than resolved in code, because resolution needs a table that both the
+request path and the apparatus probe read.
+
+**R7 is dated: 2026-09-11**, owned by the data team, and the plan's own cost estimate for it was
+*withdrawn* on 2026-09-05 rather than revised down — the earlier "costs almost nothing in volume"
+argued from a 99.9th percentile that was 2.91 *because* the tail had already been cut. The measured
+size is roughly 15,800 visits. That date is the first anchor this document has had for any real-data
+work, and nine of the fourteen runs read a real trajectory or scaffold.
 
 **What is still not measured.** Twelve of the fourteen have not executed, because they need a
 deployment: `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised, the
