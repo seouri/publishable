@@ -1161,6 +1161,26 @@ class StepIO:
 
     def read_upstream(self, step: str, name: str) -> Any:
         target = (self._step_scopes or {}).get(step)
+        if target is None and self._step_scopes:
+            # **A step this run does not have, refused rather than resolved.**
+            # `target is None` used to fall through to the run-scoped directory
+            # below, which is where the artifact would be if the step were
+            # run-scoped and where nothing is if it is not — so a misspelled
+            # step name surfaced as a `FileNotFoundError` naming a path no step
+            # ever wrote to. That is the question answered by a proxy: *do I
+            # have a scope for this?* standing in for *is this step
+            # run-scoped?*.
+            #
+            # Guarded on the map being non-empty, because absent scopes are a
+            # different state from an absent step: a `StepIO` built without them
+            # has no step set to test a name against, and reporting every read
+            # as unknown there would refuse reads that are fine.
+            known = ", ".join(sorted(self._step_scopes))
+            raise ContractError(
+                f"`{step}` is not a step of this run, so there is no directory "
+                f"to read `{name}` from. This run's steps are: {known}",
+                code="E-STEP-READ-UNKNOWN",
+            )
         if target is not None and SCOPE_ORDER[target] > SCOPE_ORDER[self._scope]:
             raise ContractError(
                 f"`{step}` is `{target}`-scoped and this step is `{self._scope}`-scoped; "

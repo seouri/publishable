@@ -1220,6 +1220,46 @@ def test_a_wider_step_cannot_read_a_narrower_one(tmp_path: Path):
     assert "condition" in str(e.value) and "repeat" in str(e.value)
 
 
+def test_a_step_this_run_does_not_have_is_refused_and_the_message_lists_the_ones_it_does(
+    tmp_path: Path,
+):
+    """`E-STEP-READ-UNKNOWN`, and the alternative it replaces is why it exists.
+
+    A name absent from the scope map used to fall through to the run-scoped
+    directory — where the artifact would be if the step were run-scoped, and
+    where nothing is if it is not. So a misspelled step surfaced as a
+    `FileNotFoundError` naming `shared/<typo>/…`, a path no step ever wrote to,
+    and the reader had to know the scope rules to see that the *name* was the
+    fault. The refusal names the fault and the fix in one line.
+
+    The message must carry the run's actual steps: the overwhelmingly likely
+    cause is a misspelling, and a refusal that says only "not a step" leaves the
+    reader to go and find the spelling themselves.
+    """
+    io = make_io(tmp_path, scope="repeat", step_scopes={"load": "run", "score": "condition"})
+    with pytest.raises(ContractError) as e:
+        io.read_upstream("laod", "a.json")
+    assert e.value.code == "E-STEP-READ-UNKNOWN"
+    assert "laod" in str(e.value)
+    assert "load" in str(e.value) and "score" in str(e.value), (
+        "the message must list the steps this run does have"
+    )
+
+
+def test_a_step_io_built_without_scopes_still_reads_upstream(tmp_path: Path):
+    """Absent scopes are a different state from an absent step.
+
+    A `StepIO` constructed with no scope map has no step set to test a name
+    against, so refusing every read there would refuse reads that are fine.
+    The guard is on the map being non-empty, and this is the arm that holds it
+    to that — without it, the refusal above would fire on every such read.
+    """
+    io = make_io(tmp_path, scope="repeat")
+    (io.run_dir / "shared" / "anything").mkdir(parents=True)
+    (io.run_dir / "shared" / "anything" / "a.json").write_text('{"x": 2}\n')
+    assert io.read_upstream("anything", "a.json") == {"x": 2}
+
+
 def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
     io = make_io(tmp_path, scope="repeat", step_scopes={"load": "run"})
     (io.run_dir / "shared" / "load").mkdir(parents=True)
