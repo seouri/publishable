@@ -29,7 +29,7 @@ This document is non-normative and carries its own examples. It is **not** part 
 
 ## What the plan hand-rolls, and what core already owns
 
-The plan is at plan stage — nothing has been run — so this table is not a list of code to delete. It is the list of machinery the plan **commits to building** in prose, and would not have to. It is also the list of things the proposed plugin must **not** rebuild.
+The plan is at plan stage — no experiment in it has been run — so this table is not a list of code to delete. It is the list of machinery the plan **commits to building** in prose, and would not have to. It is also the list of things the proposed plugin must **not** rebuild.
 
 **Two rows below record a convergence rather than a gap, and they are the most useful rows in the table.** On the utilization covariate and on what repeated runs buy, the plan reached this tool's position on its own, from its own data, between the first version of this analysis and the restructure of 2026-08-30. A feasibility analysis whose predictions the subject project independently confirms is stronger evidence than one that only lists what fits.
 
@@ -1860,9 +1860,11 @@ hypotheses:
 
 **The design decision.** Provider and deployment must move **together** — a deployment name is meaningless under the wrong provider, and their product would demand an Azure key for a local checkpoint — so they are one `sweep.paired` axis of five rows, crossed with the 2 × 2. That composition is also what makes the credential check useful: `validate` demands the union over the conditions the sweep actually resolves, which is the two Azure variables here and **nothing** for the local arms, reported per condition and by name.
 
-**The roster is swept by deployment name, and this is where a real roster met that rule.** A swept value becomes a condition-directory name, so it must render `[A-Za-z0-9._+-]+`. The three Azure names the study will run — `gpt-4.1`, `gpt-5`, `gpt-5.6` — pass; **the two local ones did not**, because an Ollama tag carries a colon, and `gemma4:12b-it-qat` earns two refusals at `validate`: `E-PARAM-VALUE` against the template's own `pattern` and `E-SWEEP-VALUE-UNNAMEABLE` against the sweep rule. Both are [measured below](#executability-on-this-build).
+**The roster is swept by deployment name, and this is where a real roster met that rule.** A swept value becomes a condition-directory name, so it must render `[A-Za-z0-9._+-]+`. The three Azure names the study will run — `gpt-4.1`, `gpt-5`, `gpt-5.6-sol` — pass; **the two local ones did not**, because an Ollama tag carries a colon, and `gemma4:12b` earns two refusals at `validate`: `E-PARAM-VALUE` against the template's own `pattern` and `E-SWEEP-VALUE-UNNAMEABLE` against the sweep rule. Both are [measured below](#executability-on-this-build).
 
-**The fix is worth stating because the obvious one is worse.** Sweeping an alias and resolving it to a tag in code needs a table that **two** readers consult — the request path and the apparatus probe, which asks the same endpoint what model it is — and a table stating one fact twice is what this analysis keeps filing against. So the alias is made where naming is free, in the local model registry (`ollama cp gemma4:12b-it-qat gemma4-12b-it-qat`), and one name means one model in the config, the condition directory, the request and the digest the probe reads back. A study whose deployments are addressed by a path that *cannot* be aliased at the registry is the case that still needs resolution in the step.
+**The fix is worth stating because the obvious one is worse.** Sweeping an alias and resolving it to a tag in code needs a table that **two** readers consult — the request path and the apparatus probe, which asks the same endpoint what model it is — and a table stating one fact twice is what this analysis keeps filing against. So the alias is made where naming is free, in the local model registry (`ollama cp gemma4:12b gemma4-12b`), and one name means one model in the config, the condition directory, the request and the digest the probe reads back. A study whose deployments are addressed by a path that *cannot* be aliased at the registry is the case that still needs resolution in the step.
+
+**What licenses that fix is a measurement, not the argument above it.** An alias is only free of consequence if it moves no fact, and the fact here is a hash: `ollama cp` writes a second manifest over the same blobs, so the copy probes to the original's digest, [measured below](#executability-on-this-build) for both checkpoints. Had they differed, the apparatus gate would have been watching a tag that exists on one machine, and the honest fix would have been the worse one — a resolution table with two readers. **The registry-alias fix and the table fix are not interchangeable, and which one is correct is an empirical question about the registry**, which is the part of this that generalizes past Ollama.
 
 **Per-model reliance indices and the heterogeneity test across them are refusals** — each index is already an interaction, and testing whether five of them differ is one level further out. Both are `summary`-step `Estimate`s. What core computes is every cell and every declared contrast, per model, which is the input those two need. The plan adds a rule core can carry for free: a model below E7's floor reports an **undefined** index rather than an extreme one, and the number of such models is itself a result — so the floor band is recorded per condition rather than being reconstructed later.
 
@@ -1951,7 +1953,7 @@ sweep:
     - {llm.provider: azure_openai, llm.deployment: gpt-4.1}
     - {llm.provider: azure_openai, llm.deployment: gpt-5}
     - {llm.provider: azure_openai, llm.deployment: gpt-5.6-sol}
-    - {llm.provider: ollama, llm.deployment: gemma4-12b-it-qat}
+    - {llm.provider: ollama, llm.deployment: gemma4-12b}
     - {llm.provider: ollama, llm.deployment: qwen3.5-9b}
 
 replication:
@@ -2058,6 +2060,18 @@ shipped in `v0.2.0`; the corrected bound described below landed in `v0.2.1` — 
 
 **12. A fixed-sequence gate has no expression, so the structure protecting the study's α lives outside the record.** §0.7 concludes on one quantity through one gate: reject the physiology main effect's null, and only then read the shortcut reliance index; no α is spent on the second step because it is read only in the branch where the first opens. Core has no ordering between hypotheses — both land in `run.yaml` as coordinate confirmatory claims, each with its own verdict, and nothing records that the second is unreadable if the first fails. The plan's own multiplicity families are described as families of *secondary* tests for exactly this reason, so the structure core cannot see is the one doing the study-level work. The route available is the hypothesis `statement` field and the manuscript, which is where it currently is. Filed as `unassigned`.
 
+**13. Closed — a diagnostic named a directory the config was not in.** `E-NAME-DIR` compares
+`metadata.name` against `config_path.parent.name` and asks nothing about where that parent sits, but
+its message read *is `<name>` under `configs/<dir>/`* unconditionally. Every config in this study
+lives under `configs/`, so the defect was invisible until the smoke config above was put under
+`smoke/local-gemma4/` and the refusal claimed a path that did not exist. **A message that misreports
+the file's own location is the worst kind to be holding when you are trying to find it**, and this
+one asserted a convention the check does not enforce. The prefix is gone; the check is unchanged.
+The same reading applies to two of this document's own earlier measurements, which attributed an
+`E-NAME-DIR` to "the config not living under `configs/<name>/`" — the cause is `name` disagreeing
+with the directory, whatever the directory is called, and those two lines are dated readings left
+as they were written.
+
 **What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. What is still missing is the only anchor a cost needs: **no prompt has been run, so there is no token count**, and multiplying an exact request count by a price is not something this document can honestly do.
 
 
@@ -2072,14 +2086,21 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-10 against `publishable` commit `6f38963`
+### Measured on 2026-09-10 against `publishable` commit `0fcf0e6`
 
-Also pinned: the plan at `growth-chart-literacy@7dafaeb`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@61dd1a9` and `publishable-growth-chart@0529eed`. **The `publishable` pin is the commit this section's own previous revision landed as**, and the two
-differ in `docs/` alone — `git diff --stat 7938f97..3f77082 -- src templates` is empty, so
-`code_hash` over the two hashed trees is identical across them. That is the three-hash split doing
-its job on this document rather than on a run: a measurement is of a *tree*, and naming the commit
-lets a reader check which parts of it could have moved. Pinning the plan's own
+Also pinned: the plan at `growth-chart-literacy@bea8984`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@c8914e2` and `publishable-growth-chart@fac2295`. **One measurement in
+this section post-dates its own `publishable` pin**: the `E-NAME-DIR` message defect
+[below](#gaps-this-analysis-found-in-the-specification) was found while writing the smoke config
+and fixed in the same change as this revision, so it is measured against `0fcf0e6` plus that fix.
+Nothing else here depends on it — it moves one message string and no check.
+
+**The `publishable` pin is the commit this section's own previous revision landed as**, and unlike
+the last three revisions this one does *not* leave the hashed trees alone: `src/publishable/validate.py`
+moves, so `code_hash` over `src/**` and `templates/**` differs between the pin and the change
+carrying this text. That is the three-hash split doing its job on this document rather than on a run
+— a measurement is of a *tree*, so a revision that touches one owes the reader a sentence saying
+which measurement could have moved, which is the sentence above. Pinning the plan's own
 commit began with the measurement before that, and the reason stands: every earlier version of this
 section named which `publishable` it had measured and never said which version of the plan it had
 read, so a restructure that rewrote 1,070 lines of the source left every claim here reading as
@@ -2265,17 +2286,21 @@ The measurements:
 ```
 
 Task, frame and output contract in the system message; trajectory, sex and age at each point in the
-user message; nothing else. **No request has been issued to a deployment**, so this is a rendering
-rather than a transcript.
+user message; nothing else. **This particular block is a rendering rather than a transcript** — it
+was dumped from the serialization step, not read back off a response — and a rendering is what it
+should be, since it is the prompt this document is quoting. What a real one produced is
+[below](#the-first-real-completions-and-what-they-cost).
 
-**The plugin's three registries dispatch.** `data.units.from: {resolver: growth_trajectory}` resolves
-every roster at `validate`; `apparatus_probe = "growth_llm_deployment"` is called at `dry-run` and its
-facts recorded per condition. The `.transcript.jsonl` writer/reader pair is registered and its entry
-points resolve at install, and **it is still not exercised by a write**, because the two runs that
-have executed are the non-LLM arms — the suffix-dispatch rule it relies on is
-[measured in the tutorial](tutorial-writing-a-plugin.md) rather than here.
+**The plugin's three registries dispatch, and all three are now exercised.** `data.units.from:
+{resolver: growth_trajectory}` resolves every roster at `validate`; `apparatus_probe =
+"growth_llm_deployment"` is called at `dry-run` and its facts recorded per condition; and the
+`.transcript.jsonl` writer, registered since the plugin was written and **never once driven by a
+write**, was driven by one on 2026-09-10 — [§ The first real
+completions](#the-first-real-completions-and-what-they-cost). Until then the suffix-dispatch rule it
+relies on was measured only [in the tutorial](tutorial-writing-a-plugin.md), because the two runs
+that had executed were the non-LLM arms.
 
-**The roster below is the study's own, as of 2026-09-09**: `gpt-4.1`, `gpt-5` and `gpt-5.6` filling the scale ladder with the largest designated primary — which is why every single-model config names `gpt-5.6` — and two local checkpoints spanning two families. The names are real; no request has been issued to any of them.
+**The roster below is the study's own**: `gpt-4.1`, `gpt-5` and `gpt-5.6-sol` filling the scale ladder with the largest designated primary — which is why every single-model config names `gpt-5.6-sol` — plus `gemma4:12b` and `qwen3.5:9b`, Q4_K_M both, spanning the `gemma4` and `qwen35` families. Every one of the five now answers a metadata read. **No request has been issued to an Azure deployment**; one local checkpoint has been asked four questions, twice, [below](#the-first-real-completions-and-what-they-cost).
 
 **The credential check, measured on E10 with `.env` moved aside.** `validate` reports per condition
 and by name: exactly `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` across the twelve Azure
@@ -2283,32 +2308,63 @@ conditions, and **nothing at all for the eight `ollama` conditions**, whose `req
 `[]`. The roster is what the plan's governance permits — three Azure deployments and two local
 checkpoints — and an earlier roster's Anthropic arm, which demanded a third variable, is gone with it.
 
-**The apparatus probe answers, for the first time in this study's history.** Twelve of E10's twenty
-conditions now carry a real `model_version`, read from the deployment rather than planted:
+**The apparatus probe answers on every condition of the ladder.** All twenty of E10's conditions
+carry a real `model_version`, read from the deployment rather than planted — the three Azure
+deployments resolving to versioned snapshots, and the two local checkpoints to the manifest digest
+of the weights on the machine:
 
-| Deployment | What the resource resolved it to |
-|---|---|
-| `gpt-4.1` | `gpt-4.1-2025-04-14` |
-| `gpt-5` | `gpt-5-2025-08-07` |
-| `gpt-5.6-sol` (primary) | `gpt-5.6-sol-2026-07-09` |
+| Deployment | What it resolved to | Read from |
+|---|---|---|
+| `gpt-4.1` | `gpt-4.1-2025-04-14` | Azure `/openai/models/{name}` |
+| `gpt-5` | `gpt-5-2025-08-07` | Azure `/openai/models/{name}` |
+| `gpt-5.6-sol` (primary) | `gpt-5.6-sol-2026-07-09` | Azure `/openai/models/{name}` |
+| `gemma4-12b` | `4eb23ef1…b2b05c` | Ollama `/api/tags` |
+| `qwen3.5-9b` | `6488c96f…893ea7` | Ollama `/api/tags` |
 
-**That is the gate's first observation, and the shape of the fact is what makes it a gate.** Asking
-about `gpt-5` returns the versioned snapshot behind it, so a deployment repointed at a newer model
-changes the fact while the deployment name does not — which is the silent change the plan wants
-caught and the reason this fact is observed rather than declared.
+**The shape of each fact is what makes it a gate, and the two halves of the roster are gated on
+different things.** Asking about `gpt-5` returns the versioned snapshot behind it, so a deployment
+repointed at a newer model changes the fact while the deployment name does not — the silent change
+the plan wants caught, and the reason this is observed rather than declared. The local half is gated
+on the weights instead: the digest covers the blobs, the parameters and the template, so a
+re-quantized checkpoint pulled under the same tag moves it. Neither is a version string the config
+could have carried.
 
-**E10's `dry-run` reports 28 unanswered facts where the previous measurement reported 40**, and the
-remaining 28 are two designed absences rather than a shortfall: **twelve `system_fingerprint`s**,
-which no metadata read can produce and which the study logs per call instead, and **sixteen for the
-two local checkpoints**, whose weights are not on the machine that measured this. Core reports each
-rather than failing:
+**E10's `dry-run` reports 20 unanswered facts, and all twenty are the same fact.** They are
+`system_fingerprint`, one per condition — returned on a completion response and by nothing else, so
+no metadata read can produce it, and the study logs it per call instead. **Every `model_version` in
+the ladder now answers**, which was not true of any earlier measurement: 40 unanswered when the
+roster was placeholders, 28 once the three Azure names resolved, 20 once the two local checkpoints
+were pulled. The number was predicted from the previous one before the command ran — 28 minus eight
+local conditions, two checkpoints across four cells — which is the only way a count like this is
+worth quoting.
 
-```
-condition `03_schedule=sparse__provider=ollama__deployment=gemma4-12b-it-qat__baseline`'s
-fact `model_version` came back `null` on 1 of 1 probes
-```
+**Getting the local half of that took a second endpoint, and the first one had never answered.** The
+probe asked Ollama's `/api/show`, which returns the license, the template, the tensor list and a
+`modelfile` naming the weight blobs — **and no `digest` at all**, for a freshly pulled local
+checkpoint exactly as for a model Ollama proxies to its cloud. `/api/tags` answers with one 64-hex
+manifest digest per model, which is what `ollama ls` abbreviates, and that is what the probe reads
+now. Two things about how that was missed are worth recording. The fixture that pinned the old
+behaviour was a payload shape **no endpoint produces**: it carried a top-level `digest`, agreed with
+the code, and both were wrong about the same thing, which is why the test now asserts the URL and
+not only the fact. And a fix shipped the day before — a `remote:` fallback for proxied models,
+[measured then](#executability-on-this-build) — was aimed at the case where `digest` was absent while
+leaving the case the study actually runs answering `null`, because the belief it was written from was
+that a local checkpoint carried one.
 
-**Getting there took three faults off one endpoint, and two of them were this tooling's.** The
+**The precedence between those two answers had to invert, and that is a governance fact rather than
+a tidy-up.** Every `/api/tags` entry carries a digest, proxied ones included, so preferring the
+digest would stamp a cloud-proxied model with a hash and record the arm as locally hosted —
+§Cross-Cutting permits the HMS Azure API and locally hosted open-weight models, and a proxied model
+is neither however local the config looks. `remote_model` now decides, and a fact reading `remote:`
+is the one signal in the record that an arm labelled local was not. No fixture held a proxied entry
+with a digest before, so the suite passed under either order.
+
+**Measured, and it is what licenses the alias:** `gemma4-12b` and `gemma4:12b` both probe to
+`4eb23ef1…b2b05c`; `qwen3.5-9b` and `qwen3.5:9b` both to `6488c96f…893ea7`. A model that is not
+pulled leaves the fact unanswered and `dry-run` names the condition, which is what makes the count
+above a readiness check rather than a formality.
+
+**Getting the Azure half took three faults off one endpoint, and two of them were this tooling's.** The
 credential and the api-version were correct throughout; a hostname in the environment was one
 character short, which resolved somewhere that accepted a connection and closed it without replying,
 so the failure read as a network fault rather than a typo. Under it: this probe asked for
@@ -2444,17 +2500,31 @@ lesson is not to make the probe raise — a run must survive a network blip — 
 failure states are deliberately collapsed needs a diagnostic path that is *not* the record: something
 that reports the status code, once, to the person setting it up.
 
+**It happened a second time on the other endpoint, and the second instance is the argument.** Once
+the two local checkpoints were pulled, their facts still read `null` — and the probe had *reached*
+the endpoint and *received* a payload naming the model, because `/api/show` carries no `digest` on
+any model. An unanswered fact meaning *the model is not on this machine* and an unanswered fact
+meaning *this code is reading the wrong field* are indistinguishable by construction here, and a
+readiness count built on them cannot tell a maintainer which they have. Two endpoints, two stacked
+misreads, one symptom: **the collapse is a property of the design and not of either provider**, which
+is what moves this from an anecdote to a thing worth building against.
+
 **10. A quantity computed for the wrong arm is worse than one not computed.** E5b's floor rule — the
 one-sided bound on the excess false-positive rate — is arithmetic on a discordant pair count, and
 every two-condition screening arm produces those counts. Gating it on the *shape* of the sweep would
 have reported E4b's and E5d's flips as false positives, which they are not; the gate is on the arm's
 own `stimulus.physiology` being `true_negative`.
 
-**The roster is real and unreached.** `gpt-4.1`, `gpt-5` and `gpt-5.6` fill the scale ladder with the
-largest primary; two local checkpoints span two families. The two local tags carry a colon and so
-cannot be swept — `E-PARAM-VALUE` and `E-SWEEP-VALUE-UNNAMEABLE`, measured — and the alias is made in
-the local model registry rather than resolved in code, because resolution needs a table that both the
-request path and the apparatus probe read.
+**The roster is real, and one of the five has been reached.** `gpt-4.1`, `gpt-5` and `gpt-5.6-sol`
+fill the scale ladder with the largest primary; `gemma4:12b` and `qwen3.5:9b` span two families. Both
+local tags carry a colon and so cannot be swept — `E-PARAM-VALUE` and `E-SWEEP-VALUE-UNNAMEABLE`,
+measured — and the alias is made in the local model registry rather than resolved in code, because
+resolution needs a table that both the request path and the apparatus probe read. **The alias moves
+no fact**: `ollama cp` writes a second manifest over the same blobs, and `gemma4-12b` probes to
+`4eb23ef1…b2b05c` exactly as `gemma4:12b` does, `qwen3.5-9b` to `6488c96f…893ea7` as `qwen3.5:9b`
+does. That equality is what licenses the registry fix over the resolution table, and it is an
+empirical property of the registry rather than an argument — the part of this that generalizes past
+Ollama.
 
 **R7 is dated: 2026-09-11**, owned by the data team, and the plan's own cost estimate for it was
 *withdrawn* on 2026-09-05 rather than revised down — the earlier "costs almost nothing in volume"
@@ -2470,16 +2540,122 @@ rather than as an error, and which a catalogue read then explained: three `gpt-5
 and no bare `gpt-5.6`. A roster whose names are checked against the resource before a run is a
 different thing from a roster that validates.
 
-**What is still not measured.** Twelve of the fourteen have not executed, because they need a
-deployment: `resume`, `report`, `freeze`, `diff`, `study` and `reproduce` remain unexercised, the
-`.transcript.jsonl` writer has never been driven by a write, **no `envelope`, `model_version` or
-`system_fingerprint` has been recorded from a real call**, and every cost figure below is arithmetic
-rather than an anchor. What is no longer on that list is the apparatus fact: twelve of them are
-answered, which leaves the gate with a first observation to compare against and the study one step
-short of a request. **What blocks that is not
-in the plan and not in this tooling** — the cohort, the variable derivations, the roster and the
-prompt are all specified now, and the prompt is implemented — it is a deployment, a credential, and
-a study that is pre-data by design.
+**What is still not measured.** Twelve of the fourteen have not executed: `resume`, `report`,
+`freeze`, `diff`, `study` and `reproduce` remain unexercised, and every Azure cost figure below is
+arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, and they left it by
+one run rather than by argument — the `.transcript.jsonl` writer has now been driven by a write,
+`envelope` and `model_version` have been recorded from real calls, and there is a latency anchor.
+`system_fingerprint` stays on it and may stay for good: Ollama returns none, so only a hosted
+completion can supply one. **What blocks the rest is not in the plan and not in this tooling** — the
+cohort, the variable derivations, the roster and the prompt are all specified, the prompt is
+implemented, and one checkpoint has answered — it is a hosted deployment, a credential, and a study
+that is pre-data by design.
+
+### The first real completions, and what they cost
+
+**Measured 2026-09-10.** Everything above this heading was produced by `validate`, `dry-run` and two
+non-LLM runs. This is the first time anything in this study asked a model a question, and it is
+reported separately because a rendering and a response are different kinds of evidence.
+
+**What ran is deliberately not an experiment.** `smoke/local-gemma4/` sits outside `configs/` so
+that a reader iterating `configs/*/` cannot pick it up: four units, one condition, one repeat, one
+local checkpoint, every limit lowered to let four units through — `min_units_per_cell: 20` is the
+plan's floor and 4 is under it. Local on purpose, too: §Cross-Cutting permits the HMS Azure API and
+locally hosted open-weight models, and a smoke arm on a checkpoint already on the machine bills no
+metered endpoint and sends nothing outward. Its only job was to put the five clauses this study had
+implemented against fixtures in front of something that could disagree with them.
+
+**Four of the five hold.** The prompt rendered as two halves with `{{REFERENCE_FRAME}}` substituted;
+the transport reached `/api/chat` and came back parsed; `responses.transcript.jsonl` was written by
+the plugin's registered writer, which is **the first exercise of suffix dispatch anywhere in this
+study**; `envelope: chat_system_message` landed on every call; the apparatus fact carried the
+digest rather than a name; `run.yaml` was written and the command exited `0`.
+
+**The fifth did not: six of seven calls returned an empty answer.** The config ran twice, before and
+after the two transport fixes below, and both runs produced the same seven-call shape:
+
+| | Run 1, before the fixes | Run 2, after |
+|---|---|---|
+| Calls | 7, for 4 units — three units retried once under the step's own `MAX_PARSE_ATTEMPTS` | 7, identically |
+| Parsed | 1 of 7, wrapped in a fenced ` ```json ` block the parser tolerates | 1 of 7, the same unit |
+| Empty | 6 of 7 | 6 of 7 |
+| `stop_reason` recorded | `null` on every row — the defect | `length` on all six empty rows, `stop` on the parsed one |
+| `completion_tokens` | 512 on the six, 487 on the parsed one | identical |
+| Latency | 96.6–128.5 s, median **117.0 s** | 83.4–97.4 s, median **88.4 s** |
+| Calls over `request_timeout_s: 120` | 2 of 7 | 0 of 7 |
+| Retries from transport faults | none — every call returned `200` | none |
+
+**The two latency columns differ because the machine did, and that is the more useful reading.** Run
+1 overlapped this repository's own test suite; run 2 had the machine to itself. So ≈88 s is the
+unloaded cost of one call at this size and ≈117 s is its cost under an unrelated CPU-bound load —
+which is what makes the timeout finding below a marginal one rather than a broken one.
+
+**The record diagnoses itself, and only after the fixes.** `completion_tokens: 512` is exactly
+`llm.max_output_tokens`, and it sits beside `stop_reason: length` on all six empty rows; the one that
+answered used 487 and stopped on its own. Those two columns together say *cut off at the budget*
+without a reader needing to know anything about the model — and in run 1 the same six rows said
+`empty`, `512`, `null`, which says only that something went wrong.
+
+**The cause is a budget, and it was in the payload the whole time.** `llm.max_output_tokens` becomes
+Ollama's `num_predict`, which caps **reasoning and answer together**; `gemma4:12b` is
+thinking-capable, so it spends the 512 on reasoning and the answer never begins. Confirmed
+independently of the run, by re-sending one of its own prompts to the same checkpoint: at
+`num_predict: 512` the reply is `done_reason: length` with 1,202 characters of reasoning and an empty
+`content`, and at `2048` the same prompt answers `{"growth_issues": true}` with `done_reason: stop`
+after 634 tokens. Nothing was wrong with the transport, the prompt, or the output contract — each was
+correct, and the run still produced no answer. **A study that had shipped this configuration would
+have collected a 1-in-7 response rate on its local arms and had nothing in the record to explain
+it**, since the one unit that answered needed 487 of its 512 tokens and the margin was invisible.
+
+**Three things follow, and only one of them is a defect.**
+
+**A record that says `empty` and not why is not debuggable, and every provider reports why.** The
+reason sat unread in three response shapes under three different keys — `done_reason` for Ollama,
+`stop_reason` for Anthropic, `finish_reason` for both OpenAI-shaped providers. `Response` now carries
+`stop_reason` and the transcript records it beside `status`, so `empty` and `length` sit together.
+It is not normalised to a boolean: a reason this transport has never seen has to reach the record as
+the word the provider used. **This is the same fault this document files most often** — a field
+present in the data and read by nothing — and it was reachable only by making a call.
+
+**Adding that field found a worse one.** The retry boundary rebuilt `Response` field by field, which
+made it a silent filter rather than a passthrough: `stop_reason` was populated by the parser, was not
+named at the boundary, and reached the step as `None` on the very first call that carried one.
+Nothing raised, nothing failed, and the transcript column read `null` for a reason the endpoint had
+answered. It is now one `replace` call with the single field it owns. **An enumerated passthrough is
+a filter with a maintenance obligation**, and this one had gone stale the moment a field was added
+above it.
+
+**`llm.request_timeout_s: 120` is marginal on this apparatus rather than wrong.** Unloaded, the
+slowest of seven calls took 97.4 s — 81% of the budget, and none exceeded it. Under an unrelated
+load on the same machine, two of seven did, and an earlier attempt at this config carries an
+Ollama-side `500` whose duration equals the client timeout exactly; the sequence is consistent with
+a client disconnect at the budget, though the `500` is the server's report and not a timeout the
+step recorded. **A budget that holds only on an idle machine is one a multi-week arm will breach**,
+and it will breach it as a failed unit counted against `max_failed_fraction`. The template's own
+default is
+`Param(int, default=120, ge=1)`, sitting beside a `provider` list that offers `ollama` as a
+first-class choice: **the default is sized for a hosted endpoint while the template invites a local
+one.** The smoke config carries 600 with the reason attached; the fourteen study configs are
+unchanged, because which budget the roster runs under is a measurement decision the plan owns.
+
+**What this does to the cost table is the part worth carrying forward.** Every LLM figure in
+[§ Cost and execution summary](#cost-and-execution-summary) is arithmetic over request counts. There
+is now one anchor: **≈88 s per request at this size, sequentially, on an idle laptop.** E10's local
+arms are 2 checkpoints × 4 cells × 5 repeats × 200 units = **8,000 requests**, which is ≈196 hours —
+about **8 days** of continuous local compute — before the Azure arms are counted at all.
+
+**Every correction to that figure moves it upward, and the caveats are worth stating in that
+direction.** It is measured on **truncated** calls: six of the seven stopped at the token cap, so a
+budget large enough to produce answers costs more per call than this, not less. It is measured on
+one checkpoint of two, at four units rather than two hundred, with nothing else running — and the
+plan and these configs **specify no concurrency**, so whether 8 days is 8 days or 2 depends on a
+decision nobody has recorded. What the anchor settles is not the duration but the kind of problem:
+the local arms are **scheduling**, not rounding, and no request-count table could have shown that.
+
+**What is measured about the Azure arms is still nothing.** Three deployments resolve to versioned
+snapshots and none has been sent a prompt, so there is no latency anchor, no token count, and no
+`system_fingerprint` from a real response — Ollama returns none, which is why the seven calls above
+recorded `null` for it, and it is the one fact in the study that only a hosted completion can supply.
 
 ### The two templates, as loaded
 
@@ -2782,4 +2958,6 @@ class GrowthLabelTemplate(BaseTemplate):
 
 **No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 20 × 5 = 100 repeat-scoped executions come to 142 once every scope is counted — and it is the 100 that the check compares against the budget, not the 142. No config drew [`W-EXEC-BUDGET`](reference.md#warnings-core-reports), which is the warning that comparison raises and the only one this paragraph claims: ten of the fourteen carry a warning of another kind, as [§ Executability on this build](#executability-on-this-build) records. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
 
-**What none of this says is what it costs.** The plan now specifies its roster and its prompt, so what is missing is no longer a specification — it is that **nothing has been run**, so there is no token count per request and a price per request would be invented rather than measured. What is measured is that a request is issued once per patient per condition per repeat, that every one of them lands in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`, and that the first run to execute against a deployment will therefore produce the anchor this section lacks.
+**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈88 s per request on an idle machine, which puts E10's 8,000 local requests at roughly 8 days of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement and the four reasons it is a floor. **It anchors no metered figure in the table above**, because no Azure deployment has been sent a prompt: the 80,200 is still a request count and a price per request would be invented rather than measured.
+
+**The token counts that run produced are degenerate, and it is worth saying why rather than quoting them.** Six of its seven calls stopped at the token cap, so `completion_tokens` reads 512 — the budget, not the answer's length. A column pinned to its own limit is evidence about the configuration and not about the model, which is exactly the reading that makes it useful for debugging and useless for costing. What remains measured is structural: a request is issued once per patient per condition per repeat, and every one lands in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`, so the first run against a hosted deployment produces the anchor the metered column still lacks.
