@@ -484,6 +484,28 @@ def test_the_name_must_match_the_pattern_and_the_directory(write_config):
     assert "E-NAME-DIR" in codes(write_config({"metadata.name": "cohort-pilot-v2"}))
 
 
+def test_the_directory_a_name_disagrees_with_is_the_one_the_config_is_in(write_config, git_repo):
+    """The check compares `metadata.name` against `config_path.parent.name` and
+    asks nothing at all about where that parent sits — so the message must not
+    invent one. It read `under \`configs/<dir>/\`` for every config, including
+    the ones kept somewhere else: a smoke config under `smoke/`, a scratch one
+    beside a notebook. A diagnostic that misreports the file's own location is
+    the worst kind to be holding when you are trying to find it.
+
+    Asserted on a directory whose parent is **not** `configs`, because that is
+    the only case where the two readings differ; the fixture's own config lives
+    under `configs/` and would pass either way.
+    """
+    src = write_config({"metadata.name": "cohort-pilot-v2"})
+    elsewhere = git_repo / "smoke" / "local-gemma4" / "config.yaml"
+    elsewhere.parent.mkdir(parents=True, exist_ok=True)
+    elsewhere.write_text(src.read_text())
+
+    message = messages_by_code(elsewhere)["E-NAME-DIR"]
+    assert "local-gemma4/" in message, message
+    assert "configs/" not in message, message
+
+
 def test_an_uninstalled_template_is_fatal(write_config):
     assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "llm_diagnostic"}))
 

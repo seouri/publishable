@@ -839,10 +839,17 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
         )
     directory = config_path.parent.name
     if name and directory and name != directory:
+        # The directory as it actually is, with no `configs/` prefixed onto it.
+        # The check compares `name` against `config_path.parent.name` and asks
+        # nothing about where that parent sits, so a message naming
+        # `configs/<dir>/` asserted a path the config was not at for every
+        # config kept anywhere else — a smoke config under `smoke/`, a scratch
+        # one beside a notebook. A diagnostic that misreports the file's own
+        # location is the worst kind to be reading when you are lost.
         c.error(
             "E-NAME-DIR",
             "metadata.name",
-            f"is `{name}` under `configs/{directory}/`; the two name one experiment",
+            f"is `{name}` under `{directory}/`; the two name one experiment",
         )
 
 
