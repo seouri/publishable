@@ -2072,6 +2072,32 @@ The same reading applies to two of this document's own earlier measurements, whi
 with the directory, whatever the directory is called, and those two lines are dated readings left
 as they were written.
 
+**14. Closed — `resume` could not read any artifact a completed step had written.** `execute_plan`
+derived its step-scope map as `{e.step_name: e.scope for e in plan}`, and `command_resume` narrows
+that plan to the triples that have not completed. A step whose executions all finished before the
+crash was therefore absent from the map, and `io.read_upstream` reads a missing entry as run scope —
+sending a condition- or repeat-scoped read to `shared/`, where such a step never writes. **Every
+resumed execution reading a completed upstream step failed**, which in this study is every LLM arm:
+`step03_screen` reads two condition-scoped upstreams, so a resume of any of the fourteen configs died
+on its first execution. The arms most likely to need resuming are the multi-day local ones, where
+losing a run costs the most. Fixed by building the map from the unnarrowed plan.
+
+**It was found by resuming an interrupted run, and it had stood because nothing did that.** No test
+in `test_cli.py` called `read_upstream` from a resumed run, so the pair was never exercised — the
+same shape as the five § Validation rows this document once found described with no code behind
+them, arriving from the other direction: code with no test behind it. **A command listed as
+unexercised is a claim about coverage, and this document had carried that list through four
+revisions without acting on it.**
+
+**15. Closed — a `read_upstream` naming a step the run does not have read the run-scoped directory.**
+The predicate under gap 14: `target is None` fell through to `shared/`, which is where the artifact
+would be if the step were run-scoped and where nothing is if it is not. A misspelled step name
+therefore surfaced as a `FileNotFoundError` naming a path no step ever wrote to, leaving a reader to
+know the scope rules before they could see the *name* was the fault. It is now
+`E-STEP-READ-UNKNOWN`, listing the run's steps, since a misspelling is the overwhelmingly likely
+cause. **The refusal fires only where a scope map was supplied** — absent scopes are a different
+state from an absent step, and a `StepIO` built without them has no step set to test against.
+
 **What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. What is still missing is the only anchor a cost needs: **no prompt has been run, so there is no token count**, and multiplying an exact request count by a price is not something this document can honestly do.
 
 
@@ -2086,7 +2112,7 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-10 against `publishable` commit `8039611`
+### Measured on 2026-09-10 against `publishable` commit `9a7844c`
 
 Also pinned: the plan at `growth-chart-literacy@dc23ab6`, and the two sibling repositories at
 `2026-08-28-gcl-measurement@83609e5` and `publishable-growth-chart@fac2295`. The previous revision
@@ -2094,8 +2120,11 @@ had to note one measurement taken against its pin *plus* an unlanded fix; that f
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
-**This revision changes `docs/` only**, so `code_hash` over `src/**` and `templates/**` is identical
-between the pin and the change carrying this text. What moved is a *sibling* repository's
+**Two of this section's findings are fixes in the pinned tree, which is a first for this document.**
+The `resume` defect and the `read_upstream` predicate behind it were found by exercising the commands
+recorded above, and both are fixed at `9a7844c` — so unlike the previous revision this one is pinned
+to a tree whose `src/**` moved *because of* what this section measured. The paragraphs reporting them
+describe the tree they were found in and name the commit that repaired it. What moved is a *sibling* repository's
 `templates/growth_screen.py` — the study's tree, not this one — which is why the two templates quoted
 below are re-synced against their files rather than carried forward. That is the three-hash split
 doing its job across repositories: a measurement is of a tree, and this document reads three of
@@ -2539,9 +2568,26 @@ rather than as an error, and which a catalogue read then explained: three `gpt-5
 and no bare `gpt-5.6`. A roster whose names are checked against the resource before a run is a
 different thing from a roster that validates.
 
-**What is still not measured.** Twelve of the fourteen have not executed: `resume`, `report`,
-`freeze`, `diff`, `study` and `reproduce` remain unexercised, and every Azure cost figure below is
-arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, and they left it by
+**The six lifecycle commands are exercised, and one of them was broken.** They were listed here as
+unexercised through every earlier revision, which is why they were run against the smoke record
+rather than reasoned about. `report` renders a run and a bundle; `diff` reports the three hashes with
+a field-by-field parameter breakdown; `study new` and `study add` build a bundle from the two
+executed non-LLM arms; `freeze` re-probes a crashed directory and reports the digest unchanged.
+`reproduce` refuses with `E-REPRODUCE-NO-REMOTE` — **the study repository has no git remote**, so the
+command a collaborator runs cannot work for any run this study produces until it has one, which is a
+decision the study owes rather than a defect in either.
+
+**`resume` failed, and the defect was core's.** The resumed execution died on `FileNotFoundError` for
+`shared/step02_serialize/prompts.json`, a path that condition-scoped step never wrote to.
+`execute_plan` derived its step-scope map from the plan, `resume` narrows the plan to what has not
+completed, and `io.read_upstream` read the resulting missing entry as run scope — so **every resumed
+execution reading a completed upstream step failed**, which for this study is every LLM arm. Fixed by
+passing the unnarrowed map, and the predicate behind it closed separately: a `read_upstream` naming a
+step the run does not have is now `E-STEP-READ-UNKNOWN` rather than a silent read of the run-scoped
+directory.
+
+**What is still not measured.** Twelve of the fourteen configs have not executed, and every Azure
+cost figure below is arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, and they left it by
 one run rather than by argument — the `.transcript.jsonl` writer has now been driven by a write,
 `envelope` and `model_version` have been recorded from real calls, and there is a latency anchor.
 `system_fingerprint` stays on it and may stay for good: Ollama returns none, so only a hosted
