@@ -2115,7 +2115,7 @@ where a superseded reading belongs.
 ### Measured on 2026-09-10 against `publishable` commit `9a7844c`
 
 Also pinned: the plan at `growth-chart-literacy@dc23ab6`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@83609e5` and `publishable-growth-chart@fac2295`. The previous revision
+`2026-08-28-gcl-measurement@b56431c` and `publishable-growth-chart@fac2295`. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
@@ -2573,9 +2573,18 @@ unexercised through every earlier revision, which is why they were run against t
 rather than reasoned about. `report` renders a run and a bundle; `diff` reports the three hashes with
 a field-by-field parameter breakdown; `study new` and `study add` build a bundle from the two
 executed non-LLM arms; `freeze` re-probes a crashed directory and reports the digest unchanged.
-`reproduce` refuses with `E-REPRODUCE-NO-REMOTE` — **the study repository has no git remote**, so the
-command a collaborator runs cannot work for any run this study produces until it has one, which is a
-decision the study owes rather than a defect in either.
+`reproduce` refused with `E-REPRODUCE-NO-REMOTE`, because the study repository had no git remote —
+so the command a collaborator runs could not work for any run this study produces. **It has one now**
+(`seouri/gcl-measurements`, private), and `reproduce` was re-measured against a fresh run: it clones
+from GitHub, checks out the recorded commit detached, verifies the code hash and prints the commands
+to re-run it. Six of six exercised, and this one moved from refusing to working inside the same
+measurement.
+
+**Adding the remote repairs no record written before it.** `provenance.git.remote` is read at run
+time and stored, so every earlier run still carries `null` and still refuses; core's fallback for
+them — `git checkout --detach <sha>`, in a copy of the repository you already have — is all they will
+ever offer. That is the three-hash discipline applied to lineage: a record describes the tree as it
+was, and a repository that acquires a remote afterwards has not changed what the record said.
 
 **`resume` failed, and the defect was core's.** The resumed execution died on `FileNotFoundError` for
 `shared/step02_serialize/prompts.json`, a path that condition-scoped step never wrote to.
