@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `7e3a148`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `69e4102`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -2114,7 +2114,7 @@ where a superseded reading belongs.
 
 ### Measured on 2026-09-10 against `publishable` commit `9a7844c`
 
-Also pinned: the plan at `growth-chart-literacy@7e3a148`, and the two sibling repositories at
+Also pinned: the plan at `growth-chart-literacy@69e4102`, and the two sibling repositories at
 `2026-08-28-gcl-measurement@c1f8191` and `publishable-growth-chart@fac2295`. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
@@ -2621,6 +2621,36 @@ carrying 0.67 directly. The delivered drop measures +0.654 z where it measured 1
 one: it asserted `channels * CHANNEL_Z`, so it agreed with the conversion instead of checking the
 dose, and was blind to both defects it sat beside. A registered value reached the plan a day before it
 reached the code, and the check between them was written in the units of the bug.
+
+**Both preregistration items that gated this study are now fixed, and neither was closed by
+argument.** Item 5's five parts are settled — the counted specialty set is a mapping over 119
+`requested_specialty` values rather than three names, chosen after measuring that the pediatric
+variants add 326 patients for nothing and that a fixed-index scheme would discard 63% of controls;
+the matched index is risk-set sampling with a ±1-year enrolment caliper, which leaves a mean of
+39,663 eligible controls per case and no case unmatchable; and the serialized trajectory ends **three
+months before the index**, with the index-ending window registered as a sensitivity analysis. That
+last one was decided on a measurement this analysis had no way to anticipate: **height measurement
+runs at 2.94× its baseline rate in the three months before a referral and below baseline on either
+side of that window**, so a trajectory ending at the index carries a care-process signal produced by
+the outcome itself — entering through the door §E5 exists to watch.
+
+**One decision was forced by a deadlock in the plan's own decision rule**, and it is worth recording
+because it is a shape core cannot see. §E1 regenerates a stimulus category whose panel agreement
+falls below 90%. At item 4's registered dose against a within-child variance calibrated to the
+cohort, 13.5% of E4b's *concerning* curves drift upward — so over a 20-curve category, where the rule
+allows two disagreements, 2.7 are expected and the category fails with probability 0.52 to 0.95 from
+construction alone. **Regeneration could not repair it**, because the variance is calibrated rather
+than chosen, and the dose could not be raised without abandoning the citation item 4 rests on. The
+resolution was to notice that §E1 was asking a between-subject question of a within-subject arm:
+E4b's two categories are now adjudicated as **20 within-subject pairs**, one scaffold under both
+physiologies, where a curve whose manipulation did not land becomes a *tie* rather than a
+disagreement.
+
+**Neither of those is a `publishable` concern, and that is the point of recording them here.** Core
+executes a declared design; it has no opinion about whether a panel's decision rule terminates, and
+`validate` cannot know that a category will fail a bar for a reason regeneration cannot fix. This
+analysis exists to press a real project against the schema, and the last two days have pressed hardest
+on the parts of a study that the schema deliberately does not model.
 
 **What is still not measured.** Twelve of the fourteen configs have not executed, and every Azure
 cost figure below is arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, and they left it by
