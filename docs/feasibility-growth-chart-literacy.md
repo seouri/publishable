@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `dc23ab6`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `7e3a148`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -140,7 +140,7 @@ publishable-growth-chart/
 
 ## The stimulus arm has to be constructed somewhere
 
-`growth_screen` declares six parameters that describe **what trajectory the model is shown** rather than how it is rendered — `stimulus.source`, `stimulus.physiology`, `stimulus.schedule`, `stimulus.crossing_channels`, `stimulus.resample_noise` and `stimulus.height_availability` — and six of the fourteen configs sweep one or both of the first two as *the axis under test*: [E4b](#e4b--the-physiology-preserving-counterfactual), [E5a](#e5a--the-schedule-density-ladder), [E5b](#e5b--the-graded-negative-control), [E7](#e7--the-2--2-synthesis), [E9](#e9--age-dependent-norm-application) and [E10](#e10--cross-model-generalization).
+`growth_screen` declares six parameters that describe **what trajectory the model is shown** rather than how it is rendered — `stimulus.source`, `stimulus.physiology`, `stimulus.schedule`, `stimulus.crossing_z`, `stimulus.resample_noise` and `stimulus.height_availability` — and six of the fourteen configs sweep one or both of the first two as *the axis under test*: [E4b](#e4b--the-physiology-preserving-counterfactual), [E5a](#e5a--the-schedule-density-ladder), [E5b](#e5b--the-graded-negative-control), [E7](#e7--the-2--2-synthesis), [E9](#e9--age-dependent-norm-application) and [E10](#e10--cross-model-generalization).
 
 **The last two are E5a's constraints, and they are parameters because the plan made them requirements.** "Holding the growth signal fixed" is a claim about the latent curve; the plan states three conditions under which it is also true of the *displayed evidence* — deviation-preserving, noise-matched, availability-matched — and each has a reader. `resample_noise` decides whether interpolated points come back carrying measurement error at the within-child SD, so that a dense arm cannot be identified by being smoother than a sparse one. `height_availability` holds the share of displayed visits carrying a height at the cohort's 53.8% in every arm, so that densifying a schedule does not also make the record more complete. **Deviation-preserving is not a parameter**, and the asymmetry is the interesting part: the visits across which a crossing becomes legible are retained in every density arm unconditionally, because an arm that could switch it off would be an arm whose sparse condition measures something else.
 
@@ -477,7 +477,7 @@ parameters:
     source: synthetic_physiology
     physiology: concerning
     schedule: typical
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -595,7 +595,7 @@ parameters:
     source: synthetic_physiology
     physiology: concerning
     schedule: typical
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -715,7 +715,7 @@ parameters:
     source: observed
     physiology: as_recorded
     schedule: as_recorded
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -832,7 +832,7 @@ parameters:
     source: synthetic_physiology
     physiology: healthy
     schedule: as_recorded
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -955,7 +955,7 @@ parameters:
     source: synthetic_schedule
     physiology: as_recorded
     schedule: typical
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1072,7 +1072,7 @@ parameters:
     source: synthetic_negative
     physiology: true_negative
     schedule: typical
-    crossing_channels: 0.0
+    crossing_z: 0.0
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1190,7 +1190,7 @@ parameters:
     source: observed
     physiology: as_recorded
     schedule: as_recorded
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1299,7 +1299,7 @@ parameters:
     source: observed
     physiology: as_recorded
     schedule: as_recorded
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1515,7 +1515,7 @@ parameters:
     source: synthetic_physiology
     physiology: healthy
     schedule: sparse
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1673,7 +1673,7 @@ parameters:
     source: synthetic_physiology
     physiology: concerning
     schedule: typical
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1799,7 +1799,7 @@ parameters:
     source: synthetic_physiology
     physiology: concerning
     schedule: typical
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -1929,7 +1929,7 @@ parameters:
     source: synthetic_physiology
     physiology: healthy
     schedule: sparse
-    crossing_channels: 2.0
+    crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
   truth:
@@ -2114,8 +2114,8 @@ where a superseded reading belongs.
 
 ### Measured on 2026-09-10 against `publishable` commit `9a7844c`
 
-Also pinned: the plan at `growth-chart-literacy@dc23ab6`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@b56431c` and `publishable-growth-chart@fac2295`. The previous revision
+Also pinned: the plan at `growth-chart-literacy@7e3a148`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@c1f8191` and `publishable-growth-chart@fac2295`. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
@@ -2595,6 +2595,33 @@ passing the unnarrowed map, and the predicate behind it closed separately: a `re
 step the run does not have is now `E-STEP-READ-UNKNOWN` rather than a silent read of the run-scoped
 directory.
 
+**Two registration items closed on 2026-09-10 and 2026-09-11, and closing the first found a third
+thing.** Item 4 fixes the concerning/healthy boundary at a sustained shift of **0.67 z over 2 years**,
+identical in both age bands — Wright's one-space tracking band, with the peripubertal half registered
+as E9's *matched stimulus* rather than a second threshold, since E9 asserts that band is normal.
+§E5b's benign excursion followed at **0.56 channels (0.335 z)**, within-channel, no duration: the
+resolving-shift reading was dropped because its source ends "within the first 2 years of life", a
+window this study excludes.
+
+**What that unblocked, measured.** The panel packet's refusal went from four categories to one to
+none: it now assembles **110 charts across all seven categories**, with no category word in the
+visible text of any of them and a manifest accounting for every curve. `verify-strata` at the
+registered values reports a benign within-SD excess of **9.2%** and PASS.
+
+**And what it exposed, which is the part worth carrying.** All fourteen configs declared
+`stimulus.crossing_channels: 2.0`, which the study's constructor multiplied by a hard-coded 0.67 for
+a **1.34 z drift — double the dose item 4 had just registered**, and the age-invariant "two channels"
+§E4b names as the contradiction item 4 exists to resolve. Worse, "a channel" meant 0.67 z in that
+constructor and 0.5992 z in the plan's own generator, so one field named two quantities across two
+implementations of one model. **A dose carried in a unit two implementations define differently is a
+dose that drifts**, which is why item 4 was stated in z — and the field is `stimulus.crossing_z` now,
+carrying 0.67 directly. The delivered drop measures +0.654 z where it measured 1.34.
+
+**The test that should have caught it could not**, and that is the recurring shape rather than a new
+one: it asserted `channels * CHANNEL_Z`, so it agreed with the conversion instead of checking the
+dose, and was blind to both defects it sat beside. A registered value reached the plan a day before it
+reached the code, and the check between them was written in the units of the bug.
+
 **What is still not measured.** Twelve of the fourteen configs have not executed, and every Azure
 cost figure below is arithmetic rather than an anchor. **Three items left that list on 2026-09-10**, and they left it by
 one run rather than by argument — the `.transcript.jsonl` writer has now been driven by a write,
@@ -2930,7 +2957,17 @@ class GrowthScreenTemplate(BaseTemplate):
                                               "true_negative"]),
         "stimulus.schedule": Param(str, default="as_recorded",
                                    choices=["as_recorded", "sparse", "typical", "dense"]),
-        "stimulus.crossing_channels": Param(float, default=2.0, ge=0.0, le=5.0),
+        # **z, not channels, and the rename is the point.** This was
+        # `crossing_channels` with a default of 2.0, which the constructor
+        # multiplied by a hard-coded 0.67 — so every concerning trajectory
+        # drifted 1.34 z, double the 0.67 z pre-registration item 4 fixes,
+        # and "a channel" meant 0.67 z here against the plan generator's
+        # measured 0.5992 z for the same band. A dose carried in a unit two
+        # implementations define differently is a dose that drifts; item 4
+        # is stated in z for that reason and this field now matches it.
+        "stimulus.crossing_z": Param(float, default=0.67, ge=0.0, le=3.0,
+                                     help="Sustained shift in z for a concerning "
+                                          "trajectory; pre-registration item 4"),
         "stimulus.resample_noise": Param(
             str, default="matched", choices=["matched", "none"],
             help="Noise-matched resampling: interpolated points carry the within-child "
