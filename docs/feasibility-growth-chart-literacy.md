@@ -2124,20 +2124,21 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `ca77360`
+### Measured on 2026-09-12 against `publishable` commit `a55ba5d`
 
 Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@0788387` and `publishable-growth-chart@fac2295`. **This is the second
-measurement on 2026-09-12 and it supersedes the first**, whose pins were `ca77360`'s parent and
-`2a8c9e6`; the date alone does not separate them, which is the argument for pinning commits rather
-than dates made by the first case where a date could not. The previous revision
+`2026-08-28-gcl-measurement@0e3b97e` and `publishable-growth-chart@fac2295`, with the plan at
+`growth-chart-literacy@b1b83c4`. **This is the third measurement on 2026-09-12 and it supersedes both
+earlier ones**, whose pins were `1e6c000`/`2a8c9e6` and `ca77360`/`0788387`; the date alone separates
+none of the three, which is the argument for pinning commits rather than dates made three times over
+in one day. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
 **Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced five commits from `9a7844c` to `ca77360`, and `git diff 9a7844c..ca77360 -- src templates`
-is **empty**: all five are re-measurements of this very document. `code_hash` covers `src/**` and
+advanced six commits from `9a7844c` to `a55ba5d`, and `git diff 9a7844c..a55ba5d -- src templates`
+is **empty**: all six are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
 `templates/**` only, so a run at either commit computes the same one, and every result below is
 carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
 What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
@@ -2296,20 +2297,40 @@ core rather than of the plan, and neither in a release yet; see the paragraph ab
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (307 lines),
-one `src/growth_chart/` package (3,832 lines over sixteen modules, seven step bodies and three prompt
-files) with 3,482 lines of tests, **fourteen** configs, a 480-line input generator, and a
+one `src/growth_chart/` package (3,841 lines over sixteen modules, seven step bodies and three prompt
+files) with 3,482 lines of tests, a 932-line cohort extractor, **fourteen** configs, a 480-line input generator, and a
 `publishable-growth-chart` plugin from `publishable plugin new` (695 lines, 1,111 of tests) installed
 as an editable dependency — registering one resolver, one probe, and one writer/reader pair, and
 **no** template. `uv run pytest`: **241 passed** in the measurement repository, **59** in the plugin.
 **The basis, stated because its absence is what let the previous numbers drift:** every `*.py` tracked
 under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
 
+**Layer C executes on real patient data, and that is what changed this revision.** Every one of the
+fourteen configs was refused for real-data extraction at the previous pin, thirteen of them solely on
+`visits_pre_index`, under a message saying pre-registration item 5 "is not fixed" — which it had been
+since 2026-09-11. Two different quantities were hiding behind one column name, and
+`truth.label_source` separates them: three arms carry `referral` and need a genuine pre-index count
+on a matched index date; eleven have no index date at all, and for those the quantity is the number
+of eligible visits in the extracted record. **Eleven were unblocked by a definition and three by an
+implementation** — incidence-density sampling over the counted specialty set with a ±1-year enrolment
+caliper and the 12-month look-forward, which reproduces item 5's three structural figures exactly from
+its own code path: **19,815 cases, 14,617 surviving the look-forward, a control pool of 230,773**.
+
+**Eleven extractable is not eleven reading real data, and the distinction is the kind this document
+exists to keep.** Three arms — E2, E4a and E6 — now hold rosters drawn from the cohort: 1,000 units
+over 500 matched sets, and 600 over 300 twice. The other eleven still hold `tools/example_inputs.py`
+output and are *able* to be extracted rather than extracted. What the three buy is the first real
+scaffold any arm has had; what they cost is [below](#the-first-real-completions-and-what-they-cost).
+
 **The basis paid for itself within a day, and this is the demonstration.** Every count above moved
 since the previous measurement, and because the basis is now written down each delta can be
 reconciled against the commit that produced it rather than taken on trust: `src/growth_chart`
 3,820 → 3,832 against `construct.py`'s diff of +23/−11 = **+12**, and `tests` 3,300 → 3,482 against
 `test_plan_parity.py`'s 170 new lines plus `test_construct.py`'s +12 = **+182**. Both reconcile
-exactly. The previous revision's counts could not be checked this way — that is what made them
+exactly, and so does this revision's own movement: `src/growth_chart` 3,832 → **3,841** against
+`step01_summarize_units.py`'s +21/−7 plus `construct.py`'s +2 = **+9**, with `tests` unchanged at
+3,482 because the sampler's checks live in `cohort_inputs.py`'s own `verify` rather than in
+`tests/`. The previous revision's counts could not be checked this way — that is what made them
 drift undetected through several pins, and it is why the sentence above exists.
 
 **Every count in the paragraph above was wrong, and re-measuring is the only thing that could have
@@ -2382,8 +2403,30 @@ are citable rather than drafts (`draft: false`, `git.code_dirty: false`):
 | [E2](#e2--the-utilization-baseline) | `auroc_count_only` **0.642**, `ci95` [0.605, 0.678] over 1,000 patients; `supported: true` on `ci95_lower` against 0.5 | `reported` — a `summary`-step `Estimate` |
 | [E6](#e6--the-non-llm-comparator) | `auroc` delta **0.0**, `ci95` [0.0, 0.0], `method: paired_percentile_over_units_clustered`, `n_paired: 595` over 300 clusters; `supported: false` | `computed` — core built the contrast |
 
-**Both were re-executed at `0788387` and every number above is unchanged, while both `code_hash`es
-moved.** E2 returns `auroc_count_only` 0.6415 with `ci95` [0.6054, 0.6784] over 1,000 patients and E6
+**E6 has since been re-executed on the real cohort, and the answer moved.** Against its real roster —
+600 units over 300 matched sets, gapped window, seed `20260912` — the `auroc` contrast reads **delta
+−0.0636 over `n_paired` 562**, `supported: true`, still `computed`. The **0.0** in the table above is
+the synthetic fixture's, and it is kept as what the real number replaced rather than overwritten: a
+delta of exactly zero was the fixture agreeing with itself, and the point of the row was always that
+core built the contrast rather than that the contrast was zero.
+
+**E2 has not been re-run, and its record is now orphaned.** The extraction replaced `e02`'s
+`index.csv` and `visits.csv` with real ones, so the `input_manifest_hash` its stored record carries —
+`1517ae84…` — describes a file set that no longer exists on disk. The row above is therefore a
+verdict against vanished inputs, and it is labelled rather than repaired. Re-running it would produce
+E2's registered endpoint, which is a decision for the study and not a tidying-up this document gets
+to perform.
+
+**Three hashes, three different reasons to move, in one revision.** This is the sharpest instance the
+document has recorded of why they are split. `code_hash` moved because the generator was realigned to
+the plan — code the comparator arms never call. `input_manifest_hash` moved for three arms because
+their rosters became real. And only the second changed an answer: E6's delta went from 0.0 to −0.0636
+with the same code, while last revision's `code_hash` move left every number identical. **Same code,
+different inputs, different answer — and the record says which**, where a single run identity would
+have said only that something moved.
+
+**Both were re-executed at `0788387` and every number above was unchanged then, while both
+`code_hash`es moved.** E2 returns `auroc_count_only` 0.6415 with `ci95` [0.6054, 0.6784] over 1,000 patients and E6
 returns the same three contrasts, `n_paired: 595` over 300 clusters, to the digit. What changed is
 provenance: E2's record carried `code_hash` `6f474d8…` and E6's `097865f…`, and both now read
 `018273d…`, because `construct.py` moved when the generator was realigned. **Those are different
@@ -2711,8 +2754,7 @@ height *floor* and both weight bounds came off with it: 575 height and 869 weigh
 item-6 range before a trajectory is serialized and drops those rows — 677 of 3,801,473 at age 2 or
 above, 0.018%. But the range is now enforced by the study rather than by the data as distributed, and
 that is a Methods sentence rather than a pipeline change. This is the first real-data anchor this
-document has had that is a delivery rather than a date, and nine of the fourteen runs read a real
-trajectory or scaffold.
+document has had that is a delivery rather than a date — and as of this revision it is consumed rather than merely accepted: the three Layer C rosters are drawn from this bundle, through the item-6 range the study now enforces itself.
 
 **The roster resolves, and the primary is `gpt-5.6-sol`.** The plan makes the largest Azure
 deployment primary and says every experiment implying a single model means that one, so the twelve
@@ -2820,7 +2862,7 @@ prompt is implemented, and one checkpoint has answered. What remains is not tool
 | Gate | What it holds | Measured by |
 |---|---|---|
 | **Item 4** — the age-conditioned concerning/healthy boundary | Seven of the twelve LLM configs declare `physiology: concerning` somewhere, including E3, the root of Layer A; so does E9's matched-magnitude pair. Nothing constructs a deviation without it | `generate_trajectories.py` and `panel_packet.py` both refuse, naming the item |
-| **Item 5** — the referral label, its index date and the window | Every config that reads a real trajectory | `cohort_inputs.py` refuses **all fourteen**, because every one declares `visits_pre_index` |
+| **Item 5** — the referral label, its index date and the window | Every config that reads a real trajectory | Fixed 2026-09-11 and implemented 2026-09-12. `cohort_inputs.py` refuses the **three** arms carrying `truth.label_source: referral` only while their sampler is unbuilt — it is built, so it refuses none; the other eleven declare `visits_pre_index` with no index date, and it is the record's own visit count for them |
 
 **The second measurement is the one worth carrying, and it is a finding about the configs rather
 than about core.** The study's ingestion path was written this week and, run against the real
