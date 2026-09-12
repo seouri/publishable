@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `22d1b24`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `dd4bd5f`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -2124,21 +2124,23 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `a55ba5d`
+### Measured on 2026-09-12 against `publishable` commit `07ea429`
 
 Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
 `2026-08-28-gcl-measurement@0e3b97e` and `publishable-growth-chart@fac2295`, with the plan at
-`growth-chart-literacy@b1b83c4`. **This is the third measurement on 2026-09-12 and it supersedes both
-earlier ones**, whose pins were `1e6c000`/`2a8c9e6` and `ca77360`/`0788387`; the date alone separates
-none of the three, which is the argument for pinning commits rather than dates made three times over
-in one day. The previous revision
+`growth-chart-literacy@dd4bd5f`. **This is the fourth measurement on 2026-09-12 and it supersedes the
+three earlier ones**, pinned at `1e6c000`/`2a8c9e6`, `ca77360`/`0788387` and `a55ba5d`/`0e3b97e`; the
+date separates none of the four, which is the argument for pinning commits rather than dates made
+four times over in one day. **Only the plan moved this time** — the measurement tree and the plugin
+are unchanged, and `publishable`'s hashed trees are byte-identical to `9a7844c` across seven commits —
+so what follows re-reads a specification rather than re-running a tool. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
 **Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced six commits from `9a7844c` to `a55ba5d`, and `git diff 9a7844c..a55ba5d -- src templates`
-is **empty**: all six are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
+advanced seven commits from `9a7844c` to `07ea429`, and `git diff 9a7844c..07ea429 -- src templates`
+is **empty**: all seven are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
 `templates/**` only, so a run at either commit computes the same one, and every result below is
 carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
 What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
@@ -2818,8 +2820,10 @@ one: it asserted `channels * CHANNEL_Z`, so it agreed with the conversion instea
 dose, and was blind to both defects it sat beside. A registered value reached the plan a day before it
 reached the code, and the check between them was written in the units of the bug.
 
-**Both preregistration items that gated this study are now fixed, and neither was closed by
-argument.** Item 5's five parts are settled — the counted specialty set is a mapping over 119
+**Both preregistration items that gated this study on 2026-09-11 are fixed, and neither was closed
+by argument.** (All eight are fixed as of 2026-09-12; the last two are
+[below](#executability-on-this-build). This paragraph is about the two that were gating when it
+was written, and "both" counts those rather than the list.) Item 5's five parts are settled — the counted specialty set is a mapping over 119
 `requested_specialty` values rather than three names, chosen after measuring that the pediatric
 variants add 326 patients for nothing and that a fixed-index scheme would discard 63% of controls;
 the matched index is risk-set sampling with a ±1-year enrolment caliper, which leaves a mean of
@@ -2855,30 +2859,64 @@ one run rather than by argument — the `.transcript.jsonl` writer has now been 
 `system_fingerprint` stays on it and may stay for good: Ollama returns none, so only a hosted
 completion can supply one.
 
-**What blocks the rest is now two named registration items, and that is a sharper answer than this
-section could give before.** The roster, the prompt and the variable derivations are specified, the
-prompt is implemented, and one checkpoint has answered. What remains is not tooling:
+**Nothing on the preregistration list blocks anything any more: all eight items are fixed.** The two
+that gated this study when the section was last written — item 4's concerning/healthy boundary and
+item 5's referral label — were fixed on 2026-09-11 and implemented on 2026-09-12. The last two,
+**items 1 and 2, were registered on 2026-09-12**, and they are the interesting ones here because
+neither was closed by picking a number.
 
-| Gate | What it holds | Measured by |
+| Item | What it fixed | How it was decided |
 |---|---|---|
-| **Item 4** — the age-conditioned concerning/healthy boundary | Seven of the twelve LLM configs declare `physiology: concerning` somewhere, including E3, the root of Layer A; so does E9's matched-magnitude pair. Nothing constructs a deviation without it | `generate_trajectories.py` and `panel_packet.py` both refuse, naming the item |
-| **Item 5** — the referral label, its index date and the window | Every config that reads a real trajectory | Fixed 2026-09-11 and implemented 2026-09-12. `cohort_inputs.py` refuses the **three** arms carrying `truth.label_source: referral` only while their sampler is unbuilt — it is built, so it refuses none; the other eleven declare `visits_pre_index` with no index date, and it is the record's own visit count for them |
+| **2** — E3's format-selection rule | the spread threshold at **8 points**, and feature derivation fixed a priori to `derived` | two of its three named parts were already settled in §E3 and unmarked; the threshold moved from `~10` on a measured operating characteristic, and a **fourth part the item never listed** was found by asking what the rule hands downstream |
+| **1** — E1's decision rule and realism check | disagreement **coded** as construction fault or interpretation difference, and **30 real distractors** read on balanced accuracy | the unscoped rule was a deadlock; construction noise in the five single-curve categories is zero, so every disagreement was clinical judgement being sent to a generator that would redraw the identical distribution |
 
-**The second measurement is the one worth carrying, and it is a finding about the configs rather
-than about core.** The study's ingestion path was written this week and, run against the real
-attribute lists, it declines every arm: `visits_pre_index` is defined in the plan as a pre-index
-count on a matched index date, and six configs declare it while carrying `truth.label_source: none`,
-so they have no index for it to count against at all.
+**Both were closed by changing what a rule counts rather than what it tolerates, and that is the
+transferable part.** Item 2's threshold was not lowered because 10 was unreachable — it is an
+excellent guard, firing on noise twice in a thousand — but because it caught a real ten-point effect
+only 65% of the time, and the two errors are not equally costly: a false fire is a caveat, a missed
+one publishes seven experiments whose findings are serialization artifacts without saying so. Item 1's
+threshold was not lowered at all; it was scoped to the fault regeneration can actually repair, because
+lowering it to 80% would have bought session completion by admitting two curves in ten that do not
+carry their meaning — weakening exactly the claim the bar protects.
 
-**Core would catch that too.** These configs draw from `{resolver: growth_trajectory}`, and
-`data.units.attributes` naming a value no unit a resolver yielded is
+**Each closure found a surface with readers and no registration**, which is this project's recurring
+defect seen twice more in one day. Item 2's was `features: derived`, pinned in seven configs and
+registered nowhere, inherited by every downstream arm. Item 1's was the disagreement coding itself,
+which had no column on the adjudication form until the packet was rebuilt — a registered distinction
+with nowhere to be written down.
+
+**E1's packet now answers both of its clauses.** It builds 140 charts: 110 synthetic across seven
+categories, plus 30 real distractors drawn from a `cohort_inputs.py` extract. The matching is the
+substance rather than the plumbing — a chart's axes are computed from the data it plots, so an
+unmatched distractor is separable on the x-axis before a reader looks at the trajectory. **A first
+matcher was wrong in a way only measurement caught**: drawing a random synthetic target and retrying
+when the pool could not supply one self-selects toward low visit counts, and reached a dot-count AUC
+of **0.654** against the quantile matcher's **0.551**. That is above the 0.65 the realism check is
+powered to detect, so the packet would have failed the check on its own sampling rather than on the
+generator — the precise inversion the check exists to prevent.
+
+**What remains is not registration and not tooling.** E3 is the root of the core, depends on nothing,
+validates, and its deployment probes answer; it blocks E4b, E5, E6, E7, E8, E9 and E10 and can be run.
+E1 needs clinicians, which no amount of specification supplies. That is a different kind of answer
+from the one this section gave at every earlier pin, where the blocker was always something the study
+could write down.
+
+**One earlier reading of this section is superseded and worth naming, since it was stated as a
+finding.** It read: *the study's ingestion path declines every arm — `visits_pre_index` is defined as
+a pre-index count on a matched index date, and six configs declare it while carrying
+`truth.label_source: none`.* The count was **eleven** rather than six once `by_construction` was
+counted alongside `none`, and the question it called the plan's has been answered: for an arm with no
+index date the quantity is the record's own visit count, registered on 2026-09-12. The observation
+that core surfaces rather than absorbs the ambiguity stands, and is restated below.
+
+**Core would catch a wrong answer here too.** These configs draw from `{resolver: growth_trajectory}`,
+and `data.units.attributes` naming a value no unit a resolver yielded is
 [`E-UNITS-ATTR-MISSING`](reference.md#errors-validate-reports) — met at `validate`, because `validate`
 dispatches a declared resolver to resolve the roster, and again at `run`, `draft` and `dry-run`, since
 a resolver is user code that may yield different attributes on a later call. So a roster resolved
-without that attribute is refused rather than silently dropping it and completing. That is the right behaviour and it is
-worth stating as a positive result: **the ambiguity the study owes an answer to is one the schema
-surfaces rather than absorbs.** What core cannot do is notice that a *declared and supplied* column
-means one thing in Layer C and nothing in Layer A, which is why the question is the plan's.
+without that attribute is refused rather than silently dropping it and completing. **What core cannot
+do is notice that a *declared and supplied* column means one thing in Layer C and another in Layer A**,
+which is why that question was the plan's and why answering it took a registration rather than a fix.
 
 ### The first real completions, and what they cost
 
