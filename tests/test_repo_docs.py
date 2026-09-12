@@ -130,29 +130,89 @@ def test_every_document_this_pass_governs_is_present():
     assert len(DOCUMENTS) >= len(_EXPECTED)
 
 
+def _links(text: str) -> list[tuple[int, str]]:
+    """Every markdown link target outside a fence, with the line it starts on.
+
+    **Over contiguous runs of prose rather than line by line, because a link
+    label wraps.** This repository's prose has no hard line breaks inside a
+    paragraph, so a long label routinely lands as `[§ What one\nrepository
+    costs](#anchor)` — and a per-line regex cannot match across that newline, so
+    every wrapped link was invisible to the checker below. Two of them shipped
+    with a broken anchor before this was found, and the checker reported the
+    file clean.
+
+    Runs are joined only where they are adjacent: joining across a fence would
+    let a `[` before a code block pair with a `](...)` after it and invent a
+    link neither paragraph contains.
+    """
+    runs: list[tuple[int, list[str]]] = []
+    for lineno, (tag, line) in enumerate(_tag_fences(text), 1):
+        if tag != "TEXT":
+            runs.append((-1, []))
+            continue
+        if runs and runs[-1][0] != -1:
+            runs[-1][1].append(line)
+        else:
+            runs.append((lineno, [line]))
+    out = []
+    for start, lines in runs:
+        if start == -1:
+            continue
+        blob = "\n".join(lines)
+        for m in re.finditer(r"\[([^\]]*)\]\(([^)\n]+)\)", blob):
+            out.append((start + blob[: m.start()].count("\n"), m.group(2).strip()))
+    return out
+
+
 @pytest.mark.parametrize("path", DOCUMENTS, ids=_rel)
 def test_every_link_and_anchor_resolves(path: Path):
     """Relative links, self anchors, and cross-file anchors, outside fences."""
     broken = []
     own = set(_anchors(path))
-    for lineno, (tag, line) in enumerate(_tag_fences(path.read_text(encoding="utf-8")), 1):
-        if tag != "TEXT":
+    for lineno, target in _links(path.read_text(encoding="utf-8")):
+        if target.startswith(("http://", "https://", "mailto:")):
             continue
-        for _, target in re.findall(r"\[([^\]]*)\]\(([^)]+)\)", line):
-            target = target.strip()
-            if target.startswith(("http://", "https://", "mailto:")):
-                continue
-            file_part, _, anchor = target.partition("#")
-            if not file_part:
-                if anchor not in own:
-                    broken.append(f"{_rel(path)}:{lineno} self anchor #{anchor}")
-                continue
-            resolved = (path.parent / file_part).resolve()
-            if not resolved.is_file():
-                broken.append(f"{_rel(path)}:{lineno} file {target}")
-            elif anchor and anchor not in set(_anchors(resolved)):
-                broken.append(f"{_rel(path)}:{lineno} cross anchor {target}")
+        file_part, _, anchor = target.partition("#")
+        if not file_part:
+            if anchor not in own:
+                broken.append(f"{_rel(path)}:{lineno} self anchor #{anchor}")
+            continue
+        resolved = (path.parent / file_part).resolve()
+        if not resolved.is_file():
+            broken.append(f"{_rel(path)}:{lineno} file {target}")
+        elif anchor and anchor not in set(_anchors(resolved)):
+            broken.append(f"{_rel(path)}:{lineno} cross anchor {target}")
     assert broken == [], broken
+
+
+def test_a_link_whose_label_wraps_is_still_seen():
+    """The hole `_links` exists to close, pinned so it cannot reopen.
+
+    A per-line regex cannot match `[label\nmore](#target)`, and this repository
+    wraps every long paragraph, so wrapped links were silently unchecked. Two
+    shipped with a bad anchor and the suite stayed green.
+
+    The one-line form is asserted beside the wrapped one so this test cannot
+    pass by seeing nothing, and the fenced case is asserted because the fix
+    joins adjacent lines and joining across a fence would invent links.
+    """
+    wrapped = "see [§ What one\nrepository costs](#one-repository-fourteen-configs) for the price\n"
+    assert _links(wrapped) == [(1, "#one-repository-fourteen-configs")]
+
+    flat = "see [§ What one repository costs](#one-repository-fourteen-configs) now\n"
+    assert _links(flat) == [(1, "#one-repository-fourteen-configs")]
+
+    # the line number is the line the link STARTS on, not the one it ends on
+    later = "filler\nfiller\nsee [a\nb](#x) end\n"
+    assert _links(later) == [(3, "#x")]
+
+    # a fence between the halves must not be joined into a link
+    across = "text [label\n\n```python\nx = 1\n```\n\n](#nope) more\n"
+    assert _links(across) == []
+
+    # and a link inside a fence is content, not structure
+    fenced = "```markdown\n[label](#not-a-link)\n```\n"
+    assert _links(fenced) == []
 
 
 @pytest.mark.parametrize("path", DOCUMENTS, ids=_rel)

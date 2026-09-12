@@ -165,7 +165,7 @@ Three decisions in that shape, each with a reason:
 
 **Determinism comes from the unit key, never from `self.rng`.** A synthetic trajectory must be identical across a condition's repeats and across a `reproduce` of the whole study, so the per-unit offset is a SHA-256 of the key rather than a draw — Python salts `hash()` per process, which would make a trajectory differ between a run and its reproduction, the one thing a fixed stimulus may never do.
 
-**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.84²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.49, calibrated so that the pooled lag-1 autocorrelation reproduces the cohort's measured 0.869. All three are measured quantities, and the pooled figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. Two consequences for a translation:
+**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.9²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.42 and lag-1 correlation 0.57, calibrated so the simulated statistics reproduce the cohort's measured 0.925, 0.349 and 0.921 on the age-2-or-later window. The pooled lag-1 figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. **These are the third set this paragraph has carried, and the first two were live here after the plan retired them** — it described `N(0, 0.84²)`, marginal SD 0.49 and a pooled 0.869 until 2026-09-12, which are the *all-ages* statistics R41 withdrew on 2026-09-05 when the study scoped itself to age 2 and later. **Parameters are not their targets**, which is the distinction R41 exists to draw: a patient's mean carries residual variation, so the between-child SD of patient means exceeds `σ_b`, and a within-sample SD understates the marginal `σ_e` of a positively autocorrelated series. Reading the measured statistics straight in as parameters misses in both directions at once, and this paragraph did it. Two consequences for a translation:
 
 - **The verification the plan pre-specifies is a test, not a run.** "Simulated and real trajectories must match on the three statistics within 10%" is a property of the generator, checked before any arm using synthetic stimuli executes. It has no conditions, no repeats and no units, so it is a function in `src/` with a test beside it — and being in `src/` is what puts it inside `code_hash`, which is the part that matters: preregistration item 8 says a generator tuned after seeing how a model responds to it is not a control, and a hash is what can catch that.
 - **Rounding is part of realism, and it is the kind of thing only a specification catches.** Values are rounded to the source units — quarter inches and ounces — rather than to the converted metric fields, because a synthetic curve carrying three-decimal centimetres where real records carry quarter-inches is separable on rounding alone. The panel's adversarial check is what that would fail, and the panel is the only reader that would have noticed.
@@ -2098,9 +2098,11 @@ know the scope rules before they could see the *name* was the fault. It is now
 cause. **The refusal fires only where a scope map was supplied** — absent scopes are a different
 state from an absent step, and a `StepIO` built without them has no step set to test against.
 
-**16. Two implementations of one specification are kept in step by nothing, and they have now drifted.** This is not a defect in `publishable` and is recorded here because the analysis is what found it, and because the shape generalizes past this study. The plan's `scripts/generate_trajectories.py` and the measurement tree's `src/growth_chart/construct.py` both implement the same generator; they live in different repositories, and the second names the first as its authority in a comment. On 2026-09-12 the plan re-fitted its parameters and `construct.py` did not follow, so the two now hold different constants and different targets. **No check could have caught it**: the plugin's own test compares the simulation against targets imported from the module under test, which passes for any self-consistent pair, and `publishable` never reads a step body — *Greenfield only* — so core cannot compare a constant against a document in a sibling repository. The gap this presses on is that `code_hash` covers `src/**` and `templates/**` of *one* tree, and a specification a second tree claims to implement is outside every hash a run computes. What would close it is a check in the study repository that reads the plan's constants at the plan's pinned commit, which is the study's work rather than core's; what core could offer is nothing, and saying so is the point of recording it here.
+**16. Closed in a sibling — two implementations of one specification were kept in step by nothing, and drifted.** This is not a defect in `publishable` and is recorded here because the analysis is what found it, and because the shape generalizes past this study. The plan's `scripts/generate_trajectories.py` and the measurement tree's `src/growth_chart/construct.py` both implement the same generator; they live in different repositories, and the second names the first as its authority in a comment. On 2026-09-12 the plan re-fitted its parameters and `construct.py` did not follow, so the two now hold different constants and different targets. **No check could have caught it**: the plugin's own test compares the simulation against targets imported from the module under test, which passes for any self-consistent pair, and `publishable` never reads a step body — *Greenfield only* — so core cannot compare a constant against a document in a sibling repository. The gap this presses on is that `code_hash` covers `src/**` and `templates/**` of *one* tree, and a specification a second tree claims to implement is outside every hash a run computes. **Closed at `2026-08-28-gcl-measurement@0788387`** — in a sibling, not in this tree, which the gap said from the start was where it belonged: this is not a defect in `publishable` and core could offer nothing. `tests/test_plan_parity.py` reads the plan's six constants and compares them, and it fails rather than skipping when the plan is not beside the repository. **The sentence this paragraph used to end on prescribed the wrong design and is corrected rather than deleted**: it said the check should read the plan's constants *at the plan's pinned commit*, and a commit-equality arm is exactly what was not built. The plan moved four times on 2026-09-12 and one of those touched the generator; pinning would have fired three times for nothing, and the study repository had already deleted a rule of that kind for firing on something legitimate. The check compares the six values and reports the commit as provenance. **The obvious design was the wrong one, which is worth more than the gap was.**
 
-**17. A docstring that cites a retired figure is a reader of a surface that moved, and this one cites the figure its own file retired.** `verify_generator`'s docstring tells a caller to compare against 0.836, 0.487 and 0.869 — the all-ages statistics the plan withdrew under R41 — twelve lines below constants stating 0.909, 0.346 and 0.925. Both are in the same file, both were written by someone reading the same plan, and neither is checked by anything. It is `design-principles.md` § Every declarable field has a reader in the form that rule does not cover: not a declared field with no reader, but a *documented* one whose reader was corrected and whose documentation was not. Recorded rather than fixed, for the reason gap 16 gives.
+**17. Closed, twice over — a docstring citing the figure its own file retired, and this document doing the same.** `verify_generator`'s docstring tells a caller to compare against 0.836, 0.487 and 0.869 — the all-ages statistics the plan withdrew under R41 — twelve lines below constants stating 0.909, 0.346 and 0.925. Both are in the same file, both were written by someone reading the same plan, and neither is checked by anything. It is `design-principles.md` § Every declarable field has a reader in the form that rule does not cover: not a declared field with no reader, but a *documented* one whose reader was corrected and whose documentation was not. **Closed at `0788387`**: the docstring now names `TARGET_BETWEEN_CHILD_SD`, `TARGET_WITHIN_CHILD_SD` and `TARGET_POOLED_LAG1` rather than repeating their values, because a figure written twice is a second copy nothing checks. **Re-measuring then found the same defect here**, in [§ Where the shared machinery lives](#where-the-shared-machinery-lives), which described the generator as `N(0, 0.84²)` at marginal SD 0.49 against a pooled 0.869 — the identical retired set, in this document's own specification-facing prose, while its measurement-facing prose carried the current one. Corrected in the same revision. **The lesson is the sweep, not the fix**: the first pass looked for the retired figures in the tree being measured and not in the document doing the measuring.
+
+**18. A cost that is symmetric is guarded by a trigger stated in one direction.** [§ What one repository costs](#one-repository-fourteen-configs) names the price of keeping fourteen configs in one tree: `code_hash` covers `src/**` and `templates/**` whole, so a commit to any of it moves the recorded hash of every run, including runs that never called the code that changed. It then states a trigger rather than leaving it to judgement — *the first time a comparator commit would move the `code_hash` of a screening run already reported, or block one from starting, E2 and E6 move to a repository of their own.* On 2026-09-12 the mirror image happened: realigning the **generator** moved the `code_hash` of E2's and E6's already-reported runs from `6f474d8…` and `097865f…` to a shared `018273d…`, with every reported number identical. **The trigger is not met and those arms do not move** — it names comparator commits moving screening runs, not the reverse — but the underlying cost does not have a direction, and a trigger that does will fire on half the cases it was written for. This is not a gap in `publishable`: the three-hash split behaved exactly as specified, and it is *because* `parameters_hash` and `input_manifest_hash` held still that the record could say *same parameters, same inputs, different code* rather than leaving a reader to wonder whether the result moved. The gap is in this analysis's own trigger, found by the first instance rather than by re-reading it, which is the same way gap 16 was found.
 
 **What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. What is still missing is the only anchor a cost needs: **no prompt has been run, so there is no token count**, and multiplying an exact request count by a price is not something this document can honestly do.
 
@@ -2116,22 +2118,42 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `1e6c000`
+### Measured on 2026-09-12 against `publishable` commit `ca77360`
 
 Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@2a8c9e6` and `publishable-growth-chart@fac2295`. The previous revision
+`2026-08-28-gcl-measurement@0788387` and `publishable-growth-chart@fac2295`. **This is the second
+measurement on 2026-09-12 and it supersedes the first**, whose pins were `ca77360`'s parent and
+`2a8c9e6`; the date alone does not separate them, which is the argument for pinning commits rather
+than dates made by the first case where a date could not. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
 **Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced four commits from `9a7844c` to `1e6c000`, and `git diff 9a7844c..1e6c000 -- src templates`
-is **empty**: all four are re-measurements of this very document. `code_hash` covers `src/**` and
+advanced five commits from `9a7844c` to `ca77360`, and `git diff 9a7844c..ca77360 -- src templates`
+is **empty**: all five are re-measurements of this very document. `code_hash` covers `src/**` and
 `templates/**` only, so a run at either commit computes the same one, and every result below is
 carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
 What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
 fourteen configs, `dry-run` on all fourteen, both suites, and a byte comparison of all sixteen quoted
-files. The first two reproduced exactly. The last two did not, and are corrected below.
+files. The first two reproduced exactly, as did the byte comparison and both suites'
+passing state; what moved is the counts, the constants, and both recorded `code_hash`es, each
+corrected below.
+
+**Re-measuring found a hole in this repository's own mechanical guard, and it is fixed in this
+commit.** `tests/test_repo_docs.py` extracted markdown links line by line, so a link whose *label*
+wraps — its opening bracket on one line, its closing bracket and target on the next — matched nothing
+and was never resolved. This repository's documents have no hard line breaks inside a paragraph, so a
+long label wrapping is the normal case rather than an edge one, and two links written into this file
+during this revision carried a wrong anchor while the checker reported it clean. `_links` now scans
+contiguous runs of prose and joins only adjacent lines, since joining across a fence would pair an
+opening bracket before a code block with a closing one after it and invent a link neither paragraph
+contains. The fix is pinned by a test that asserts the wrapped form, the flat form, the reported line
+number, the across-a-fence case and the inside-a-fence case — and that test was run against the old
+behaviour and fails on it, rather than being trusted because it passes on the new. **It earned its
+keep immediately**: the first draft of this very paragraph illustrated the defect with a literal
+wrapped link, and the repaired checker refused the file until the illustration was rewritten as
+prose.
 
 **Two of this section's findings are fixes carried in the pinned tree.** The `resume` defect and the
 `read_upstream` predicate behind it were found by exercising the commands recorded above, and both
@@ -2208,19 +2230,46 @@ nine-visit annual schedule:
 | within-child SD | 0.3349 | −3.2% | −4.0% |
 | pooled lag-1 | 0.9267 | +0.2% | +0.6% |
 
-**The finding is the absent check, not the deviation.** That the worst gap is 4.0% and the ±10% band
-still holds is a property of how far *these* targets moved, not of the arrangement; the next
-divergence is bounded by nothing, because nothing measures it. `tests/test_construct.py` compares
+**The finding was the absent check, not the deviation.** That the worst gap was 4.0% and the ±10% band
+still held is a property of how far *those* targets moved, not of the arrangement; the next
+divergence was bounded by nothing, because nothing measured it. `tests/test_construct.py` compares
 `verify_generator`'s output against `TARGET_*` imported from the module under test, so it passes for
 any self-consistent pair of parameters and targets — **including a pair that contradicts the plan**.
 It is a correct check of the fit and blind across the repository boundary, which is the only boundary
 that matters here.
 
-**The same file carries a third generation of the figure.** `verify_generator`'s docstring tells a
-caller to compare its output against "the cohort's 0.836, 0.487 and 0.869" — the *all-ages* statistics
-the plan retired on 2026-09-05 under R41, and the exact conflation R41 exists to name — twelve lines
-below constants stating 0.909 / 0.346 / 0.925 and one repository away from a plan stating 0.925 /
-0.349 / 0.921. Three readings of one quantity in one file, each true of a different day.
+**Both are closed at `2026-08-28-gcl-measurement@0788387`, and the sequence above is kept rather than
+replaced by the outcome.** Predicted, drifted, measured, closed — a paragraph that reported only the
+current state would be a document claiming a check was necessary with nothing showing it. The
+constants now read `σ_b` 0.9, `σ_e` 0.42, `ρ` 0.57 against 0.925 / 0.349 / 0.921, and
+`verify_generator` at that commit produces **0.9455 / 0.3405 / 0.9245** over 6,000 paths — worst
+deviation 2.4%, where the divergent tree's was 4.0%.
+
+**What enforces it is `tests/test_plan_parity.py`, and two of its decisions are the interesting
+part.** It reads the plan's six constants out of `scripts/generate_trajectories.py` and compares the
+numbers; it does **not** assert that the plan sits at a pinned commit, because the plan moved four
+times on 2026-09-12 and only one touched the generator — a commit-equality arm would have fired three
+times for nothing, and a check people learn to ignore is worse than none, which the study repository
+had already established by deleting a rule of exactly that kind. And its reader takes a *path* rather
+than reading a module constant, which is what lets the suite point it at a mutated copy of the plan:
+a reader wired to a constant could only ever demonstrate agreement, never that disagreement is
+caught. **It was shown to fire rather than argued to**: reverting `ρ` to 0.62 in the measurement tree
+fails it with the disagreeing constant and the plan's commit named, while `test_construct.py`'s
+thirty-seven tests pass straight through the same mutation — which is this finding demonstrated
+rather than asserted. An absent plan fails rather than skipping, since a skipped parity check is
+indistinguishable from a passing one.
+
+**The same file carried a third generation of the figure, and this document carried a fourth.**
+`verify_generator`'s docstring told a caller to compare its output against "the cohort's 0.836, 0.487
+and 0.869" — the *all-ages* statistics the plan retired on 2026-09-05 under R41, and the exact
+conflation R41 exists to name — twelve lines below constants stating 0.909 / 0.346 / 0.925 and one
+repository away from a plan stating 0.925 / 0.349 / 0.921. It now names the constants instead, since a
+figure repeated in prose is a second copy nothing checks. **And the fourth was here**: [§ Where the
+shared machinery lives](#where-the-shared-machinery-lives) described the generator as `N(0, 0.84²)`
+at marginal SD 0.49 against a pooled 0.869 — the same retired all-ages set, sitting in this
+document's own specification-facing prose for a week while its measurement-facing prose had the
+current one. Four readings of one quantity across three files, each true of a different day, and the
+only one anything checked was the pair inside `construct.py`.
 
 **What moved before that, and the pattern is worth naming.** This section has been re-measured five
 times in ten days, and the first four were **because implementing something the plan specified
@@ -2241,13 +2290,21 @@ core rather than of the plan, and neither in a release yet; see the paragraph ab
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (307 lines),
-one `src/growth_chart/` package (3,820 lines over sixteen modules, seven step bodies and three prompt
-files) with 3,300 lines of tests, **fourteen** configs, a 480-line input generator, and a
+one `src/growth_chart/` package (3,832 lines over sixteen modules, seven step bodies and three prompt
+files) with 3,482 lines of tests, **fourteen** configs, a 480-line input generator, and a
 `publishable-growth-chart` plugin from `publishable plugin new` (695 lines, 1,111 of tests) installed
 as an editable dependency — registering one resolver, one probe, and one writer/reader pair, and
-**no** template. `uv run pytest`: **237 passed** in the measurement repository, **59** in the plugin.
+**no** template. `uv run pytest`: **241 passed** in the measurement repository, **59** in the plugin.
 **The basis, stated because its absence is what let the previous numbers drift:** every `*.py` tracked
 under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
+
+**The basis paid for itself within a day, and this is the demonstration.** Every count above moved
+since the previous measurement, and because the basis is now written down each delta can be
+reconciled against the commit that produced it rather than taken on trust: `src/growth_chart`
+3,820 → 3,832 against `construct.py`'s diff of +23/−11 = **+12**, and `tests` 3,300 → 3,482 against
+`test_plan_parity.py`'s 170 new lines plus `test_construct.py`'s +12 = **+182**. Both reconcile
+exactly. The previous revision's counts could not be checked this way — that is what made them
+drift undetected through several pins, and it is why the sentence above exists.
 
 **Every count in the paragraph above was wrong, and re-measuring is the only thing that could have
 found it.** The corrections are 256→307, fifteen→sixteen modules, 3,643→3,820, 3,263→3,300, 591→695,
@@ -2317,7 +2374,25 @@ are citable rather than drafts (`draft: false`, `git.code_dirty: false`):
 | | Verdict | Rests on |
 |---|---|---|
 | [E2](#e2--the-utilization-baseline) | `auroc_count_only` **0.642**, `ci95` [0.605, 0.678] over 1,000 patients; `supported: true` on `ci95_lower` against 0.5 | `reported` — a `summary`-step `Estimate` |
-| [E6](#e6--the-non-llm-comparator) | delta **0.0**, `ci95` [0.0, 0.0], `method: paired_percentile_over_units_clustered`, `n_paired: 595` over 300 clusters; `supported: false` | `computed` — core built the contrast |
+| [E6](#e6--the-non-llm-comparator) | `auroc` delta **0.0**, `ci95` [0.0, 0.0], `method: paired_percentile_over_units_clustered`, `n_paired: 595` over 300 clusters; `supported: false` | `computed` — core built the contrast |
+
+**Both were re-executed at `0788387` and every number above is unchanged, while both `code_hash`es
+moved.** E2 returns `auroc_count_only` 0.6415 with `ci95` [0.6054, 0.6784] over 1,000 patients and E6
+returns the same three contrasts, `n_paired: 595` over 300 clusters, to the digit. What changed is
+provenance: E2's record carried `code_hash` `6f474d8…` and E6's `097865f…`, and both now read
+`018273d…`, because `construct.py` moved when the generator was realigned. **Those are different
+facts and the split between the three hashes is what keeps them apart** — `parameters_hash` and
+`input_manifest_hash` are untouched, so the record says *same parameters, same inputs, different
+code*, which is exactly true and is not a claim that the result moved.
+
+**It also meets the shape of a cost this analysis states in one direction only.** [§ What one
+repository costs](#one-repository-fourteen-configs) frames it as E2's and E6's commits moving the
+`code_hash` of screening runs that never called their code, and states the trigger for splitting them
+out as *the first time a comparator commit would move the `code_hash` of a screening run already
+reported*. What happened is the mirror: a **generator** commit moved two already-reported
+**comparator** runs' hashes. **The stated trigger is therefore not met and E2 and E6 do not move** —
+but the cost is symmetric and the trigger is written as though it were not, which is a defect in the
+trigger rather than in the arrangement, and one that only a first instance was ever going to find.
 
 **One of those two numbers did not move when the generator did, and the reason is worth a sentence
 rather than a shrug.** Realigning the calibration changed every z value in every roster, and E2's
