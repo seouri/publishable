@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `69e4102`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `22d1b24`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -2098,6 +2098,10 @@ know the scope rules before they could see the *name* was the fault. It is now
 cause. **The refusal fires only where a scope map was supplied** — absent scopes are a different
 state from an absent step, and a `StepIO` built without them has no step set to test against.
 
+**16. Two implementations of one specification are kept in step by nothing, and they have now drifted.** This is not a defect in `publishable` and is recorded here because the analysis is what found it, and because the shape generalizes past this study. The plan's `scripts/generate_trajectories.py` and the measurement tree's `src/growth_chart/construct.py` both implement the same generator; they live in different repositories, and the second names the first as its authority in a comment. On 2026-09-12 the plan re-fitted its parameters and `construct.py` did not follow, so the two now hold different constants and different targets. **No check could have caught it**: the plugin's own test compares the simulation against targets imported from the module under test, which passes for any self-consistent pair, and `publishable` never reads a step body — *Greenfield only* — so core cannot compare a constant against a document in a sibling repository. The gap this presses on is that `code_hash` covers `src/**` and `templates/**` of *one* tree, and a specification a second tree claims to implement is outside every hash a run computes. What would close it is a check in the study repository that reads the plan's constants at the plan's pinned commit, which is the study's work rather than core's; what core could offer is nothing, and saying so is the point of recording it here.
+
+**17. A docstring that cites a retired figure is a reader of a surface that moved, and this one cites the figure its own file retired.** `verify_generator`'s docstring tells a caller to compare against 0.836, 0.487 and 0.869 — the all-ages statistics the plan withdrew under R41 — twelve lines below constants stating 0.909, 0.346 and 0.925. Both are in the same file, both were written by someone reading the same plan, and neither is checked by anything. It is `design-principles.md` § Every declarable field has a reader in the form that rule does not cover: not a declared field with no reader, but a *documented* one whose reader was corrected and whose documentation was not. Recorded rather than fixed, for the reason gap 16 gives.
+
 **What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. What is still missing is the only anchor a cost needs: **no prompt has been run, so there is no token count**, and multiplying an exact request count by a price is not something this document can honestly do.
 
 
@@ -2112,21 +2116,33 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-10 against `publishable` commit `9a7844c`
+### Measured on 2026-09-12 against `publishable` commit `1e6c000`
 
-Also pinned: the plan at `growth-chart-literacy@69e4102`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@c1f8191` and `publishable-growth-chart@fac2295`. The previous revision
+Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@2a8c9e6` and `publishable-growth-chart@fac2295`. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
-**Two of this section's findings are fixes in the pinned tree, which is a first for this document.**
-The `resume` defect and the `read_upstream` predicate behind it were found by exercising the commands
-recorded above, and both are fixed at `9a7844c` — so unlike the previous revision this one is pinned
-to a tree whose `src/**` moved *because of* what this section measured. The paragraphs reporting them
-describe the tree they were found in and name the commit that repaired it. What moved is a *sibling* repository's
-`templates/growth_screen.py` — the study's tree, not this one — which is why the two templates quoted
-below are re-synced against their files rather than carried forward. That is the three-hash split
+**Core did not move, and the three-hash split is what lets this section say so.** `publishable`
+advanced four commits from `9a7844c` to `1e6c000`, and `git diff 9a7844c..1e6c000 -- src templates`
+is **empty**: all four are re-measurements of this very document. `code_hash` covers `src/**` and
+`templates/**` only, so a run at either commit computes the same one, and every result below is
+carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
+What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
+fourteen configs, `dry-run` on all fourteen, both suites, and a byte comparison of all sixteen quoted
+files. The first two reproduced exactly. The last two did not, and are corrected below.
+
+**Two of this section's findings are fixes carried in the pinned tree.** The `resume` defect and the
+`read_upstream` predicate behind it were found by exercising the commands recorded above, and both
+landed in `9a7844c` — which this pin inherits unchanged, since nothing under the hashed trees has
+moved since. The revision that first pinned them could say core moved *because of* what this section
+measured; this one cannot, and the distinction is worth keeping rather than smoothing, because a
+revision where core did not move is the case in which every carried-forward result is actually safe.
+The paragraphs reporting them describe the tree they were found in and name the commit that repaired
+it. What moved this time is a *sibling* repository's `src/growth_chart/construct.py` and the plan it
+follows — the study's trees, not this one — which is why the divergence below is reported rather than
+the templates re-synced; `templates/` is byte-identical at both sibling pins. That is the three-hash split
 doing its job across repositories: a measurement is of a tree, and this document reads three of
 them. Pinning the plan's own
 commit began with the measurement before that, and the reason stands: every earlier version of this
@@ -2167,18 +2183,44 @@ first instance rather than by assertion:
 
 | What the plan changed | What this tree carried | Now |
 |---|---|---|
-| Calibration targets restated on the age-2-or-later window (R41), and the process **parameters** separated from the sample **targets** they reproduce | the retired all-ages figures, read straight in as parameters — the exact conflation the plan names | `σ_b` 0.87, `σ_e` 0.43, `ρ` 0.62, reproducing 0.909 / 0.346 / 0.925 |
+| Calibration targets restated on the age-2-or-later window (R41), and the process **parameters** separated from the sample **targets** they reproduce | the retired all-ages figures, read straight in as parameters — the exact conflation the plan names | `σ_b` 0.87, `σ_e` 0.43, `ρ` 0.62, reproducing 0.909 / 0.346 / 0.925 — **and the plan has since moved again; see below** |
 | E5b's strata reworded (R45): a stratum is negative because **no sustained shift was applied**, not because no centile line is touched | `unambiguous` damped its noise to a quarter — a curve visibly smoother than a real one, which is the artifact the panel's adversarial half exists to catch | the same measurement variation as every other trajectory |
 | Panel validates **categories**; arms drawing from one inherit | this document said *"nothing upstream of E3 remains"* | E3 waits on the panel, and so does the whole core |
 
-**Measured after realigning: between-child 0.944, within-child 0.332, pooled lag-1 0.931 on the
-plan's own nine-visit annual schedule — all within 4% of its targets, inside its ±10% band.** That is
-worth more than a number agreeing with itself: the plan now carries `scripts/generate_trajectories.py`
-and this tree carries `construct.py`, and **two independent implementations of one specification
-agree to within 4%**. It is also the risk that arrangement creates, which [§ Where the shared
-machinery lives](#where-the-shared-machinery-lives) names in the other direction: two implementations
-eventually disagree, and the only thing that catches it is a check that reads the targets rather than
-the constants.
+**The two implementations have now disagreed, and the previous revision of this paragraph predicted
+it.** It read: *two independent implementations of one specification agree to within 4%* — followed by
+the risk [§ Where the shared machinery lives](#where-the-shared-machinery-lives) names, that they
+eventually disagree and the only thing that catches it is a check reading the targets rather than the
+constants. That is now the state of the tree, so the sentence is withdrawn rather than re-scaled.
+
+On 2026-09-12 the plan re-fitted the generator, because the augmentation re-run raised the height
+ceiling from +3 to +5 and censoring a tail biases the between-child SD *down*. Its parameters moved to
+`σ_b` 0.9, `σ_e` 0.42, `ρ` 0.57 against targets 0.925 / 0.349 / 0.921. **`src/growth_chart/construct.py`
+still carries 0.87 / 0.43 / 0.62 against 0.909 / 0.346 / 0.925** — the retired set — under a comment
+that names the plan's script as "the authority for them".
+
+**Measured, not re-based**, by running `verify_generator` at `2a8c9e6` over 6,000 paths on the plan's
+nine-visit annual schedule:
+
+| statistic | plugin produces | vs. the targets it carries | vs. the plan's targets today |
+|---|---|---|---|
+| between-child SD | 0.9216 | +1.4% | −0.4% |
+| within-child SD | 0.3349 | −3.2% | −4.0% |
+| pooled lag-1 | 0.9267 | +0.2% | +0.6% |
+
+**The finding is the absent check, not the deviation.** That the worst gap is 4.0% and the ±10% band
+still holds is a property of how far *these* targets moved, not of the arrangement; the next
+divergence is bounded by nothing, because nothing measures it. `tests/test_construct.py` compares
+`verify_generator`'s output against `TARGET_*` imported from the module under test, so it passes for
+any self-consistent pair of parameters and targets — **including a pair that contradicts the plan**.
+It is a correct check of the fit and blind across the repository boundary, which is the only boundary
+that matters here.
+
+**The same file carries a third generation of the figure.** `verify_generator`'s docstring tells a
+caller to compare its output against "the cohort's 0.836, 0.487 and 0.869" — the *all-ages* statistics
+the plan retired on 2026-09-05 under R41, and the exact conflation R41 exists to name — twelve lines
+below constants stating 0.909 / 0.346 / 0.925 and one repository away from a plan stating 0.925 /
+0.349 / 0.921. Three readings of one quantity in one file, each true of a different day.
 
 **What moved before that, and the pattern is worth naming.** This section has been re-measured five
 times in ten days, and the first four were **because implementing something the plan specified
@@ -2198,15 +2240,27 @@ now been implemented and are no longer claims this document has to hedge:
 core rather than of the plan, and neither in a release yet; see the paragraph above.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
-two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (256 lines),
-one `src/growth_chart/` package (3,643 lines over fifteen modules, seven step bodies and three prompt
-files) with 3,263 lines of tests, **fourteen** configs, a 480-line input generator, and a
-`publishable-growth-chart` plugin from `publishable plugin new` (591 lines, 846 of tests) installed as
-an editable dependency — registering one resolver, one probe, and one writer/reader pair, and **no**
-template. `uv run pytest`: **236 passed** in the measurement repository, **48** in the plugin. The
-tests have grown faster than the code across these six days — 3,234 lines against 3,609 — and every
-clause implemented in that window was one the plan had written and nobody had built, which is the
-ratio that produces.
+two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (307 lines),
+one `src/growth_chart/` package (3,820 lines over sixteen modules, seven step bodies and three prompt
+files) with 3,300 lines of tests, **fourteen** configs, a 480-line input generator, and a
+`publishable-growth-chart` plugin from `publishable plugin new` (695 lines, 1,111 of tests) installed
+as an editable dependency — registering one resolver, one probe, and one writer/reader pair, and
+**no** template. `uv run pytest`: **237 passed** in the measurement repository, **59** in the plugin.
+**The basis, stated because its absence is what let the previous numbers drift:** every `*.py` tracked
+under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
+
+**Every count in the paragraph above was wrong, and re-measuring is the only thing that could have
+found it.** The corrections are 256→307, fifteen→sixteen modules, 3,643→3,820, 3,263→3,300, 591→695,
+846→1,111, 236→237 and 48→59 — **eight of eight low**, which is the direction this project's stale
+measurements always fail in. Two distinct faults produced them. The templates' 256 was *true*, at
+`30faa6a`, and four commits of prompt and timeout work carried it to 307 while the pin advanced and
+the number did not. But **sixteen modules and 3,643 lines were true at no commit in the last
+twenty-five** — the tree holds sixteen `*.py` at every one of them, and no basis reconciles the
+line count either: excluding `__init__.py` gives thirteen modules and 3,677 lines, counting non-blank
+lines gives 3,248. So these were not carried-forward measurements at all, and the ratio sentence this
+paragraph used to end on — tests growing faster than code, 3,234 against 3,609 — was arithmetic on
+them and is deleted rather than recomputed. **A count with no stated basis cannot be checked, only
+repeated**, which is why the basis is now written down beside it.
 
 **The inputs are two files per config**, `index.csv` and `visits.csv`, both generated by
 `tools/example_inputs.py` — the only generator, since a second one writing a differently-sized set
@@ -2554,11 +2608,26 @@ does. That equality is what licenses the registry fix over the resolution table,
 empirical property of the registry rather than an argument — the part of this that generalizes past
 Ollama.
 
-**R7 is dated: 2026-09-11**, owned by the data team, and the plan's own cost estimate for it was
-*withdrawn* on 2026-09-05 rather than revised down — the earlier "costs almost nothing in volume"
-argued from a 99.9th percentile that was 2.91 *because* the tail had already been cut. The measured
-size is roughly 15,800 visits. That date is the first anchor this document has had for any real-data
-work, and nine of the fourteen runs read a real trajectory or scaffold.
+**R7 has landed, and the predicted size was 24% high.** It was dated 2026-09-11 and owned by the data
+team; the re-run was delivered on 2026-09-12 as PPOC snapshot `2026-09-12`, package v1.1.0. The plan's
+cost estimate had been *withdrawn* on 2026-09-05 rather than revised down — the earlier "costs almost
+nothing in volume" argued from a 99.9th percentile that was 2.91 *because* the tail had already been
+cut — and its replacement, roughly 15,800 visits, was itself a prediction: the retained left tail below
+−3 scaled by the 1.635 upper/lower ratio observed at ±2.5. **Counted rather than scaled, the tail is
+12,719.** Extrapolating that ratio past +3 overstates the real tail, which is lighter out there than it
+is at ±2.5. `height_z_score` now runs −5.8186 to +4.1203 with nothing above +5, and the tallest
+ten-year-old in the file is 171.5 cm against a previous hard cap of 162.6 cm — which is +3.0 exactly,
+so the restored values are measurements and not a re-scoring.
+
+**How it was delivered changes who enforces the bound.** The re-run used `augment.py --no_filter_errors`,
+which lifts the implausible-value filter wholesale rather than raising the height ceiling alone, so the
+height *floor* and both weight bounds came off with it: 575 height and 869 weight values now sit beyond
+|5|. Nothing this document measures is affected, because `data.units` resolution applies the plan's
+item-6 range before a trajectory is serialized and drops those rows — 677 of 3,801,473 at age 2 or
+above, 0.018%. But the range is now enforced by the study rather than by the data as distributed, and
+that is a Methods sentence rather than a pipeline change. This is the first real-data anchor this
+document has had that is a delivery rather than a date, and nine of the fourteen runs read a real
+trajectory or scaffold.
 
 **The roster resolves, and the primary is `gpt-5.6-sol`.** The plan makes the largest Azure
 deployment primary and says every experiment implying a single model means that one, so the twelve
