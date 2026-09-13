@@ -2147,7 +2147,7 @@ where a superseded reading belongs.
 
 ### Measured on 2026-09-13 against `publishable` commit `0a70db0`
 
-Also pinned: the plan at `growth-chart-literacy@3d38bce`, and the two sibling repositories at
+Also pinned: the plan at `growth-chart-literacy@c87f0c0`, and the two sibling repositories at
 `2026-08-28-gcl-measurement@f997c7a` and `publishable-growth-chart@368e520`. **The date has moved for
 the first time in six measurements**, which is worth one sentence rather than none: the previous five
 all read *2026-09-12*, and a reader could not have ordered them from the dates alone. That is the
@@ -2168,6 +2168,13 @@ identical apart from the `input_dir`/`output_dir` pair each config block deliber
 `/secure/...`. Core's suite reads **3,617 passed, 1 skipped, 2 xfailed**, with `ruff check`, `ruff
 format --check` and `mypy` clean. What moved is the two siblings' counts, the plan's generator, and
 E3 — which has finished.
+
+**One exception to the pins, stated because the revision this replaces stated its own and this one
+deleted that sentence while creating the case for it.** E3's completed record was produced at the
+measurement tree *before* `f997c7a` — `identity.json` stamps `code_hash` `d50131d…`, and the commit
+that wired in selection-half screening landed after the run. So every E3 figure below is measured at
+that earlier sibling tree and is labelled where it matters, rather than reading as a measurement at
+the pin.
 
 **Re-measuring found a hole in this repository's own mechanical guard, fixed in the revision before
 this one and recorded here because the shape outlives it.** `tests/test_repo_docs.py` extracted markdown links line by line, so a link whose *label*
@@ -2294,7 +2301,7 @@ rather than asserted. An absent plan fails rather than skipping, since a skipped
 indistinguishable from a passing one.
 
 **And on the next measurement the parity check held while the two implementations disagreed about a
-whole channel.** Between `d346683` and `3d38bce` the plan replaced its height model — one AR(1)
+whole channel.** Between `d346683` and `c87f0c0` the plan replaced its height model — one AR(1)
 carrying both growth and measurement became a biological component plus a three-part observation
 layer, because a third of the generated curves had the child getting shorter — and then added a
 **weight** channel it never had. `construct.py` followed the height half: both trees now read `σ_b`
@@ -2360,10 +2367,14 @@ directory, `__init__.py` included, counted with `wc -l` at the commit pinned abo
 fault as the templates' 256 two revisions earlier, committed again after being named. The plugin's
 **695** and **1,111**, and its **59** tests, were true at `fac2295`, exactly **one commit** before
 the `368e520` the same paragraph pinned, and 368e520 is unchanged since — so the pin was right, the
-counts were from its parent, and nothing in the sentence showed which. That makes **eleven of eleven
-stale counts in this document low**, never once high, across three repositories. The direction is not
-a coincidence: a count is written when a thing is built and the thing only grows, so a carried number
-is a floor and reads as a measurement.
+counts were from its parent, and nothing in the sentence showed which. **Enumerated rather than incremented**, because a count phrase carried forward is the thing this
+paragraph is about: the previous revision's eight were templates 256, sixteen modules stated as
+fifteen, `src/growth_chart` 3,643, `tests` 3,300, the plugin's 591 and 846, and its suite at 236 and
+48. This revision adds five: templates 307, the plugin's 695 and 1,111 and its suite at 59, and the
+release distance stated as *two* commits where `git log v0.2.5..0a70db0 -- src templates` lists five.
+**Thirteen of thirteen were low**, never once high, across three repositories and one release
+distance. The direction is not a coincidence: a count is written when a thing is built and the thing
+only grows, so a carried number is a floor and reads as a measurement.
 
 **The measured deltas reconcile exactly, which is what the stated basis buys.** `src/growth_chart`
 3,841 → 3,968 against `git diff --numstat 7419e66..f997c7a -- src` of +138/−11 = **+127**, and
@@ -2377,11 +2388,13 @@ flight at 25 of 65 executions; that figure is replaced rather than kept, because
 number in this section with a shelf life measured in minutes. **It also called the total 19,500, and
 that was a unit-execution count worn as a call count** — `dry-run` prints 19,500 unit-executions
 because it counts the run- and summary-scoped steps too, while only the 45 repeat-scoped screening
-executions issue requests, at 300 each. Summing `n_requested` over the record gives 13,500. **The
-same confusion is live in [§ Cost and execution summary](#cost-and-execution-summary)'s 27,000 for
-E3, and for a second reason**: that figure assumes the step screens both halves of the 600-unit
-roster, which is what `2026-08-28-gcl-measurement@f997c7a` now implements and what this run, made
-before it, did not. **The apparatus performed**: 13,500 of
+executions issue requests, at 300 each. Summing `n_requested` over the record gives 13,500. **[§ Cost and execution
+summary](#cost-and-execution-summary)'s 27,000 for E3 is not that confusion and is right**: it is
+9 × 5 × 600, conditions × repeats × the whole roster, exactly the rule that section states, because
+the screening step is specified to read the selection half too. The run undershot it because the
+selection half was not yet wired in — `2026-08-28-gcl-measurement@f997c7a` implements it and this run
+was made before — so 27,000 is what the rebuild bills and 13,500 is what this one did. A number that
+disagrees with a table has to be attributed before it is counted as the table's error. **The apparatus performed**: 13,500 of
 13,500 calls returned `parsed`, `n_refused` and `n_malformed` are 0 in every one of the 45 repeats,
 and `attempts` sits between 1.000 and 1.003 — the retry-once machinery was built and almost never
 needed. Median latency runs 2.1–3.5 s by condition, prompt tokens 212–415 and completion tokens
@@ -2496,6 +2509,12 @@ interleaved rather than blocked. **The blinding bound is simulated rather than c
 first one was set at a longest run of 4 and measured to be exceeded by an honestly shuffled packet
 3.55% of the time; it is now the worst run in 4,000 shuffles, and the failure it guards — distractors
 appended without shuffling — is a run of 30.
+
+**The E1 packet paragraph above is carried, and it was checked rather than assumed.** `git diff
+d346683..c87f0c0 -- scripts/panel_packet.py` in the plan repository is **empty**, so the assembler,
+the 30 quantile-matched distractors and the simulated blinding bound are the same code measured at
+the previous pin. A section that claims to be re-measured whole has to say which of its paragraphs
+were re-derived and which were shown not to have moved.
 
 **The basis paid for itself within a day, and this is the demonstration.** Every count above moved
 since the previous measurement, and because the basis is now written down each delta can be
