@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `937e61f`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `d346683`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -1990,7 +1990,26 @@ Five things in the plan look like pipelines and are not. Treating any of them as
 
 **The stimulus-validation panel, which used to be E1, and which gates more than it appears to.** What it validates is a *category* — E4b's two conditions, E5b's three negative strata, E9's two bands — and **an arm drawing its items from a validated category inherits that validation**, so E3 and E8 are gated by a panel whose sample contains no E3 or E8 curve. That reading was settled on 2026-09-09 after four passages of the plan disagreed, and it is what puts the panel on the critical path to the whole core.
 
-**The panel itself.** Two to three blinded pediatricians independently adjudicating roughly 110 plotted curves, mixed with real ones as a realism check, is not something core executes. The earlier design — a 200-curve adjudication of an EHR label — at least produced a column a run could read; this one does not produce a column at all. The panel confirms that the constructed stimuli mean what they were built to mean, and its outcomes are a **gate a person passes**: a category whose consensus falls below 90% is regenerated and the arm consuming it is not run. Nothing about that reaches a config, and the two statistics the plan asks for — per-category agreement with exact binomial intervals, and the panel's ability to separate synthetic from real — are computed over pictures no run has units for.
+**The panel itself.** **Three** blinded pediatricians independently adjudicating **140 plotted curves — 110 synthetic and 30 real distractors, giving 120 judgements**, since E4b's twenty pairs are one judgement each — is not something core executes. The earlier design — a 200-curve adjudication of an EHR label — at least produced a column a run could read; this one does not produce a column at all. The panel confirms that the constructed stimuli mean what they were built to mean, and its outcomes are a **gate a person passes**: a category whose consensus falls below 90% is regenerated and the arm consuming it is not run. Nothing about that reaches a config, and the two statistics the plan asks for — per-category agreement with exact binomial intervals, and the panel's ability to separate synthetic from real — are computed over pictures no run has units for.
+
+**And what still blocks it is of the same kind, which is worth stating because this document has spent
+six revisions reporting blockers the study could write down.** As of 2026-09-12 the plan carries three
+open recruitment items beside the panel, and none is answerable by a schema, a config or a text edit:
+**who counts as an eligible reader** — "pediatric clinician" names a profession rather than a
+criterion, and the construct argues for primary care, since a subspecialist reads centile crossing
+against a referral threshold the study does not model; **whether to recruit from the source practice**,
+where the two answers point opposite ways, because those clinicians are the population whose screening
+decisions the study is about *and* the ones most likely to recognise a child from one of the thirty
+real distractors; and **whether the protocol reaches the panel at all**, since the plan records a
+disclosure decision for model endpoints and none for showing real curves to three people.
+
+**That third one is not a finding this analysis can close, and saying so is the point.** Whether the
+governing IRB protocol and DUA already permit clinician adjudication is a question for the protocol,
+and nothing in any of the four repositories this document reads can answer it. What is checkable is
+that **the plan does not record the decision** — which is a gap of exactly the kind this project keeps
+producing and is fixed by transcription if the protocol covers it. It is recorded here because a
+feasibility analysis that only reports what the schema refuses would have missed it: core has no
+opinion about who may look at a chart, and that is correct rather than a limitation.
 
 **So the arm that left this vocabulary is the one that was never expressible in it, and the arm that replaced it is cheaper in every direction.** The plan's own arithmetic: validating the label at the scale its decision rule required needed roughly 5,650 adjudicated curves, against 110 for validating the stimuli — a fiftyfold reduction in clinician time, pointed at the assumption that is actually load-bearing. This document's earlier reading routed the kappa gap through a `summary`-step `Estimate` and disclosed what that cost; the honest summary now is that **the quantity was never worth the disclosure**, and the plan reached that conclusion from three directions of its own.
 
@@ -2124,22 +2143,20 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `a8a7d42`
+### Measured on 2026-09-12 against `publishable` commit `2345cfa`
 
 Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@7419e66` and **`publishable-growth-chart@368e520`**, with the plan at
-`growth-chart-literacy@937e61f`. **This is the fifth measurement on 2026-09-12**, and the date
-separates none of them. **All three siblings moved and core did not** — `publishable`'s hashed trees
-are byte-identical to `9a7844c` across eight commits — and the plugin's move is the one worth
-noticing, because it is the first time this document has pinned a plugin commit that changed
-behaviour. The previous revision
+`2026-08-28-gcl-measurement@7419e66` and `publishable-growth-chart@368e520`, with the plan at
+`growth-chart-literacy@d346683`. **This is the sixth measurement on 2026-09-12**, and the date
+separates none of them. **Only the plan moved this time**; core's hashed trees remain byte-identical
+to `9a7844c`, now across nine commits. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
 **Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced eight commits from `9a7844c` to `a8a7d42`, and `git diff 9a7844c..a8a7d42 -- src templates`
-is **empty**: all eight are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
+advanced nine commits from `9a7844c` to `2345cfa`, and `git diff 9a7844c..2345cfa -- src templates`
+is **empty**: all nine are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
 `templates/**` only, so a run at either commit computes the same one, and every result below is
 carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
 What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
@@ -2307,9 +2324,13 @@ as an editable dependency — registering one resolver, one probe, and one write
 under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
 
 **E3 is executing, and it is the first LLM arm in this study to do so.** Nine conditions, five seed
-repeats, 300 units each — 19,500 model calls against `gpt-5.6-sol`. At the time of writing it is 21
-of 65 executions in, with every call returning `parsed`, a median latency of 2.3 s, and a median 249
-prompt and 93 completion tokens. **Getting there found two blockers, and only one was a defect.**
+repeats, 300 units each — 19,500 model calls against `gpt-5.6-sol`. **It is still in flight**, which
+makes the progress figure the one number in this section with a shelf life measured in minutes rather
+than in commits: 25 of 65 executions and 1800 calls at the moment of this measurement. **The per-call
+figures are the ones worth carrying**, since they do not move as the run advances: every call returns
+`parsed`, at a median latency of 2.3 s and a median 249 prompt and 93 completion tokens. The result
+itself — the format ranking, and the held-out spread against item 2's 8-point threshold — is not in
+this document because it does not exist yet. **Getting there found two blockers, and only one was a defect.**
 
 **A 120-call probe was run before the 19,500, and it is the reason this section can report a run
 rather than a bill.** Every call in it failed with HTTP 400, and the record said only `HTTP 400`, so
