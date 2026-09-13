@@ -167,7 +167,7 @@ Three decisions in that shape, each with a reason:
 
 **Determinism comes from the unit key, never from `self.rng`.** A synthetic trajectory must be identical across a condition's repeats and across a `reproduce` of the whole study, so the per-unit offset is a SHA-256 of the key rather than a draw — Python salts `hash()` per process, which would make a trajectory differ between a run and its reproduction, the one thing a fixed stimulus may never do.
 
-**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.702²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.692 **indexed by time rather than by visit**, its correlation across a gap of `g` years being ≈0.84 raised to the power `g`, calibrated so the simulated statistics reproduce the cohort's measured 0.925, 0.349 and 0.921 on the age-2-or-later window. The pooled lag-1 figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. **`e(a)` is now the *biological* component only**, and the split is the point: the plan separated growth from measurement after a third of its generated curves had the child getting shorter, so the observed height a reader sees is `z(a)` pushed through a growth floor and a three-part measurement mixture, and the latent process is no longer the thing compared against a recorded number. **These are the fifth set this paragraph has carried, and the first four were each live here after the plan retired them** — `N(0, 0.84²)` at marginal SD 0.49 against a pooled 0.869 until 2026-09-12, which are the *all-ages* statistics R41 withdrew on 2026-09-05 when the study scoped itself to age 2 and later; then `N(0, 0.9²)` at 0.42 and 0.57, the single-component fit the two-component model replaced on 2026-09-13; then `N(0, 0.85²)` at 0.56 and 0.82, which the same day's time-indexing refit replaced in turn. **A number restated in prose is a copy nothing checks**, and this paragraph is the document's own longest-running instance of it — [gap 17](#gaps-this-analysis-found-in-the-specification) found the first two, the third was written into the fix for them, and the fourth was written into the re-measurement that caught the third. **Four generations is not four mistakes; it is one arrangement producing a mistake every time the source moves**, which is the argument for the sentence citing a constant by name that this document keeps making to other files and has never applied to itself. **Parameters are not their targets**, which is the distinction R41 exists to draw: a patient's mean carries residual variation, so the between-child SD of patient means exceeds `σ_b`, and a within-sample SD understates the marginal `σ_e` of a positively autocorrelated series. Reading the measured statistics straight in as parameters misses in both directions at once, and this paragraph did it. Two consequences for a translation:
+**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.702²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.692 **indexed by time rather than by visit**, its correlation across a gap of `g` years being ≈0.84 raised to the power `g`, calibrated so the simulated statistics reproduce the cohort's measured 0.925, 0.349 and 0.921 on the age-2-or-later window. The pooled lag-1 figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. **`e(a)` is now the *biological* component only**, and the split is the point: the plan separated growth from measurement after a third of its generated curves had the child getting shorter, so the observed height a reader sees is `z(a)` pushed through a growth floor, a three-part measurement mixture and — since 2026-09-13 — one of **four recording grids**, and the latent process is no longer the thing compared against a recorded number. The biological parameters quoted above survived that change; only the observation layer moved, which is why this sentence gains a clause rather than the figures gaining a generation. **These are the fifth set this paragraph has carried, and the first four were each live here after the plan retired them** — `N(0, 0.84²)` at marginal SD 0.49 against a pooled 0.869 until 2026-09-12, which are the *all-ages* statistics R41 withdrew on 2026-09-05 when the study scoped itself to age 2 and later; then `N(0, 0.9²)` at 0.42 and 0.57, the single-component fit the two-component model replaced on 2026-09-13; then `N(0, 0.85²)` at 0.56 and 0.82, which the same day's time-indexing refit replaced in turn. **A number restated in prose is a copy nothing checks**, and this paragraph is the document's own longest-running instance of it — [gap 17](#gaps-this-analysis-found-in-the-specification) found the first two, the third was written into the fix for them, and the fourth was written into the re-measurement that caught the third. **Four generations is not four mistakes; it is one arrangement producing a mistake every time the source moves**, which is the argument for the sentence citing a constant by name that this document keeps making to other files and has never applied to itself. **Parameters are not their targets**, which is the distinction R41 exists to draw: a patient's mean carries residual variation, so the between-child SD of patient means exceeds `σ_b`, and a within-sample SD understates the marginal `σ_e` of a positively autocorrelated series. Reading the measured statistics straight in as parameters misses in both directions at once, and this paragraph did it. Two consequences for a translation:
 
 - **The verification the plan pre-specifies is a test, not a run.** "Simulated and real trajectories must match on the three statistics within 10%" is a property of the generator, checked before any arm using synthetic stimuli executes. It has no conditions, no repeats and no units, so it is a function in `src/` with a test beside it — and being in `src/` is what puts it inside `code_hash`, which is the part that matters: preregistration item 8 says a generator tuned after seeing how a model responds to it is not a control, and a hash is what can catch that.
 - **Rounding is part of realism, and it is the kind of thing only a specification catches.** Values are rounded to the source units — quarter inches and ounces — rather than to the converted metric fields, because a synthetic curve carrying three-decimal centimetres where real records carry quarter-inches is separable on rounding alone. The panel's adversarial check is what that would fail, and the panel is the only reader that would have noticed.
@@ -2147,21 +2147,24 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-13 against `publishable` commit `0ae9cdd`
+### Measured on 2026-09-13 against `publishable` commit `549dcb3`
 
-Also pinned: the plan at `growth-chart-literacy@b13351b`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@6d03f46` and `publishable-growth-chart@368e520`. **This is the third pass
-of this revision and the study trees moved between each**: the weight channel was ported and gap 19
-closed, and then the generator's AR(1) was re-indexed and both channels refitted. The pins advance
-each time rather than a finding being left reading as open — every figure below that names a sibling
-commit names the one it was measured at. **The date has moved for
+Also pinned: the plan at `growth-chart-literacy@e69489b`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@087e071` and `publishable-growth-chart@368e520`. **This is the fourth
+pass of this revision and the study trees moved between each**: the weight channel was ported and
+gap 19 closed, then the generator's AR(1) was re-indexed and both channels refitted, then the height
+recording grid was replaced and two of its registered targets corrected. The pins advance each time
+rather than a finding being left reading as open — every figure below that names a sibling commit
+names the one it was measured at. **The date has moved for
 the first time in six measurements**, which is worth one sentence rather than none: the previous five
 all read *2026-09-12*, and a reader could not have ordered them from the dates alone. That is the
 argument for the commit pins beside the date, made by the case that actually happened.
 
 **Only the plan and one sibling moved.** Core's hashed trees are byte-identical to `9a7844c` across
-**twelve** commits: `git diff 9a7844c..0ae9cdd -- src templates` is **empty**, and all twelve are
-re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
+**fourteen** commits: `git diff 9a7844c..549dcb3 -- src templates` is **empty**, and all fourteen are
+re-measurements of this very document or repairs to its own guards. **Four re-measurements in one
+day is itself the observation**: not one of them was prompted by core moving, and every one was
+prompted by the study implementing something and finding the tooling had been describing it wrong. `code_hash` covers `src/**` and
 `templates/**` only, so a run at any of them computes the same one, and every core-side result below
 is carried forward *on that ground* rather than on the assumption that eleven doc commits were
 harmless.
@@ -2172,9 +2175,9 @@ sixteen quoted files. Every one reproduced: the same fourteen validate results, 
 **62 conditions, 450 executions, 106,260 unit-executions**, and sixteen of sixteen quoted files
 identical apart from the `input_dir`/`output_dir` pair each config block deliberately shows as
 `/secure/...`. Core's suite reads **3,617 passed, 1 skipped, 2 xfailed**, with `ruff check`, `ruff
-format --check` and `mypy` clean — and re-run again after the study trees moved twice more, with
-every result reproducing: the same fourteen validate rows, the same 62/450/106,260, the same sixteen
-byte-identical blocks. What moved is the two siblings' counts, the plan's generator, and E3 — which
+format --check` and `mypy` clean — and re-run after each of the study trees' three moves, with every
+result reproducing every time: the same fourteen validate rows, the same 62/450/106,260, the same
+sixteen byte-identical blocks. What moved is the two siblings' counts, the plan's generator, and E3 — which
 has finished.
 
 **One exception to the pins, stated because the revision this replaces stated its own and this one
@@ -2393,6 +2396,39 @@ plausible-range filter where the weight channel had one, and the cross-correlati
 weight filter alone — which is the *same* class of defect as a figure restated in prose, arriving as
 a predicate restated in code.
 
+**And the fourth pass found two of the study's own registered targets to be wrong, which is the
+sharpest thing four re-measurements produced.** `TARGET_DROP_TINY` and `TARGET_DROP_GROSS` describe
+the shape of a recorded height fall — what share are at most a quarter inch, what share exceed 3 cm.
+The plan registered **0.35** and **0.17**. Measured over the plan's own population, whose pair count
+is the 1,755,442 the plan itself states, they are **0.499** and **0.082**, and neither registered
+figure appears under any of four population readings tried. **The generator had been fitted to
+reproduce them and did**, so the fit and its verification agreed with each other and with nothing
+else — which is `test_plan_parity.py`'s lesson one level out, and this time inside a single tree.
+
+**The second finding is the one a realism panel would have met first.** 23.67% of real heights sit on
+**no inch grid at all** — 29.50% on a whole inch, 22.35% on a half and no coarser, 24.48% on a
+quarter — while the generator rounded **100%** of its output onto the quarter inch. That is the
+single-grid artifact the weight channel was given four grids to avoid on the previous pass, in the
+channel that never got the same treatment; the question was asked of weight and not of height, a day
+apart, by the same hands. **A check written for one channel is a question that has not been asked of
+the others**, and this study has two channels and asked it once.
+
+**Correcting both leaves the generator failing three of nine criteria where it passed six of six**,
+and the document records that as an improvement rather than a regression: the old six included two
+numbers the cohort does not support. Three mechanisms were proposed for the remaining gap and all
+three were **measured down** — a stale-record layer that closes the long-gap falls while missing its
+own prediction of the tie rate by 40%, a per-patient recording grid that makes the worst row worse
+(0.419 → 0.404 → 0.372 as clustering rises), and a smaller measurement error that trades three
+criteria for one. None was shipped. **A refuted hypothesis is the part nobody can reconstruct later**,
+so each is recorded with the number that refuted it.
+
+**What this says about the tooling rather than the study.** Four re-measurements landed in one day and
+core moved in none of them. Every one was prompted by the study *implementing* a thing the analysis
+had described — and each time the description was wrong in a way no amount of reading would have
+found. That is the argument for § Executability on this build existing at all, made four times in a
+day by a document whose own § Where the shared machinery lives has now carried five generations of
+the same parameters.
+
 **The same file carried a third generation of the figure, and this document carried a fourth.**
 `verify_generator`'s docstring told a caller to compare its output against "the cohort's 0.836, 0.487
 and 0.869" — the *all-ages* statistics the plan retired on 2026-09-05 under R41, and the exact
@@ -2424,8 +2460,8 @@ core rather than of the plan, and neither in a release yet; see the paragraph ab
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
 two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (**313**
-lines), one `src/growth_chart/` package (**4,469** lines over **eighteen** modules, eight step
-bodies and three prompt files) **plus three vendored CDC reference tables**, with **4,344** lines of
+lines), one `src/growth_chart/` package (**4,517** lines over **eighteen** modules, eight step
+bodies and three prompt files) **plus three vendored CDC reference tables**, with **4,393** lines of
 tests, a 932-line cohort extractor,
 **fourteen** configs, a 480-line input generator, and a `publishable-growth-chart` plugin from
 `publishable plugin new` (**730** lines, **1,171** of tests) installed as an editable dependency —
@@ -2452,9 +2488,9 @@ release distance stated as *two* commits where `git log v0.2.5..0a70db0 -- src t
 distance. The direction is not a coincidence: a count is written when a thing is built and the thing
 only grows, so a carried number is a floor and reads as a measurement.
 
-**The measured deltas reconcile exactly, which is what the stated basis buys.** Over the two passes
-since: `src/growth_chart` 3,968 → **4,469** against `git diff --numstat f997c7a..6d03f46` restricted
-to `*.py` of **+501**, and `tests` 3,591 → **4,344** against **+753**. Restricted to `*.py` because
+**The measured deltas reconcile exactly, which is what the stated basis buys.** Over the three passes
+since: `src/growth_chart` 3,968 → 4,469 → **4,517** against `git diff --numstat` restricted to `*.py`
+of **+501** then **+48**, and `tests` 3,591 → 4,344 → **4,393** against **+753** then **+49**. Restricted to `*.py` because
 the unrestricted diff counts the vendored CSVs and reads +535, which is the arithmetic saying what
 the paragraph above says in words. The seventeenth module was `steps/_partitions.py`, where E3's
 selection-half screening lives; the eighteenth is `reference.py`, which holds the CDC transform in
@@ -2667,7 +2703,7 @@ unit-executions (65 executions × **300** units handed to each)* against a 600-u
 executes.
 
 **Three configs have now executed, and all three reach a verdict.** E3's is
-[above](#measured-on-2026-09-13-against-publishable-commit-0ae9cdd) and is correctly computed on a
+[above](#measured-on-2026-09-13-against-publishable-commit-549dcb3) and is correctly computed on a
 quantity its own stimulus set made uninterpretable. The other two are the older pair. E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and both were run with `publishable run` against a clean tree, so both records
