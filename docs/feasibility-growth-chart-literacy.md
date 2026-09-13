@@ -2129,7 +2129,9 @@ state from an absent step, and a `StepIO` built without them has no step set to 
 
 **Two consequences follow, and the second is not this document's to take.** The repaired trigger is **met**: the 2026-09-12 realignment moved E2's and E6's reported hashes. The remedy addresses that direction — measured rather than assumed, since E2 and E6 run `SummarizeUnits`, `Score` and `CompareLabel` and reach `construct.py` through none of them, so a split leaves it in the screening tree where it can no longer touch them. Whether to split is the study repository's decision. **The branch not taken is worth naming**: the alternative was to sharpen *already reported* until rig exercises on synthetic fixtures fell outside it, which would have been choosing the definition that makes a trigger not fire on the day it fired.
 
-**19. The parity check that closed gap 16 passes while the two implementations disagree about a whole channel, and the reason is its scope.** `tests/test_plan_parity.py` compares the plan's six *height* constants against `construct.py`'s, and on 2026-09-13 both trees read `σ_b` 0.85, `σ_e` 0.56, `ρ` 0.82 against 0.925 / 0.349 / 0.921 — so it passes, and so do all 244 of the sibling's tests. In the same window the plan's generator gained a **weight** channel, drawn from a bivariate level coupling fitted to the cohort, while `construct.py` still derives both channels from one draw: `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)`, giving weight z against height z of **r = 1.000000** where the cohort's is 0.6696 and the plan's generator now produces 0.71. **A check built to compare six numbers answers *have these six numbers drifted*, and is read as answering *do these two files implement one specification*.** That is the same fault as [scoping a diagnostic by the helper it calls](#gaps-this-analysis-found-in-the-specification), and a parity check is the artifact most likely to attract the broader reading, because its name is the broad claim. Like gap 16 this is **not a defect in `publishable`** and core could offer nothing: both files are in study repositories, and *Greenfield only* means core never reads a step body. It is recorded here because this analysis is what found it, and because the generalization — **a green parity check bounds only what it enumerates** — is what a reader of one should carry. Filed as `unassigned`.
+**19. The parity check that closed gap 16 passes while the two implementations disagree about a whole channel, and the reason is its scope.** `tests/test_plan_parity.py` compares the plan's six *height* constants against `construct.py`'s, and on 2026-09-13 both trees read `σ_b` 0.85, `σ_e` 0.56, `ρ` 0.82 against 0.925 / 0.349 / 0.921 — so it passes, and so do all 244 of the sibling's tests. In the same window the plan's generator gained a **weight** channel, drawn from a bivariate level coupling fitted to the cohort, while `construct.py` still derives both channels from one draw: `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)`, giving weight z against height z of **r = 1.000000** where the cohort's is 0.6696 and the plan's generator now produces 0.71. **A check built to compare six numbers answers *have these six numbers drifted*, and is read as answering *do these two files implement one specification*.** That is the same fault as [scoping a diagnostic by the helper it calls](#gaps-this-analysis-found-in-the-specification), and a parity check is the artifact most likely to attract the broader reading, because its name is the broad claim. Like gap 16 this is **not a defect in `publishable`** and core could offer nothing: both files are in study repositories, and *Greenfield only* means core never reads a step body. It is recorded here because this analysis is what found it, and because the generalization — **a green parity check bounds only what it enumerates** — is what a reader of one should carry.
+
+**Closed in a sibling at `2026-08-28-gcl-measurement@e78fa45`, and the remedy is not the obvious one.** Adding the weight constants to `PAIRS` would close this instance and leave the next one open, which is what the previous widening did — the list grew from three constants to six and passed while a whole channel went missing. `PAIRS` now holds twenty-four, and beside it `test_every_plan_constant_has_a_pair_or_a_stated_reason` enumerates the plan's own module-level constants and fails when one is neither paired nor named in a `NOT_PORTED` set with a reason. **The list no longer decides its own scope; the plan does.** A second arm fails when a `NOT_PORTED` entry names a constant the plan has deleted, because a reason attached to nothing makes the exemption list read as better-considered than it is. Both arms were mutated and both fire. One exemption was already stale when it was inherited — the recorded-fall targets were exempted as governing nothing in that tree, which stopped being true when it gained the same floor and measurement mixture — and it is replaced by a bracketing check rather than deleted: the plan's 3.2% must lie between that tree's 0.58% at annual gaps and 5.66% at 120-day ones, which holds only if both observation layers behave the same up to the schedule.
 
 **What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. The fourth is now defined too, and this sentence is the correction: it read **no prompt has been run, so there is no token count** — true when written, false since E3 executed 13,500 calls, and left standing for a day in a section with no date on it, which is precisely the failure [§ Executability on this build](#executability-on-this-build) exists to prevent. Measured on 2026-09-13, E3's completed record gives median prompt tokens of 212–415 and completion tokens of 95–215 by condition; a cost figure for the other arms still needs their own prompts run, since token counts move with the format and that is what E3 manipulates.
 
@@ -2147,8 +2149,11 @@ where a superseded reading belongs.
 
 ### Measured on 2026-09-13 against `publishable` commit `0a70db0`
 
-Also pinned: the plan at `growth-chart-literacy@c87f0c0`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@f997c7a` and `publishable-growth-chart@368e520`. **The date has moved for
+Also pinned: the plan at `growth-chart-literacy@1181245`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@e78fa45` and `publishable-growth-chart@368e520`. **The two study trees
+moved again after the first pass of this revision**, closing gap 19 and porting the weight channel,
+and the pins are advanced rather than the finding left reading as open — every figure below that
+names a sibling commit names the one it was measured at. **The date has moved for
 the first time in six measurements**, which is worth one sentence rather than none: the previous five
 all read *2026-09-12*, and a reader could not have ordered them from the dates alone. That is the
 argument for the commit pins beside the date, made by the case that actually happened.
@@ -2301,16 +2306,17 @@ rather than asserted. An absent plan fails rather than skipping, since a skipped
 indistinguishable from a passing one.
 
 **And on the next measurement the parity check held while the two implementations disagreed about a
-whole channel.** Between `d346683` and `c87f0c0` the plan replaced its height model — one AR(1)
+whole channel.** Between `d346683` and `1181245` the plan replaced its height model — one AR(1)
 carrying both growth and measurement became a biological component plus a three-part observation
 layer, because a third of the generated curves had the child getting shorter — and then added a
 **weight** channel it never had. `construct.py` followed the height half: both trees now read `σ_b`
 0.85, `σ_e` 0.56, `ρ` 0.82 against targets 0.925 / 0.349 / 0.921, and `tests/test_plan_parity.py`
-passes. It follows none of the weight half. `construct.py` still derives both channels from one draw
-— `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)` — which is the
-`r = 1.000000` artifact [E3's own record](#e3--serialization-selection) reports, while the plan's
-generator now draws weight from a bivariate level coupling fitted to the cohort and produces 0.71
-against a cohort 0.7287.
+passed. It followed none of the weight half: at `f997c7a`, `construct.py` still derived both channels
+from one draw — `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)` — which is
+the `r = 1.000000` artifact [E3's own record](#e3--serialization-selection) reports, while the plan's
+generator drew weight from a bivariate level coupling fitted to the cohort and produced 0.71 against
+a cohort 0.7287. **Ported at `e78fa45`**, which reads 0.77 on the plan's own schedule; the tense here
+is past because the finding is what the check could not see, not the state of the tree.
 
 **The check passes, all 244 of the sibling's tests pass, and the specification and its implementation
 disagree about a whole channel.** This is gap 16's shape arriving one level out, and the reason is
@@ -2318,9 +2324,26 @@ worth more than the instance: `test_plan_parity.py` compares **the six constants
 compare**, so it answers *have these six numbers drifted* and reads as though it answered *do these
 two files implement one specification*. Scoping a check by what it was built for rather than by the
 question it is asked is the same fault as scoping a diagnostic by the helper it calls — and a parity
-check is exactly the artifact whose passing is taken as the second, broader claim. **Widening it is
-not this document's call to make**, since both files are in study repositories; naming what it does
-not cover is, and it is named here rather than left to the next reader of a green suite.
+check is exactly the artifact whose passing is taken as the second, broader claim. **Widening it was not this document's call to make**, since both files are in study repositories;
+naming what it does not cover was, and it was named here rather than left to the next reader of a
+green suite. The sibling then closed it — see [gap
+19](#gaps-this-analysis-found-in-the-specification) for what the remedy turned out to be, which is
+not the list of weight constants anyone would have written first.
+
+**Porting the channel found three things the stand-in had been hiding**, and they are worth reading
+beside the claim the study's own `growth-measurement-model.md` is built on — that a generative model
+of clinical measurements must be validated in the units it will be read in — because all three are invisible in z and obvious
+in centimetres and kilograms. `construct.py`'s conversion layer was a **five-point piecewise-linear
+ramp**, not a growth reference, so a four-year-old's weight was wrong by kilograms; it is now the
+CDC 2000 tables, vendored into `src/growth_chart/reference_data/` rather than read from a sibling
+**because that tree is what `code_hash` covers** — measured, since `hashed_files` skips only
+`__pycache__` and `.pyc`/`.pyo` and hashes a `.csv` under `src/` like any module. `bmi` was computed
+from two latent values, neither of them the pair printed beside it, so a reader dividing the row's
+own kilograms by its own metres squared got a third answer. And the **growth floor attenuates the
+displayed deviation**: preregistration item 4 registers 0.67 z on the generated path, and what a
+chart shows is 8.9% smaller on an annual schedule and 36.7% smaller on a 120-day one. Nothing had
+measured that because the emitted z *was* the latent path until the same day — a column that reports
+what was put in cannot show what came out.
 
 **The same file carried a third generation of the figure, and this document carried a fourth.**
 `verify_generator`'s docstring told a caller to compare its output against "the cohort's 0.836, 0.487
@@ -2511,7 +2534,7 @@ first one was set at a longest run of 4 and measured to be exceeded by an honest
 appended without shuffling — is a run of 30.
 
 **The E1 packet paragraph above is carried, and it was checked rather than assumed.** `git diff
-d346683..c87f0c0 -- scripts/panel_packet.py` in the plan repository is **empty**, so the assembler,
+d346683..1181245 -- scripts/panel_packet.py` in the plan repository is **empty**, so the assembler,
 the 30 quantile-matched distractors and the simulated blinding bound are the same code measured at
 the previous pin. A section that claims to be re-measured whole has to say which of its paragraphs
 were re-derived and which were shown not to have moved.
