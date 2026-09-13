@@ -29,7 +29,7 @@ This document is non-normative and carries its own examples. It is **not** part 
 
 ## What the plan hand-rolls, and what core already owns
 
-The plan is at plan stage — no experiment in it has been run — so this table is not a list of code to delete. It is the list of machinery the plan **commits to building** in prose, and would not have to. It is also the list of things the proposed plugin must **not** rebuild.
+The plan was at plan stage when this table was written and three of its arms have since executed — E2 and E6 on the real cohort, E3 against a metered deployment, [all three measured](#executability-on-this-build) — so this table is still not a list of code to delete. It is the list of machinery the plan **commits to building** in prose, and would not have to. It is also the list of things the proposed plugin must **not** rebuild.
 
 **Two rows below record a convergence rather than a gap, and they are the most useful rows in the table.** On the utilization covariate and on what repeated runs buy, the plan reached this tool's position on its own, from its own data, between the first version of this analysis and the restructure of 2026-08-30. A feasibility analysis whose predictions the subject project independently confirms is stronger evidence than one that only lists what fits.
 
@@ -167,7 +167,7 @@ Three decisions in that shape, each with a reason:
 
 **Determinism comes from the unit key, never from `self.rng`.** A synthetic trajectory must be identical across a condition's repeats and across a `reproduce` of the whole study, so the per-unit offset is a SHA-256 of the key rather than a draw — Python salts `hash()` per process, which would make a trajectory differ between a run and its reproduction, the one thing a fixed stimulus may never do.
 
-**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.9²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.42 and lag-1 correlation 0.57, calibrated so the simulated statistics reproduce the cohort's measured 0.925, 0.349 and 0.921 on the age-2-or-later window. The pooled lag-1 figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. **These are the third set this paragraph has carried, and the first two were live here after the plan retired them** — it described `N(0, 0.84²)`, marginal SD 0.49 and a pooled 0.869 until 2026-09-12, which are the *all-ages* statistics R41 withdrew on 2026-09-05 when the study scoped itself to age 2 and later. **Parameters are not their targets**, which is the distinction R41 exists to draw: a patient's mean carries residual variation, so the between-child SD of patient means exceeds `σ_b`, and a within-sample SD understates the marginal `σ_e` of a positively autocorrelated series. Reading the measured statistics straight in as parameters misses in both directions at once, and this paragraph did it. Two consequences for a translation:
+**The z path is the plan's own generator, not this analysis's invention, and that changed on 2026-08-30.** §Cross-Cutting now specifies `z(a) = b + d(a) + e(a)`: a characteristic channel `b ~ N(0, 0.85²)`, a deviation `d(a)` entered over a window rather than as a step, and within-child variation `e(a)` as an AR(1) process at marginal SD 0.56 and lag-1 correlation ≈0.82, calibrated so the simulated statistics reproduce the cohort's measured 0.925, 0.349 and 0.921 on the age-2-or-later window. The pooled lag-1 figure is the load-bearing one because it mixes both variance components and so cannot be matched by tuning either alone. **`e(a)` is now the *biological* component only**, and the split is the point: the plan separated growth from measurement after a third of its generated curves had the child getting shorter, so the observed height a reader sees is `z(a)` pushed through a growth floor and a three-part measurement mixture, and the latent process is no longer the thing compared against a recorded number. **These are the fourth set this paragraph has carried, and the first three were each live here after the plan retired them** — `N(0, 0.84²)` at marginal SD 0.49 against a pooled 0.869 until 2026-09-12, which are the *all-ages* statistics R41 withdrew on 2026-09-05 when the study scoped itself to age 2 and later; then `N(0, 0.9²)` at 0.42 and 0.57, the single-component fit the two-component model replaced on 2026-09-13. **A number restated in prose is a copy nothing checks**, and this paragraph is the document's own longest-running instance of it — [gap 17](#gaps-this-analysis-found-in-the-specification) found the first two, and the third was written into the fix for them. **Parameters are not their targets**, which is the distinction R41 exists to draw: a patient's mean carries residual variation, so the between-child SD of patient means exceeds `σ_b`, and a within-sample SD understates the marginal `σ_e` of a positively autocorrelated series. Reading the measured statistics straight in as parameters misses in both directions at once, and this paragraph did it. Two consequences for a translation:
 
 - **The verification the plan pre-specifies is a test, not a run.** "Simulated and real trajectories must match on the three statistics within 10%" is a property of the generator, checked before any arm using synthetic stimuli executes. It has no conditions, no repeats and no units, so it is a function in `src/` with a test beside it — and being in `src/` is what puts it inside `code_hash`, which is the part that matters: preregistration item 8 says a generator tuned after seeing how a model responds to it is not a control, and a hash is what can catch that.
 - **Rounding is part of realism, and it is the kind of thing only a specification catches.** Values are rounded to the source units — quarter inches and ounces — rather than to the converted metric fields, because a synthetic curve carrying three-decimal centimetres where real records carry quarter-inches is separable on rounding alone. The panel's adversarial check is what that would fail, and the panel is the only reader that would have noticed.
@@ -2129,7 +2129,9 @@ state from an absent step, and a `StepIO` built without them has no step set to 
 
 **Two consequences follow, and the second is not this document's to take.** The repaired trigger is **met**: the 2026-09-12 realignment moved E2's and E6's reported hashes. The remedy addresses that direction — measured rather than assumed, since E2 and E6 run `SummarizeUnits`, `Score` and `CompareLabel` and reach `construct.py` through none of them, so a split leaves it in the screening tree where it can no longer touch them. Whether to split is the study repository's decision. **The branch not taken is worth naming**: the alternative was to sharpen *already reported* until rig exercises on synthetic fixtures fell outside it, which would have been choosing the definition that makes a trigger not fire on the day it fired.
 
-**What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. What is still missing is the only anchor a cost needs: **no prompt has been run, so there is no token count**, and multiplying an exact request count by a price is not something this document can honestly do.
+**19. The parity check that closed gap 16 passes while the two implementations disagree about a whole channel, and the reason is its scope.** `tests/test_plan_parity.py` compares the plan's six *height* constants against `construct.py`'s, and on 2026-09-13 both trees read `σ_b` 0.85, `σ_e` 0.56, `ρ` 0.82 against 0.925 / 0.349 / 0.921 — so it passes, and so do all 244 of the sibling's tests. In the same window the plan's generator gained a **weight** channel, drawn from a bivariate level coupling fitted to the cohort, while `construct.py` still derives both channels from one draw: `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)`, giving weight z against height z of **r = 1.000000** where the cohort's is 0.6696 and the plan's generator now produces 0.71. **A check built to compare six numbers answers *have these six numbers drifted*, and is read as answering *do these two files implement one specification*.** That is the same fault as [scoping a diagnostic by the helper it calls](#gaps-this-analysis-found-in-the-specification), and a parity check is the artifact most likely to attract the broader reading, because its name is the broad claim. Like gap 16 this is **not a defect in `publishable`** and core could offer nothing: both files are in study repositories, and *Greenfield only* means core never reads a step body. It is recorded here because this analysis is what found it, and because the generalization — **a green parity check bounds only what it enumerates** — is what a reader of one should carry. Filed as `unassigned`.
+
+**What bounds this analysis has changed, and the change is worth recording.** The earlier version of this section said the cohort, the variable derivations, the model roster and the prompt were all undefined in the source, so no unit count could be checked as drawable and no cost figure given. **Three of those four are now defined**: the plan carries a Cohort and Data section with a 250,588-patient cohort profiled against a real snapshot, variable definitions for every backticked field, and a roster and prompt specification. Every sample size is now stated as a fraction of a named cohort and each is well under 1%, so the counts below are drawable rather than merely asserted. The fourth is now defined too, and this sentence is the correction: it read **no prompt has been run, so there is no token count** — true when written, false since E3 executed 13,500 calls, and left standing for a day in a section with no date on it, which is precisely the failure [§ Executability on this build](#executability-on-this-build) exists to prevent. Measured on 2026-09-13, E3's completed record gives median prompt tokens of 212–415 and completion tokens of 95–215 by condition; a cost figure for the other arms still needs their own prompts run, since token counts move with the format and that is what E3 manipulates.
 
 
 ---
@@ -2143,30 +2145,32 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `2345cfa`
+### Measured on 2026-09-13 against `publishable` commit `0a70db0`
 
-Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@7419e66` and `publishable-growth-chart@368e520`, with the plan at
-`growth-chart-literacy@d346683`. **This is the sixth measurement on 2026-09-12**, and the date
-separates none of them. **Only the plan moved this time**; core's hashed trees remain byte-identical
-to `9a7844c`, now across nine commits. The previous revision
-had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
-message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
-revision carries no such exception.
+Also pinned: the plan at `growth-chart-literacy@3d38bce`, and the two sibling repositories at
+`2026-08-28-gcl-measurement@f997c7a` and `publishable-growth-chart@368e520`. **The date has moved for
+the first time in six measurements**, which is worth one sentence rather than none: the previous five
+all read *2026-09-12*, and a reader could not have ordered them from the dates alone. That is the
+argument for the commit pins beside the date, made by the case that actually happened.
 
-**Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced nine commits from `9a7844c` to `2345cfa`, and `git diff 9a7844c..2345cfa -- src templates`
-is **empty**: all nine are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
-`templates/**` only, so a run at either commit computes the same one, and every result below is
-carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
-What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
-fourteen configs, `dry-run` on all fourteen, both suites, and a byte comparison of all sixteen quoted
-files. The first two reproduced exactly, as did the byte comparison and both suites'
-passing state; what moved is the counts, the constants, and both recorded `code_hash`es, each
-corrected below.
+**Only the plan and one sibling moved.** Core's hashed trees are byte-identical to `9a7844c` across
+**eleven** commits: `git diff 9a7844c..0a70db0 -- src templates` is **empty**, and all eleven are
+re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
+`templates/**` only, so a run at any of them computes the same one, and every core-side result below
+is carried forward *on that ground* rather than on the assumption that eleven doc commits were
+harmless.
 
-**Re-measuring found a hole in this repository's own mechanical guard, and it is fixed in this
-commit.** `tests/test_repo_docs.py` extracted markdown links line by line, so a link whose *label*
+**What was re-run anyway, because carrying a claim is not the same as checking it.** `validate` on
+all fourteen configs, `dry-run` on all fourteen, all three suites, and a byte comparison of all
+sixteen quoted files. Every one reproduced: the same fourteen validate results, the same
+**62 conditions, 450 executions, 106,260 unit-executions**, and sixteen of sixteen quoted files
+identical apart from the `input_dir`/`output_dir` pair each config block deliberately shows as
+`/secure/...`. Core's suite reads **3,617 passed, 1 skipped, 2 xfailed**, with `ruff check`, `ruff
+format --check` and `mypy` clean. What moved is the two siblings' counts, the plan's generator, and
+E3 — which has finished.
+
+**Re-measuring found a hole in this repository's own mechanical guard, fixed in the revision before
+this one and recorded here because the shape outlives it.** `tests/test_repo_docs.py` extracted markdown links line by line, so a link whose *label*
 wraps — its opening bracket on one line, its closing bracket and target on the next — matched nothing
 and was never resolved. This repository's documents have no hard line breaks inside a paragraph, so a
 long label wrapping is the normal case rather than an edge one, and two links written into this file
@@ -2187,9 +2191,9 @@ moved since. The revision that first pinned them could say core moved *because o
 measured; this one cannot, and the distinction is worth keeping rather than smoothing, because a
 revision where core did not move is the case in which every carried-forward result is actually safe.
 The paragraphs reporting them describe the tree they were found in and name the commit that repaired
-it. What moved this time is a *sibling* repository's `src/growth_chart/construct.py` and the plan it
+it. What moved this time is again a *sibling* repository's `src/growth_chart/` and the plan it
 follows — the study's trees, not this one — which is why the divergence below is reported rather than
-the templates re-synced; `templates/` is byte-identical at both sibling pins. That is the three-hash split
+the templates re-synced; `templates/` is byte-identical at both sibling pins, at **313** lines. That is the three-hash split
 doing its job across repositories: a measurement is of a tree, and this document reads three of
 them. Pinning the plan's own
 commit began with the measurement before that, and the reason stands: every earlier version of this
@@ -2197,13 +2201,18 @@ section named which `publishable` it had measured and never said which version o
 read, so a restructure that rewrote 1,070 lines of the source left every claim here reading as
 current.
 
-**The measured tree is two commits past the last release, and the record cannot tell you that.** Both
-runs below write `publishable_version: 0.2.5`, because that field reports the installed
-distribution's version and the two commits after `v0.2.5` — a name guard on `generate step` and
-`generate experiment`, and `io.record`'s collision check reading the union over the roster rather
-than its first unit — are unreleased. **That is the argument for pinning a commit rather than a
-version in one sentence**, and it is worth reading beside the four release floors below: those tell
-you what an install gets, and the pin tells you what was run.
+**The measured tree is five commits past the last release under the hashed trees, and the record
+cannot tell you that — and this document said *two* until it was counted.** Every run below writes
+`publishable_version: 0.2.5`, because that field reports the installed distribution's version, while
+`git log v0.2.5..0a70db0 -- src templates` lists five: a name guard on `generate step` and `generate
+experiment`, `io.record`'s collision check reading the union over the roster rather than its first
+unit, the `resume` scope-map repair, the `E-STEP-READ-UNKNOWN` refusal, and the `E-NAME-DIR` message
+fix. The first two were the whole list when the sentence was written; three landed after it and the
+number did not move. **That is the argument for pinning a commit rather than a version made twice
+over** — once by the version field being unable to name the tree, and once by a prose count of the
+same thing going stale in four days — and it is worth reading beside the four release floors below:
+those tell you what an install gets, the pin tells you what was run, and a sentence tells you what
+someone last counted.
 
 Both sibling repositories install core as an **editable path dependency** with no version bound, so
 they execute this working tree rather than a release — which is what makes the measurements below
@@ -2284,6 +2293,28 @@ thirty-seven tests pass straight through the same mutation — which is this fin
 rather than asserted. An absent plan fails rather than skipping, since a skipped parity check is
 indistinguishable from a passing one.
 
+**And on the next measurement the parity check held while the two implementations disagreed about a
+whole channel.** Between `d346683` and `3d38bce` the plan replaced its height model — one AR(1)
+carrying both growth and measurement became a biological component plus a three-part observation
+layer, because a third of the generated curves had the child getting shorter — and then added a
+**weight** channel it never had. `construct.py` followed the height half: both trees now read `σ_b`
+0.85, `σ_e` 0.56, `ρ` 0.82 against targets 0.925 / 0.349 / 0.921, and `tests/test_plan_parity.py`
+passes. It follows none of the weight half. `construct.py` still derives both channels from one draw
+— `weight_z_score = round(z, 3)` beside `height_z_score = round(z * 0.6, 3)` — which is the
+`r = 1.000000` artifact [E3's own record](#e3--serialization-selection) reports, while the plan's
+generator now draws weight from a bivariate level coupling fitted to the cohort and produces 0.71
+against a cohort 0.7287.
+
+**The check passes, all 244 of the sibling's tests pass, and the specification and its implementation
+disagree about a whole channel.** This is gap 16's shape arriving one level out, and the reason is
+worth more than the instance: `test_plan_parity.py` compares **the six constants it was built to
+compare**, so it answers *have these six numbers drifted* and reads as though it answered *do these
+two files implement one specification*. Scoping a check by what it was built for rather than by the
+question it is asked is the same fault as scoping a diagnostic by the helper it calls — and a parity
+check is exactly the artifact whose passing is taken as the second, broader claim. **Widening it is
+not this document's call to make**, since both files are in study repositories; naming what it does
+not cover is, and it is named here rather than left to the next reader of a green suite.
+
 **The same file carried a third generation of the figure, and this document carried a fourth.**
 `verify_generator`'s docstring told a caller to compare its output against "the cohort's 0.836, 0.487
 and 0.869" — the *all-ages* statistics the plan retired on 2026-09-05 under R41, and the exact
@@ -2314,25 +2345,89 @@ now been implemented and are no longer claims this document has to hedge:
 core rather than of the plan, and neither in a release yet; see the paragraph above.
 
 **What was built to measure it.** A scratch experiment repository from `publishable new`, holding the
-two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (307 lines),
-one `src/growth_chart/` package (3,841 lines over sixteen modules, seven step bodies and three prompt
-files) with 3,482 lines of tests, a 932-line cohort extractor, **fourteen** configs, a 480-line input generator, and a
-`publishable-growth-chart` plugin from `publishable plugin new` (695 lines, 1,111 of tests) installed
-as an editable dependency — registering one resolver, one probe, and one writer/reader pair, and
-**no** template. `uv run pytest`: **241 passed** in the measurement repository, **59** in the plugin.
-**The basis, stated because its absence is what let the previous numbers drift:** every `*.py` tracked
-under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
+two project-local templates [listed below](#the-two-templates-as-loaded) in `templates/` (**313**
+lines), one `src/growth_chart/` package (**3,968** lines over **seventeen** modules, eight step
+bodies and three prompt files) with **3,591** lines of tests, a 932-line cohort extractor,
+**fourteen** configs, a 480-line input generator, and a `publishable-growth-chart` plugin from
+`publishable plugin new` (**730** lines, **1,171** of tests) installed as an editable dependency —
+registering one resolver, one probe, and one writer/reader pair, and **no** template. `uv run
+pytest`: **244 passed** in the measurement repository, **61** in the plugin. **The basis, stated
+because its absence is what let the previous numbers drift:** every `*.py` tracked under the named
+directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
 
-**E3 is executing, and it is the first LLM arm in this study to do so.** Nine conditions, five seed
-repeats, 300 units each — 19,500 model calls against `gpt-5.6-sol`. **It is still in flight**, which
-makes the progress figure the one number in this section with a shelf life measured in minutes rather
-than in commits: 25 of 65 executions and 1800 calls at the moment of this measurement. **The per-call
-figures are the ones worth carrying**, since they do not move as the run advances: every call returns
-`parsed`, at a median latency of 2.3 s and a median 249 prompt and 93 completion tokens. The result
-itself — the format ranking, and the held-out spread against item 2's 8-point threshold — is not in
-this document because it does not exist yet. **Getting there found two blockers, and only one was a defect.**
+**Three more of these were wrong, and all three were low.** The templates' **307** was true at
+`0788387` and carried through the `7419e66` pin, where the two files already held 313 — the same
+fault as the templates' 256 two revisions earlier, committed again after being named. The plugin's
+**695** and **1,111**, and its **59** tests, were true at `fac2295`, exactly **one commit** before
+the `368e520` the same paragraph pinned, and 368e520 is unchanged since — so the pin was right, the
+counts were from its parent, and nothing in the sentence showed which. That makes **eleven of eleven
+stale counts in this document low**, never once high, across three repositories. The direction is not
+a coincidence: a count is written when a thing is built and the thing only grows, so a carried number
+is a floor and reads as a measurement.
 
-**A 120-call probe was run before the 19,500, and it is the reason this section can report a run
+**The measured deltas reconcile exactly, which is what the stated basis buys.** `src/growth_chart`
+3,841 → 3,968 against `git diff --numstat 7419e66..f997c7a -- src` of +138/−11 = **+127**, and
+`tests` 3,482 → 3,591 against +118/−9 = **+109**. The seventeenth module is
+`steps/_partitions.py`, 50 lines, which is where E3's selection-half screening now lives.
+
+**E3 has executed, and it is the first LLM arm in this study to do so.** Nine conditions, five seed
+repeats, 300 units each — **13,500** calls against `gpt-5.6-sol`, `status: completed`, `draft: false`,
+run `run_2026-09-12T23-51-56Z_d50131d`. The previous revision of this paragraph reported it in
+flight at 25 of 65 executions; that figure is replaced rather than kept, because it was the one
+number in this section with a shelf life measured in minutes. **It also called the total 19,500, and
+that was a unit-execution count worn as a call count** — `dry-run` prints 19,500 unit-executions
+because it counts the run- and summary-scoped steps too, while only the 45 repeat-scoped screening
+executions issue requests, at 300 each. Summing `n_requested` over the record gives 13,500. **The
+same confusion is live in [§ Cost and execution summary](#cost-and-execution-summary)'s 27,000 for
+E3, and for a second reason**: that figure assumes the step screens both halves of the 600-unit
+roster, which is what `2026-08-28-gcl-measurement@f997c7a` now implements and what this run, made
+before it, did not. **The apparatus performed**: 13,500 of
+13,500 calls returned `parsed`, `n_refused` and `n_malformed` are 0 in every one of the 45 repeats,
+and `attempts` sits between 1.000 and 1.003 — the retry-once machinery was built and almost never
+needed. Median latency runs 2.1–3.5 s by condition, prompt tokens 212–415 and completion tokens
+95–215, and both move with the format, which is the manipulation.
+
+**And the run is not usable as an accuracy comparison, which the record says in core's own voice.**
+Every condition returns `accuracy` **identical** to `flag_rate` and to `sensitivity`, `kappa: 0.0`,
+and `false_positive_rate: null`:
+
+| Condition | accuracy ≡ flag_rate ≡ sensitivity |
+|---|---|
+| `format=markdown_table__baseline` | 0.5877 |
+| `format=sentences__baseline` | 0.5864 |
+| `format=digit_string__baseline` | 0.5889 |
+| `features=raw__format=markdown_table` | 0.8470 |
+| `features=raw__format=sentences` | 0.8539 |
+| `features=raw__format=digit_string` | 0.8513 |
+| `features=raw_plus_derived__format=markdown_table` | 0.7248 |
+| `features=raw_plus_derived__format=sentences` | 0.7376 |
+| `features=raw_plus_derived__format=digit_string` | 0.7234 |
+
+The cause is in the config: `stimulus.physiology` resolved single-valued at `concerning`, so every
+one of the 300 units is a positive. Three quantities collapse onto one when the truth column is
+constant, and a specificity-bearing metric has no denominator at all.
+
+**What makes this a result about core rather than only about the study is that the record reports
+the collapse without being told to.** `run.yaml`'s `findings:` block carries
+`W-STATS-AGGREGATE-FAILED` nine times — *every resample draw failed to produce a value* for
+`false_positive_rate`, once per condition — beside `W-STATS-REPEATS-DISAGREE` nine times, naming 31
+to 47 units per condition whose `flagged` column differs across the five seed repeats. The first
+says the metric had nothing to resample; the second says the model is not deterministic at
+temperature 1.0 and the design is measuring that. Neither warning knows anything about growth
+charts. A reader opening this record cold meets the defect on the way in, which is [gap
+10](#gaps-this-analysis-found-in-the-specification)'s closure — every finding a run raises landing in
+the record — paying off on the first real run after it shipped.
+
+The pre-registered `h1` reached a verdict on the same run: the `digits_vs_table` contrast reads
+`delta` **+0.0011**, `ci95` [−0.0241, +0.0245], `method: paired_percentile_over_units`,
+`supported: false` on `ci95_upper` against a −0.1 threshold, `verdict_rests_on: computed`. That is a
+correctly computed verdict on a quantity the degenerate truth made uninterpretable, and it is the
+argument for reading `findings:` before reading `supported:`. **The rebuild is the study's work and
+is specified in its own record**; what blocks it is [below](#the-first-real-completions-and-what-they-cost).
+
+**Getting there found two blockers, and only one was a defect.**
+
+**A 120-call probe was run before the 13,500, and it is the reason this section can report a run
 rather than a bill.** Every call in it failed with HTTP 400, and the record said only `HTTP 400`, so
 the cause had to be rediscovered by querying the endpoint by hand. Two causes, in sequence:
 
@@ -2473,7 +2568,9 @@ unit-executions (65 executions × **300** units handed to each)* against a 600-u
 `data.units.holdout` narrowing every denominator to the test partition, visible before anything
 executes.
 
-**Two configs have executed, and both reach a verdict.** E2 and E6 are the
+**Three configs have now executed, and all three reach a verdict.** E3's is
+[above](#measured-on-2026-09-13-against-publishable-commit-0a70db0) and is correctly computed on a
+quantity its own stimulus set made uninterpretable. The other two are the older pair. E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and both were run with `publishable run` against a clean tree, so both records
 are citable rather than drafts (`draft: false`, `git.code_dirty: false`):
@@ -3548,6 +3645,6 @@ class GrowthLabelTemplate(BaseTemplate):
 
 **No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 20 × 5 = 100 repeat-scoped executions come to 142 once every scope is counted — and it is the 100 that the check compares against the budget, not the 142. No config drew [`W-EXEC-BUDGET`](reference.md#warnings-core-reports), which is the warning that comparison raises and the only one this paragraph claims: ten of the fourteen carry a warning of another kind, as [§ Executability on this build](#executability-on-this-build) records. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
 
-**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈206 s per request on an idle machine, against a budget large enough for the answers to finish, which puts E10's 8,000 local requests at roughly **20 days** of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement, the small samples it rests on, and the one factor that divides rather than multiplies. An earlier reading of ≈88 s and 8 days is superseded: it was taken from calls that were truncated before answering, and it is what re-taking a cost figure after a configuration fix is for. **It anchors no metered figure in the table above**, because no Azure deployment has been sent a prompt: the 80,200 is still a request count and a price per request would be invented rather than measured.
+**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈206 s per request on an idle machine, against a budget large enough for the answers to finish, which puts E10's 8,000 local requests at roughly **20 days** of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement, the small samples it rests on, and the one factor that divides rather than multiplies. An earlier reading of ≈88 s and 8 days is superseded: it was taken from calls that were truncated before answering, and it is what re-taking a cost figure after a configuration fix is for. **A metered anchor now exists and it is one arm's, measured 2026-09-13**: E3 sent `gpt-5.6-sol` 13,500 requests — half its roster, screened before the selection half was wired in and its record carries per-condition medians of 212–415 prompt and 95–215 completion tokens. That converts E3's own row and nothing else, because both counts move with the serialization format — which is exactly what E3 manipulates — so carrying its medians across to the other arms would be reading one arm's manipulation as a constant. **The 80,200 remains a request count.** The sentence this replaces said no Azure deployment had been sent a prompt, which was true when written and stopped being true the moment E3 ran.
 
 **The token counts are now real, and the first set was degenerate in a way worth recording.** In the run against a 512-token budget, six of seven calls stopped at the cap, so `completion_tokens` read 512 — the budget, not the answer's length. **A column pinned to its own limit is evidence about the configuration and not about the model**, which makes it exactly useful for debugging and useless for costing. Against a raised budget the same four units report 487, 557, 634 and 2,393, all stopping on their own, and the spread is the finding: one call in four needed nearly four times the median. What remains structural is the shape a hosted run would fill in — a request per patient per condition per repeat, each landing in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`.
