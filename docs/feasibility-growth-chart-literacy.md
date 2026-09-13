@@ -2,7 +2,7 @@
 
 `growth-chart-literacy` asks one question: **when a language model screens a pediatric growth trajectory, is it reading the curve, or is it counting how often the child came in?** Ten experiments answer it around a triad no published study combines — clinician-validated stimuli, a physiology-preserving counterfactual, and a utilization-invariance counterfactual.
 
-**Read against the plan at commit `dd4bd5f`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
+**Read against the plan at commit `937e61f`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
@@ -460,7 +460,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -497,7 +497,7 @@ replication:
   repeats:
     - {kind: seed, n: 5}
   order: randomized
-  rationale: "Five draws at temperature 0; the deployment is not deterministic, and repeat_spread is what says how far it moves."
+  rationale: "Five draws at temperature 1, the only value gpt-5.6-sol accepts; repeat_spread is the sampling variance that buys."
 
 statistics:
   correction: holm
@@ -578,7 +578,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -698,7 +698,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -815,7 +815,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -938,7 +938,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1055,7 +1055,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1173,7 +1173,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1282,7 +1282,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1498,7 +1498,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1650,7 +1650,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1782,7 +1782,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -1912,7 +1912,7 @@ parameters:
   llm:
     provider: azure_openai
     deployment: gpt-5.6-sol
-    temperature: 0.0
+    temperature: 1.0
     max_output_tokens: 8192
     request_timeout_s: 2400
     backoff_secs: [2, 8, 30]
@@ -2124,23 +2124,22 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-12 against `publishable` commit `07ea429`
+### Measured on 2026-09-12 against `publishable` commit `a8a7d42`
 
 Also pinned: the plan at `growth-chart-literacy@22d1b24`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@0e3b97e` and `publishable-growth-chart@fac2295`, with the plan at
-`growth-chart-literacy@dd4bd5f`. **This is the fourth measurement on 2026-09-12 and it supersedes the
-three earlier ones**, pinned at `1e6c000`/`2a8c9e6`, `ca77360`/`0788387` and `a55ba5d`/`0e3b97e`; the
-date separates none of the four, which is the argument for pinning commits rather than dates made
-four times over in one day. **Only the plan moved this time** — the measurement tree and the plugin
-are unchanged, and `publishable`'s hashed trees are byte-identical to `9a7844c` across seven commits —
-so what follows re-reads a specification rather than re-running a tool. The previous revision
+`2026-08-28-gcl-measurement@7419e66` and **`publishable-growth-chart@368e520`**, with the plan at
+`growth-chart-literacy@937e61f`. **This is the fifth measurement on 2026-09-12**, and the date
+separates none of them. **All three siblings moved and core did not** — `publishable`'s hashed trees
+are byte-identical to `9a7844c` across eight commits — and the plugin's move is the one worth
+noticing, because it is the first time this document has pinned a plugin commit that changed
+behaviour. The previous revision
 had to note one measurement taken against its pin *plus* an unlanded fix; that fix — the `E-NAME-DIR`
 message defect [below](#gaps-this-analysis-found-in-the-specification) — is in `8039611`, so this
 revision carries no such exception.
 
 **Core did not move, and the three-hash split is what lets this section say so.** `publishable`
-advanced seven commits from `9a7844c` to `07ea429`, and `git diff 9a7844c..07ea429 -- src templates`
-is **empty**: all seven are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
+advanced eight commits from `9a7844c` to `a8a7d42`, and `git diff 9a7844c..a8a7d42 -- src templates`
+is **empty**: all eight are re-measurements of this very document or repairs to its own guards. `code_hash` covers `src/**` and
 `templates/**` only, so a run at either commit computes the same one, and every result below is
 carried forward *on that ground* rather than on the assumption that four doc commits were harmless.
 What was re-run anyway, because carrying a claim is not the same as checking it: `validate` on all
@@ -2307,7 +2306,47 @@ as an editable dependency — registering one resolver, one probe, and one write
 **The basis, stated because its absence is what let the previous numbers drift:** every `*.py` tracked
 under the named directory, `__init__.py` included, counted with `wc -l` at the commit pinned above.
 
-**Layer C executes on real patient data, and that is what changed this revision.** Every one of the
+**E3 is executing, and it is the first LLM arm in this study to do so.** Nine conditions, five seed
+repeats, 300 units each — 19,500 model calls against `gpt-5.6-sol`. At the time of writing it is 21
+of 65 executions in, with every call returning `parsed`, a median latency of 2.3 s, and a median 249
+prompt and 93 completion tokens. **Getting there found two blockers, and only one was a defect.**
+
+**A 120-call probe was run before the 19,500, and it is the reason this section can report a run
+rather than a bill.** Every call in it failed with HTTP 400, and the record said only `HTTP 400`, so
+the cause had to be rediscovered by querying the endpoint by hand. Two causes, in sequence:
+
+| Blocker | What it was | Disposition |
+|---|---|---|
+| `max_tokens` | the gpt-5 family rejects the parameter outright, `unsupported_parameter` | a plugin defect, fixed at `368e520` |
+| `temperature: 0.0` | `gpt-5.6-sol` accepts only its default of 1 | **not a defect** — a registered parameter the apparatus refuses, now preregistration item 7 |
+
+**The temperature finding is the more interesting one, and it is a property of the apparatus rather
+than of the tool.** Measured across the roster: only 0.0 is refused and only by the gpt-5 family;
+`gpt-4.1` and both ollama models accept it; every model accepts 1.0 and every model accepts the
+parameter being omitted. The study now declares 1.0 rather than omitting it, on the ground this
+document keeps returning to — **a parameter that is not declared is not hashed**, so an omitted
+temperature would shape every answer and appear in no `parameters_hash`. The four defaults that would
+have supplied it come from four places, two of them properties of a pulled Modelfile rather than a
+documented contract.
+
+**And the plugin fix exposes a boundary of the three-hash split that this document had stated
+abstractly and never met.** §Where the shared machinery lives says `code_hash` covers `src/**` and
+`templates/**` and not an installed dependency, "which `uv.lock` pins instead". **For an editable
+path dependency `uv.lock` pins nothing of the sort**: its entry reads
+`source = { editable = "/Users/joon/src/tries/publishable-growth-chart" }` with no hash, revision or
+version recorded — measured, both for the plugin and for core itself. So the `max_tokens` fix changed
+what every LLM call sends, and **no hash in the run record moves**: two runs either side of it agree
+on `code_hash`, `parameters_hash`, `input_manifest_hash` and `uv_lock_hash`, while one fails every
+call and the other succeeds. The two probe runs observed exactly that, both stamped `d504a59`.
+
+**That is not a defect in core and the split is not wrong.** An editable install is a development
+arrangement, and the alternative — a released plugin pinned by version and hash — is what `uv.lock`
+is for and what a run that mattered would use. What the instance shows is that **the guarantee is a
+property of how the dependency is installed, not of the hash**, and a reader of a record produced
+this way cannot tell the difference. The honest statement for a study using editable installs is that
+its plugin version is recorded by the sibling repository's commit and nowhere in the run.
+
+**Layer C executes on real patient data, and that is what changed the previous revision.** Every one of the
 fourteen configs was refused for real-data extraction at the previous pin, thirteen of them solely on
 `visits_pre_index`, under a message saying pre-registration item 5 "is not fixed" — which it had been
 since 2026-09-11. Two different quantities were hiding behind one column name, and
@@ -2323,6 +2362,24 @@ exists to keep.** Three arms — E2, E4a and E6 — now hold rosters drawn from 
 over 500 matched sets, and 600 over 300 twice. The other eleven still hold `tools/example_inputs.py`
 output and are *able* to be extracted rather than extracted. What the three buy is the first real
 scaffold any arm has had; what they cost is [below](#the-first-real-completions-and-what-they-cost).
+
+**Thirteen quoted files were re-synced, and a count this document stated was wrong.** Twelve config
+blocks moved `temperature: 0.0` to `1.0`, and `templates/growth_screen.py`'s `Param` default moved
+with them, so the byte comparison that reproduced at every earlier pin flagged thirteen of sixteen
+blocks. All sixteen match again. **The count to correct is "thirteen configs pin temperature 0.0"**,
+which was said while registering item 7 and repeated into `2026-08-28-gcl-measurement@7419e66`'s
+commit message: it is **twelve** LLM configs plus the smoke arm, because E2 and E6 are `growth_label`
+arms that issue no request and declare no temperature. The commit message is history and is left as
+written; the correction lives here, which is where this project corrects a dated claim.
+
+**E1's packet answers both clauses now, and the builder checks the packet rather than its parts.**
+`assemble --distractors` mixes 30 real curves into the 110 synthetic, matched on band, sex and
+visit-count composition, and `verify --packet` reads the assembled key manifest — the distractor
+count, a chart and a form row for every row, no distractor inside an E4b pair, and the real curves
+interleaved rather than blocked. **The blinding bound is simulated rather than chosen**, after the
+first one was set at a longest run of 4 and measured to be exceeded by an honestly shuffled packet
+3.55% of the time; it is now the worst run in 4,000 shuffles, and the failure it guards — distractors
+appended without shuffling — is a run of 30.
 
 **The basis paid for itself within a day, and this is the demonstration.** Every count above moved
 since the previous measurement, and because the basis is now written down each delta can be
@@ -3147,7 +3204,13 @@ class GrowthScreenTemplate(BaseTemplate):
         "llm.deployment": Param(
             str, pattern=r"^[A-Za-z0-9._+-]+$",
             help="REQUIRED. Deployment name; sweepable, so it may carry no slash"),
-        "llm.temperature": Param(float, default=0.0, ge=0.0, le=2.0),
+        # **Default 1.0, not 0.0.** The gpt-5 family refuses 0.0 outright --
+        # `unsupported_value`, HTTP 400, every call -- and 1.0 is the value
+        # every model in the roster already defaults to: Azure states it in
+        # the refusal itself, and `gemma4:12b` and `qwen3.5:9b` each carry
+        # `PARAMETER temperature 1` in their Modelfile. A default the primary
+        # deployment cannot accept is a trap for the next config written.
+        "llm.temperature": Param(float, default=1.0, ge=0.0, le=2.0),
         # **These two defaults are one decision, and 512/120 was the wrong pair
         # for a template whose `provider` choices include `ollama`.** The budget
         # caps a thinking-capable model's reasoning and its answer together, so
