@@ -373,6 +373,32 @@ def _units_failed_anywhere(
     failures are still visible in `executions.jsonl` and the run's `status`, just
     not folded into unit attrition.
 
+    **An execution that RAISED contributes no unit failures, and that rule was
+    missing until 2026-09-14.** The paragraph above already grants it for a step
+    whose every execution crashed; it did not hold for a step that crashed in
+    some. The asymmetry cost a run: one dropped connection raised one execution
+    of forty-five, all 300 of its units were counted failed against a 600-unit
+    roster, and `max_failed_fraction: 0.2` stopped a plan with eleven executions
+    still to run — for an outage, not for attrition.
+
+    **The discriminator is `status`, which core already holds and which needs no
+    reading of user code.** A *completed* execution that was handed a unit and
+    settled nothing about it has demonstrated that the unit admits no answer:
+    that is attrition, and it accumulates. A *raised* execution has demonstrated
+    nothing about any unit — the step died, and the same unit may settle
+    perfectly in the next repeat. Counting it is not conservative, it is wrong in
+    the direction that spends a budget: the guard exists to stop a run whose
+    complete-case result will not be interpretable, and an outage does not make
+    one uninterpretable.
+
+    **What this deliberately leaves uncovered**, stated rather than absorbed: a
+    step that raises part-way through its units on every execution now trips no
+    threshold at all, and will run the plan to its end. Core cannot tell that
+    case from an outage — both are a raise after some rows — and inventing an
+    execution-level threshold to catch it would be a second knob with no
+    declared home. It is visible in `executions.jsonl`, in the run's `status`,
+    and in the `truncated` block when a plan does stop.
+
     This is deliberately NOT `attrition`, and deliberately not scoped to one
     condition: `reference.md` § "The failure fraction `run` enforces is against the
     run level" is explicit that the fraction is "units that failed in at least one
@@ -399,6 +425,8 @@ def _units_failed_anywhere(
     failed: set[str] = set()
     for r in results:
         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
+            continue
+        if r.status != "completed":
             continue
         scoped = keys
         if r.execution.condition_index is not None:

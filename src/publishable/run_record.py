@@ -57,6 +57,15 @@ def run_status(
     if not results:
         return "failed"
     if all(r.status == "completed" for r in results):
+        # **An all-completed truncation stays `completed`, and that is a ruling
+        # rather than an oversight.** A run whose plan stopped short while every
+        # execution it ran was clean reports `completed` at exit `0`;
+        # `test_an_all_completed_truncation_stays_completed_at_exit_0` exists to
+        # catch a silent change to it, and caught one on 2026-09-14 — a
+        # side-effect of a neighbouring fixture swap, reverted rather than
+        # argued through here. What removes the reader-facing cost is the
+        # `truncated` block, which says the plan stopped and what it owes; the
+        # status describes the executions, and every one of them completed.
         return "completed"
     if any(r.status == "completed" for r in results):
         return "partial"
