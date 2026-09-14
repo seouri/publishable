@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import shutil
 import socket
 import sys
 from collections.abc import Callable
@@ -55,6 +56,7 @@ from publishable.lineage import (
     check_recorded_order,
     read_allocation,
     read_execution_ledger,
+    read_record_file,
     read_sweep_plan,
 )
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
@@ -86,7 +88,12 @@ from publishable.run_identity import (
     read_repo_root,
     take_over_dead_lock,
 )
-from publishable.run_record import assemble_run_yaml, run_status, summary_values
+from publishable.run_record import (
+    assemble_run_yaml,
+    run_status,
+    summary_values,
+    truncation,
+)
 from publishable.runner import (
     StopSignal,
     _arm_keys,
@@ -3864,6 +3871,10 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # line must not change what phases 8-10 receive.
             results = list(resumed.prior_results) + results
         status = run_status(results, planned=len(full_plan), stop=stop.reason)
+        # What the plan still owes, computed here because this is where the full
+        # plan and the results are both in hand, and threaded into the record
+        # rather than recomputed by the assembler — which assembles only.
+        truncated = truncation(results, full_plan, reason=stop.reason)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
         # that case, instead of every condition reporting a misleading empty
@@ -5363,6 +5374,9 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
             # is itself the second, independent witness that the record phase
             # was reached.
             findings=findings,
+            # Absent when the plan reached its end; present with the reason and
+            # the triples never attempted when it did not. See `truncation`.
+            truncated=truncated,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
@@ -5608,6 +5622,92 @@ def command_resume(run_dir: Path) -> int:
         return EXIT_WRONG
 
 
+#: **Which truncations a later attempt could get past, and it is not all of them.**
+#: A stop reason is continuable when the state that caused it can change; the
+#: whole argument is in `spec-defects.md`'s own entry on the terminality of
+#: `run.yaml`, and this constant is that argument written down.
+#:
+#: - `max_failed_fraction` — the guard fired on units whose executions failed,
+#:   and an execution that failed for a transport reason recovers on a retry.
+#: - `apparatus_unreachable` — the instrument stopped answering. The operator's
+#:   next move is to bring it back, which is precisely a state that changes.
+#:
+#: `apparatus_changed` is deliberately absent and is the reason this is a set
+#: rather than a truthiness test. **A moved fact cannot move back**: a
+#: continuation would meet the same gate, truncate again, and leave a second
+#: dead record beside the first. The record is kept and the run is over, which
+#: is what that reason has always meant.
+CONTINUABLE_STOPS = frozenset({"max_failed_fraction", "apparatus_unreachable"})
+
+
+def _continue_truncated(run_dir: Path) -> Path:
+    """A run that ENDED stays ended; one whose plan was TRUNCATED continues.
+
+    **The distinction the record could not make until 2026-09-14.** `run.yaml`
+    means a plan reached its end, and a run holding one is finished: its record
+    is never modified, and `E-RESUME-RUN-ENDED` refuses every later `resume`.
+    That is right for a plan that ended. It was also applied to a plan that
+    stopped early — one dropped socket nineteen hours into a metered run left
+    eleven executions unattempted, a record saying only `partial`, and no route
+    back at any price. The record now says which of the two happened
+    (`run_record.truncation`), so the command can too.
+
+    **Nothing here modifies a record.** The original directory is not written to
+    at all: its contents are COPIED into a freshly allocated `run_<id>/`, minus
+    the two files that would make the copy lie — `run.yaml`, because the
+    continuation has not ended and will assemble its own, and `lock`, because a
+    lock is a claim about a live process and copying one forges it. The first
+    record keeps saying `partial` forever, which is true of that attempt.
+
+    **Why a copy rather than a second reader.** `resume`'s whole machinery —
+    the ledger, the reconstitution, the attempt counts, `allocation.json`,
+    `sweep.yaml`'s execution order, the apparatus baseline — already reads a run
+    directory. Handing it a directory that holds exactly the prior attempt's
+    state means every one of those paths is exercised unchanged rather than
+    gaining a second mode, which is the arrangement this repository keeps
+    finding defects in when it does not.
+
+    **The ancestry is recorded, because otherwise the continuation would claim
+    to have done work it inherited.** `identity.json` gains `continues`, naming
+    the run whose executions it starts from.
+    """
+    record = read_record_file(run_dir / "run.yaml")
+    truncated = record.get("truncated") or {}
+    if truncated.get("reason") not in CONTINUABLE_STOPS:
+        raise ContractError(
+            f"{run_dir / 'run.yaml'} exists and this run ended; a run record is never "
+            "modified. Start a new run instead."
+            + (
+                f" Its plan stopped early for {truncated['reason']!r}, which no later "
+                f"attempt can get past."
+                if truncated.get("reason")
+                else ""
+            ),
+            code="E-RESUME-RUN-ENDED",
+        )
+    identity = read_identity(run_dir)
+    code_hash = str(identity.get("code_hash") or "")
+    continued = allocate_run_dir(run_dir.parent, code_hash, datetime.now(UTC))
+    for item in sorted(run_dir.iterdir()):
+        if item.name in ("run.yaml", "lock", "lock.takeover"):
+            continue
+        if item.is_dir():
+            shutil.copytree(item, continued / item.name)
+        else:
+            shutil.copy2(item, continued / item.name)
+    doc = dict(identity)
+    doc["continues"] = run_dir.name
+    (continued / "identity.json").write_text(json.dumps(doc, indent=2) + "\n")
+    print(
+        f"continuing {run_dir.name} into {continued.name}: "
+        f"{len(record['truncated']['outstanding'])} execution(s) outstanding, "
+        f"stopped for {record['truncated']['reason']!r}. The first record is "
+        f"unchanged.",
+        file=sys.stderr,
+    )
+    return continued
+
+
 def _resume_prepared(run_dir: Path, credentials: list[dict[str, str]]) -> int:
     """Everything `resume` decides, raising as it decides it.
 
@@ -5621,11 +5721,7 @@ def _resume_prepared(run_dir: Path, credentials: list[dict[str, str]]) -> int:
     """
     identity = read_identity(run_dir)
     if (run_dir / "run.yaml").exists():
-        raise ContractError(
-            f"{run_dir / 'run.yaml'} exists, so this run ended; a run record is never "
-            "modified. Start a new run instead.",
-            code="E-RESUME-RUN-ENDED",
-        )
+        run_dir = _continue_truncated(run_dir)
     repo_root = read_repo_root(run_dir)
     config_path = config_path_for(run_dir, repo_root, identity)
     draft = bool(identity["draft"])

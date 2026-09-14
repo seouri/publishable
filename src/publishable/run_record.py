@@ -3,6 +3,7 @@
 See docs/reference.md § The two files.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from publishable.estimate import Estimate
@@ -297,6 +298,7 @@ def assemble_run_yaml(
     hypotheses: list[dict[str, Any]] | None = None,
     attempts: dict[tuple[str, int | None, str | None], int] | None = None,
     findings: list[dict[str, str]] | None = None,
+    truncated: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # `attempts` is `_execution_block`'s own parameter, threaded and not read
     # here: `resume` hands the per-triple record counts it read off
@@ -334,4 +336,57 @@ def assemble_run_yaml(
     # not `warnings`.
     if findings:
         out["findings"] = findings
+    # **Absent when the plan ran to its end**, on `findings`' own precedent: a
+    # `truncated: null` would claim the question was asked and answered, and the
+    # question is only asked of a run that stopped early.
+    #
+    # **Why this key had to exist.** `run_status` has always received `stop` and
+    # `planned`, used both — one to decide the status, one to assert that core
+    # never truncates its own plan silently — and written **neither**. So a
+    # record said `status: partial` and nothing else: a reader could not tell a
+    # plan that reached its end with one failure from one that stopped with
+    # eleven executions never attempted, and neither could a command. Measured on
+    # a real run whose plan broke at 53 of 64 — the record held 53 entries and no
+    # `not_run`, `pending`, `skipped` or `unattempted` marker of any kind.
+    #
+    # It is `truncated` rather than `stop` because that is the fact a reader
+    # needs: `reason` says why core stopped, and `outstanding` says what is still
+    # owed, which is the half no other field in the record carries.
+    if truncated:
+        out["truncated"] = truncated
     return out
+
+
+def truncation(
+    results: list[ExecutionResult],
+    plan: Sequence[Any],
+    *,
+    reason: str | None,
+) -> dict[str, Any] | None:
+    """What a stopped plan still owes, or `None` when it owes nothing.
+
+    `plan` is the full plan, in order; `results` is what ran, including any
+    reconstituted by a resume. A triple present in the plan and absent from
+    `results` was **never attempted** — which is a different fact from a triple
+    that ran and failed, and the one the record could not previously express.
+
+    Assembles only, like everything else here: the reason arrives from
+    `StopSignal`, the plan from the caller, and nothing is re-derived.
+    """
+    ran = {
+        (r.execution.step_name, r.execution.condition_index, r.execution.repeat_label)
+        for r in results
+    }
+    outstanding = [
+        {"step": e.step_name, "condition": e.condition_index, "repeat": e.repeat_label}
+        for e in plan
+        if (e.step_name, e.condition_index, e.repeat_label) not in ran
+    ]
+    if not outstanding:
+        return None
+    return {
+        "reason": reason,
+        "planned": len(plan),
+        "attempted": len(plan) - len(outstanding),
+        "outstanding": outstanding,
+    }
