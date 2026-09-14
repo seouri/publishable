@@ -19,9 +19,11 @@ from tests.test_stats import _repeat_result
 
 from publishable import BaseStep
 from publishable.cli import (
+    CONTINUABLE_STOPS,
     _apply_execution_order,
     _cond_roster,
     _condition_counts,
+    _continue_truncated,
     _entry_for,
     _evaluation_roster,
     _resolved_group_axes,
@@ -15451,6 +15453,13 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
     # right before this assertion's own comment says a stop is printed. That
     # error is why `status` is `"failed"` and it is exactly the case Decision
     # 2 names: a record written beside an error, not only beside a warning.
+    # **`truncated` joins the list here and nowhere else in this file, which is
+    # the point of a whole-key pin.** This is a STOP path: the plan did not reach
+    # its end, so the record now says so and names the triples never attempted.
+    # Every other assertion of this shape is on a run that finished its plan,
+    # where the key is absent -- `findings`' own absent-when-empty rule. A pin
+    # that listed the key everywhere would assert that a completed run
+    # advertises an unfinished one.
     assert list(run.keys()) == [
         "schema_version",
         "run_id",
@@ -15464,7 +15473,15 @@ def test_g1_ordering_chain_appends_before_the_gate_fires_end_to_end(
         "execution",
         "results",
         "findings",
+        "truncated",
     ]
+    assert run["truncated"]["reason"] is not None
+    assert run["truncated"]["attempted"] < run["truncated"]["planned"]
+    assert run["truncated"]["outstanding"], "a stopped plan owes something"
+    assert (
+        len(run["truncated"]["outstanding"])
+        == run["truncated"]["planned"] - run["truncated"]["attempted"]
+    )
     assert run["findings"] == [
         {
             "level": "warning",
@@ -30087,3 +30104,107 @@ def test_every_run_path_finding_is_disclosed_not_just_printed():
         assert not pattern.search(src), (
             f"{fn.__name__} prints a collector directly instead of calling _disclose"
         )
+
+
+# --- continuing a truncated run ----------------------------------------------
+
+
+def _truncated_record(run_dir: Path, *, reason: str, outstanding: int = 2) -> None:
+    """Give a crashed directory the record a truncated run would carry.
+
+    Written by hand rather than produced by a stop path, because the three
+    reasons come from three different guards in three modules and this test is
+    about what `resume` does with the RECORD, not about which guard wrote it.
+    `run_record.truncation`'s own shape is pinned where it is computed.
+    """
+    (run_dir / "run.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "1.0",
+                "run_id": run_dir.name,
+                "status": "partial",
+                "draft": False,
+                "truncated": {
+                    "reason": reason,
+                    "planned": 10,
+                    "attempted": 10 - outstanding,
+                    "outstanding": [
+                        {"step": "s", "condition": i, "repeat": None} for i in range(outstanding)
+                    ],
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+
+@pytest.mark.parametrize("reason", sorted(CONTINUABLE_STOPS))
+def test_a_truncated_run_continues_into_a_new_directory_and_leaves_the_first_alone(
+    tmp_path, reason
+):
+    """**The record is not modified; a second directory is created beside it.**
+
+    A run whose plan stopped early used to be unrecoverable at any price:
+    `run.yaml` existed, so `E-RESUME-RUN-ENDED` refused, and nineteen hours of
+    metered work had no route back. The fix cannot be to edit the record — that
+    rule is load-bearing — so the continuation copies the prior attempt into a
+    freshly allocated `run_<id>/` and works there.
+
+    Asserted on both continuable reasons, because a set of one is a constant
+    wearing a set's clothes and would not notice a second reason being dropped.
+    """
+    control = tmp_path / "control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    _truncated_record(crashed, reason=reason)
+    before = sorted(p.name for p in crashed.parent.iterdir())
+    original = (crashed / "run.yaml").read_bytes()
+    ledger_before = (crashed / "executions.jsonl").read_bytes()
+
+    continued = _continue_truncated(crashed)
+
+    assert continued != crashed
+    assert continued.parent == crashed.parent
+    assert (crashed / "run.yaml").read_bytes() == original, "the record was modified"
+    assert (crashed / "executions.jsonl").read_bytes() == ledger_before
+    assert sorted(p.name for p in crashed.parent.iterdir()) == sorted(before + [continued.name])
+
+    # The continuation inherits the prior attempt's state and nothing that
+    # would make it lie about itself.
+    assert not (continued / "run.yaml").exists(), "a continuation has not ended"
+    assert not (continued / "lock").exists(), "copying a lock forges a live holder"
+    assert (continued / "executions.jsonl").read_bytes() == ledger_before
+    assert json.loads((continued / "identity.json").read_text())["continues"] == (crashed.name)
+
+
+def test_a_run_whose_plan_ended_is_still_refused():
+    """The rule that makes the one above safe. A record with no `truncated`
+    block is a plan that reached its end, and it stays unresumable."""
+    assert "apparatus_changed" not in CONTINUABLE_STOPS
+    assert CONTINUABLE_STOPS == {"max_failed_fraction", "apparatus_unreachable"}
+
+
+def test_a_moved_apparatus_is_not_continuable_and_the_reason_is_the_point(tmp_path):
+    """**A moved fact cannot move back**, so a continuation would meet the same
+    gate, truncate again, and leave a second dead record beside the first.
+
+    This is the one stop reason that writes a record AND stays terminal, which
+    is why the gate reads a set rather than asking whether the plan was
+    truncated at all — the earlier draft of this change asked exactly that, and
+    this repository's existing apparatus test caught it.
+    """
+    control = tmp_path / "control"
+    doc = _h9b_round_trip_project(tmp_path, control)
+    crashed = _h9b_crash_run(doc, control)
+    _truncated_record(crashed, reason="apparatus_changed")
+    # Counted before, not asserted as one: the fixture's own round trip leaves a
+    # run directory of its own beside the crashed one, and a literal here would
+    # be measuring the fixture. What the refusal must not do is ADD one.
+    before = sum(1 for q in crashed.parent.iterdir() if q.name.startswith("run_"))
+    with pytest.raises(ContractError) as excinfo:
+        _continue_truncated(crashed)
+    assert excinfo.value.code == "E-RESUME-RUN-ENDED"
+    assert "apparatus_changed" in str(excinfo.value)
+    assert "no later attempt can get past" in str(excinfo.value)
+    after = sum(1 for q in crashed.parent.iterdir() if q.name.startswith("run_"))
+    assert after == before, "a refusal allocated a directory"
