@@ -15187,6 +15187,43 @@ class Step(BaseStep):
         raise RuntimeError("this execution fails on purpose")
 """
 
+#: **Records once, then COMPLETES without recording** — a true attrition
+#: truncation, where the step above is an outage wearing one.
+#:
+#: The distinction is the whole of `max_failed_fraction`'s subject since
+#: 2026-09-14: a completed execution that was handed a unit and settled nothing
+#: has demonstrated the unit admits no answer, and that accumulates; an
+#: execution that RAISED has demonstrated nothing about any unit. This step is
+#: the first case, so it trips the guard; the one above is the second, so it no
+#: longer does.
+_RECORDS_ONCE_THEN_RECORDS_NOTHING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_first = True
+_n = 0
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        global _first, _n
+        if _first:
+            _first = False
+            for unit in io.units:
+                io.record(unit.key, {{"value": 1.0}})
+            return {{"n": len(io.units)}}
+        # Second execution RAISES, third and later COMPLETE while settling
+        # nothing. The raise is what makes the truncation mixed; the empty
+        # completions are what make it a truncation at all, now that a raise
+        # contributes no unit failures.
+        _n += 1
+        if _n == 1:
+            raise RuntimeError("this execution fails on purpose")
+        return {{"n": 0}}
+"""
+
 
 def test_a_clean_run_completes_with_the_full_run_yaml_shape(tmp_path, capsys):
     """Fixture arm A — a clean run: `len(executions.jsonl)` equals
@@ -15321,20 +15358,32 @@ def test_a_mixed_truncation_is_partial_at_exit_3(tmp_path, capsys):
     this was "every shipped `EXIT_PARTIAL` truncation test's assertion" does
     not survive — those tests are not truncations at all, since a step whose
     every execution raises never records and so never trips
-    `max_failed_fraction`). `_RECORDS_ONCE_THEN_RAISES_STEP` records every
-    unit on its first execution, then raises on every later one:
-    `_units_failed_anywhere` unions failures across every recording
-    execution of the run, so after the raising execution every one of the 20
-    units is recorded under the first repeat label and not under the
-    second — 20 of 20 unresolved, past the declared `0.5` fraction. Measured
-    by running at `814eadd`: 2 of 5 executions recorded, statuses
-    `[completed, failed]`, `run.yaml status: partial`, exit `3`."""
+    `max_failed_fraction`). **The step was replaced on 2026-09-14 and the
+    replacement is the point of the change it belongs to.**
+    `_RECORDS_ONCE_THEN_RAISES_STEP` records every unit on its first execution
+    and then RAISES, which stopped being a truncation when a raised execution
+    stopped contributing unit failures — an outage is not attrition, and that
+    step is an outage. `_RECORDS_ONCE_THEN_RECORDS_NOTHING_STEP` COMPLETES and
+    settles nothing, which is attrition: after the second execution every one of
+    the 20 units is recorded under the first repeat label and unresolved under
+    the second, 20 of 20 past the declared `0.5`.
+
+    **The replacement raises once and then completes empty**, so this arm stays
+    genuinely mixed: the raise supplies the failed execution its name promises,
+    and the empty completion supplies the attrition that trips the guard. An
+    all-empty fixture would have made every execution clean, and the run would
+    then be `completed` at exit `0` — which is
+    `test_an_all_completed_truncation_stays_completed_at_exit_0`'s deliberate
+    ruling, not this arm's subject. The status
+    here is `partial` because an execution genuinely failed. Measured
+    2026-09-14: 3 of 5 executions recorded, statuses
+    `[completed, failed, completed]`, `run.yaml status: partial`, exit `3`."""
     doc = run_a_project(
         tmp_path,
         capsys=capsys,
         units=20,
         limits={"max_failed_fraction": 0.5, "max_executions": 100},
-        _starter_step=_RECORDS_ONCE_THEN_RAISES_STEP,
+        _starter_step=_RECORDS_ONCE_THEN_RECORDS_NOTHING_STEP,
         expect_exit=EXIT_PARTIAL,
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
@@ -15344,10 +15393,16 @@ def test_a_mixed_truncation_is_partial_at_exit_3(tmp_path, capsys):
         for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    assert len(ledger) == 2
+    assert len(ledger) == 3
     assert len(sweep["execution_order"]) == 5
-    assert [r["status"] for r in ledger] == ["completed", "failed"]
+    # Mixed, which is this arm's whole subject: one clean execution, one raise,
+    # and one clean execution that settles nothing — the last being what trips
+    # the guard now that a raise does not.
+    assert [r["status"] for r in ledger] == ["completed", "failed", "completed"]
     assert run["status"] == "partial"
+    assert run["truncated"]["reason"] == "max_failed_fraction"
+    assert run["truncated"]["attempted"] == 3
+    assert len(run["truncated"]["outstanding"]) == 2
     # Same pin as Arm B's addition above: this truncation's reason is
     # `"max_failed_fraction"` too, so no apparatus diagnostic should print.
     output = (doc["stdout"] or "") + (doc["stderr"] or "")
@@ -30208,3 +30263,45 @@ def test_a_moved_apparatus_is_not_continuable_and_the_reason_is_the_point(tmp_pa
     assert "no later attempt can get past" in str(excinfo.value)
     after = sum(1 for q in crashed.parent.iterdir() if q.name.startswith("run_"))
     assert after == before, "a refusal allocated a directory"
+
+
+def test_a_raised_execution_is_an_outage_not_attrition(tmp_path, capsys):
+    """**The neighbour of the truncation test, and its opposite.**
+
+    `_RECORDS_ONCE_THEN_RAISES_STEP` records every unit once and then raises on
+    every later execution. Until 2026-09-14 that tripped `max_failed_fraction`:
+    a raised execution's handed units were counted unresolved, so 20 of 20 went
+    past the declared `0.5` and the plan stopped at 2 of 5. A raise demonstrates
+    nothing about any unit — the step died, and the same unit may settle
+    perfectly in the next repeat — so the plan now runs to its end and the run
+    is `partial` on its execution failures alone.
+
+    The cost of getting this wrong was a real run: one dropped connection raised
+    one execution of forty-five, 300 units of a 600-unit roster were counted
+    failed, and a metered plan stopped nineteen hours in with eleven executions
+    never attempted.
+
+    **The same step, the same limits, the opposite outcome from its neighbour**
+    — which is what makes the pair a test of the rule rather than of a fixture.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=20,
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_RECORDS_ONCE_THEN_RAISES_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger) == len(sweep["execution_order"]) == 5, (
+        "the plan stopped early, so a raised execution is still being counted as unit attrition"
+    )
+    assert [r["status"] for r in ledger] == ["completed"] + ["failed"] * 4
+    assert run["status"] == "partial"
+    assert "truncated" not in run, "the plan reached its end; nothing is owed"
