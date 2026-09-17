@@ -6,6 +6,8 @@
 
 **Fifth pass, 2026-09-17, against `publishable@af0d3d5`.** All three of the fourth pass' pins have moved, and for the first time one of them is a tree `code_hash` covers — so the standing argument that core had not moved is re-derived rather than patched. The pass is surgical, not a rewrite: five sections changed and the rest stands. Its headline is that **core gained two features because this study's E3 lost 19 hours of metered work to a threshold this document recommends**, which the document did not carry until now. What was measured, what was not, and the dependency by name: [the fifth-pass scoping](superpowers/2026-09-17-feasibility-gcl-fifth-pass-SCOPING.md).
 
+**Sixth pass, same day.** The study acted on the fifth pass' two open recommendations — it built the pre-sweep canary and settled the gate-vs-report question — and doing so found **four of the fifth pass' claims wrong, three of them written there rather than inherited**: a withdrawn `0.05` threshold, an argument about the value of a guard that could not fire, a false claim that raising preserves recorded work, and a convergence argument whose two routes were never the same question. The plan triple moved with it, to **62 / 462 / 109,700**. [The sixth-pass scoping](superpowers/2026-09-17-feasibility-gcl-sixth-pass-SCOPING.md) carries all of it. Two passes in one day, each correcting the one before, is the *under-counted and missing surface* pattern turned inward — and the reason this document's sections carry dates rather than a single revision number.
+
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
 This document is non-normative and carries its own examples. It is **not** part of the shared worked example (`cohort-pilot`); see `CLAUDE.md` § Feasibility analyses. It is the second such analysis; the first, [`feasibility-llm-growth-studies.md`](feasibility-llm-growth-studies.md), read two adjacent repositories, and where a conclusion here differs from one there, the difference is re-derived rather than inherited.
@@ -586,6 +588,45 @@ resume of it bills a call or writes a directory — both checked.
 So the route this section describes applies to runs recorded at `456a3db` or later. Recovering E3's
 outstanding 11 executions means **a fresh run**, and at 600 requests per execution that is 6,600
 metered calls to finish, or 27,000 to start over.
+
+> **Superseded 2026-09-17 by the sixth pass, which found four of the claims below wrong — three of
+> them written here rather than inherited.** The paragraphs are kept because a dated argument is
+> evidence of what was believed, and the corrections follow each. See
+> [the sixth-pass scoping](superpowers/2026-09-17-feasibility-gcl-sixth-pass-SCOPING.md).
+>
+> **1. `0.05` is withdrawn, and the error is a denominator.** `max_failed_fraction` counts *distinct
+> units that failed in at least one execution, over the roster* — not requests — so a unit screened
+> once per screening execution amplifies a per-request failure rate by its exposures. At E3's 45
+> executions, `0.05` trips at a **0.1139%** per-request failure rate, `0.10` at 0.2339% and `0.20` at
+> 0.4946%. `0.05` stops a 27,000-call plan for ordinary metered-API noise. The reasoning below
+> compared an observed-zero attrition against 121 permitted units as though the threshold were
+> per-request and missed a **45× amplification**. `0.2` stays.
+>
+> **2. The deeper error: the knob could not fire at all, so "too loose" was an argument about a
+> number with no reader.** Across the eleven screening arms every route was covered — parsed →
+> recorded; refused/malformed/empty under `ineligible` (which all eleven set) → `io.skip` →
+> `ineligible`, and `max_ineligible_fraction` only *warns*; a transport failure → the step *raised*;
+> `parse_failure: failed`, which **no config sets** → the same raise. And a raised execution
+> contributes no unit failures since `af0d3d5`.
+>
+> **3. And the claim that a raise preserves recorded work is false.** It is written below as
+> *"raises after the unit loop and after `io.write`, so every unit it did settle is recorded"*.
+> `runner.py:868-883` puts `io.finalize()`, `recorded`, `skipped` and `rows` inside the runner's
+> `try`, **after** `step.run` returns — so a raise discards every row the execution recorded, up to
+> 600 billed calls, while feeding the threshold nothing. One dropped request threw away 599 answered
+> units and guarded nothing by doing it: the 19-hour failure class one level down, still live after
+> `af0d3d5` fixed the counting above it. The study now leaves such units **unsettled and completes**
+> (`gcl-measurements@82e75ab`), which is the only routing that reaches the guard.
+>
+> **4. The gate-vs-report decision is settled as REPORT**, on the ground stated below — for six of
+> the eleven arms the unusable rate is a property of the manipulation, and E3 exists to ask exactly
+> that. What replaces a gate is `step01b_canary` (`gcl-measurements@577a416`): twenty cases,
+> `scope = "run"`, under **base** parameters, raising above 0.25 unusable. It is safe structurally
+> rather than carefully — a sweep applies per condition and a run-scoped step executes outside them,
+> so it *cannot* see E3's nine formats. **The closing "convergence" argument below dissolves**: its
+> two routes to `0.05` were one withdrawn recommendation and one different question, and at twenty
+> cases a 0.05 bar aborts 26.4% of runs whose true rate is the 0.05 the study tolerates.
+
 
 **And now that `0.2` means attrition, it is too loose for a metered arm — measured, not argued.**
 Across all 45 screening executions of E3's *completed* run, the apparatus returned **13,500 of
@@ -2328,6 +2369,30 @@ harmless.
 > `e06` 4/22/3,000 · `e07` 4/30/6,000 · `e08` 7/51/15,300 · `e09` 2/16/3,960 · `e10` 20/142/28,400.
 > **The sixteen byte-identical blocks were still not re-checked**, and that one is a real
 > dependency: it is a text diff of this document's quoted blocks against the files.
+>
+> **Sixth pass, 2026-09-17 — the triple has moved again, and this document's own recommendations
+> moved it.** The study added `step01b_canary` (`gcl-measurements@577a416`), a `run`-scoped step, in
+> answer to § the note on E3. Re-measured over all fourteen configs at `af0d3d5`:
+>
+> | | fifth pass | sixth pass | delta |
+> |---|---|---|---|
+> | conditions | 62 | **62** | none — a `run`-scoped step adds no condition |
+> | executions | 450 | **462** | +12, one per screening arm |
+> | unit-executions | 106,260 | **109,700** | +3,440 |
+>
+> **The unit-execution figure overstates the canary by about 14×**, and the reason generalises: a
+> `run`-scoped step is handed the whole roster, so `dry-run` counts ~287 unit-executions for a step
+> that issues **twenty** requests. Real added cost is 12 × 20 = **240 requests**, 0.07% of E3's
+> 27,000 alone. `dry-run`'s unit-executions is the documented billing proxy and here it is a poor
+> one — not a defect in core, which cannot know a step ignores most of what it is handed, but a
+> caution for budgeting any plan containing a sampling step.
+>
+> **And the byte-identical claim is now KNOWN stale rather than merely unverified.** Twelve of the
+> fourteen configs gained a comment on `max_failed_fraction` at `gcl-measurements@82e75ab`, so the
+> claim that each quoted config is "byte-identical to a file `publishable validate` accepted" is
+> false for those twelve as written. Both remain true of the *declarations*: 15 of 15 configs
+> validate at that commit, plan 62 / 462 / 109,700. Re-quoting them, or restating the claim as
+> accepted-as-quoted-apart-from-comments, is the remaining work.
 >
 > **A fourth pin also moved and the fifth pass' own table omitted it**: the plugin, pinned by this
 > document at `publishable-growth-chart@368e520`, is at `f06bfbb`.
