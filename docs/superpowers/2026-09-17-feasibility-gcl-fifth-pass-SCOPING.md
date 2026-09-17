@@ -116,6 +116,19 @@ gated on `if r.status != "completed": continue`. Plan enumeration — conditions
 unit-executions — is untouched, and the suite that covers it passes (3622). That is an argument, not
 a measurement, and it is labelled as one. **Re-running it is the first item in the next-steps list.**
 
+> **Corrected the same day, and this scoping was wrong in the direction it warns about.** The
+> scaffold was not missing: `2026-08-28-gcl-measurement` carries all fourteen configs,
+> `src/growth_chart/`, both templates, and `publishable` as an **editable path install pointing at
+> this checkout**. Nothing needed building. Re-measured at `af0d3d5`: `validate` accepts **14 of
+> 14** and `dry-run` sums to **62 / 450 / 106,260**, all three matching. The dependency named above
+> was real in form and false in fact — the apparatus was one directory away — which is this
+> project's *under-counted and missing surface* failure applied to a scoping's own inventory of what
+> it cannot reach. The **sixteen byte-identical blocks** remain unchecked and that dependency is
+> genuine.
+>
+> A **fourth pin** also moved and the table above omitted it: `publishable-growth-chart`, pinned by
+> the analysis at `368e520`, is at `f06bfbb`.
+
 ## Gaps this pass found
 
 | # | gap | where |
