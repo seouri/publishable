@@ -4,6 +4,8 @@
 
 **Read against the plan at commit `d346683`.** The restructure of 2026-08-30 is the design this reads; a further eight commits to 2026-09-10 profiled the snapshot for recording artifacts, restated the generator on the age-2-or-later window, built the generator and then the clinician panel's chart renderer in the study repository, assembled the evidence two preregistration items rest on, and — on the last day — **anchored every data figure in the plan on one named database digest**, after a headline AUROC pair was found to have been measured over a population the plan rejects. The plan now sits in three layers: a **counterfactual core** whose claims are within-subject and read no EHR label at all, a **clinician panel** validating the constructed stimuli, and a secondary **accuracy layer** on a referral outcome that is positive-unlabeled. Every trajectory is drawn from age 2 onward. This analysis is re-derived against that plan rather than patched onto the earlier reading, and where a conclusion here changed, the section says what it replaced — an earlier version of this document is in its git history.
 
+**Fifth pass, 2026-09-17, against `publishable@af0d3d5`.** All three of the fourth pass' pins have moved, and for the first time one of them is a tree `code_hash` covers — so the standing argument that core had not moved is re-derived rather than patched. The pass is surgical, not a rewrite: five sections changed and the rest stands. Its headline is that **core gained two features because this study's E3 lost 19 hours of metered work to a threshold this document recommends**, which the document did not carry until now. What was measured, what was not, and the dependency by name: [the fifth-pass scoping](superpowers/2026-09-17-feasibility-gcl-fifth-pass-SCOPING.md).
+
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
 This document is non-normative and carries its own examples. It is **not** part of the shared worked example (`cohort-pilot`); see `CLAUDE.md` § Feasibility analyses. It is the second such analysis; the first, [`feasibility-llm-growth-studies.md`](feasibility-llm-growth-studies.md), read two adjacent repositories, and where a conclusion here differs from one there, the difference is re-derived rather than inherited.
@@ -83,6 +85,8 @@ growth-chart-literacy/                    # the experiment repository
 ```
 
 **Fourteen configs, one `src/` package, two entrypoints.** `generate experiment` writes a package per experiment, which is right for fourteen *different* pipelines and wrong here: E3 through E10 run the same four steps and differ only in parameters. So the second config onward has its `entrypoint` line pointed at the first one's class — an ordinary hand-edit of a [freely editable file](reference.md#the-one-config-file) — and `validate` accepts it, which is [measured below](#executability-on-this-build). What that buys is the claim the whole sequence rests on: **identical `code_hash`, differing `parameters_hash`**, which is [same code, different parameters](design-principles.md#same-code-different-parameters) stated by the record rather than by the methods section.
+
+**One logical run can now span two run directories, added 2026-09-17.** A [truncated](reference.md#resuming) plan is continued rather than refused: `resume` allocates a fresh `run_<id>/` beside the first, copies the prior attempt's state in — everything but `run.yaml`, which the continuation has not earned, and `lock`, because copying one forges a live holder — and stamps `continues` in `identity.json`. That does **not** disturb the layout above, because each config declares its own `data.output_dir`, so a continuation lands inside that config's own directory rather than anywhere shared. What it does change is reading: **anything that reads "the run" for an arm must follow the `continues` chain**, since one attempt at E3 is now potentially two directories, the first saying `partial` forever because that is true of that attempt. See [the note on E3](#a-note-the-fifth-pass-adds-to-e3).
 
 **One repository is the right seam here, and it is the opposite conclusion from the previous analysis'** — which split two projects across three repositories. The reason is a property of *this* plan rather than a change of taste. Its dependency structure makes E4 through E10 evaluate one frozen screening pipeline over weeks; their reviewer-facing claim is that nothing about the code moved between E4 and E10. `code_hash` covers `src/**` and `templates/**`, so that claim is provable exactly when they share a tree, and a split would give each run a hash of its own with nothing to compare.
 
@@ -530,6 +534,40 @@ hypotheses:
     evaluate_on: ci95_upper
 ```
 
+
+#### A note the fifth pass adds to E3
+
+**This config's `max_failed_fraction: 0.2` stopped E3's rebuild 19 hours in, and core changed
+twice because of it.** Added 2026-09-17; nothing in the config above is edited, because the
+declaration was right and what it *meant* was not.
+
+What happened, from
+[the core scoping that measured it](superpowers/2026-09-14-resuming-a-truncated-run-SCOPING.md):
+`step03_screen` raised `RemoteDisconnected` on one execution of 45 — a dropped socket **19,800
+calls into the 27,000** this section budgets. `_units_failed_anywhere` then charged **every unit of
+that raised execution**, 300 of the 600-unit roster, so `0.5 > 0.2`, the plan broke with **11 of 45
+executions never attempted**, `run.yaml` was written, and `E-RESUME-RUN-ENDED` refused every
+resume. **One dropped socket cost 19 hours of metered work with no route back at any price.**
+
+**The threshold does not change and its meaning does.** A raised execution now contributes no unit
+failures at all — only a *completed* execution that was handed a unit and settled nothing counts,
+which is attrition rather than an outage:
+
+| | before `af0d3d5` | at `af0d3d5` |
+|---|---|---|
+| one raised execution of 45 | charges 300/600 = **0.50 > 0.2** → plan stops | charges **0** |
+| what trips `0.2` | one outage | **121 of 600** units genuinely unsettleable |
+
+So `0.2` guarded outages by accident and now guards attrition on purpose, which is what
+`limits.max_failed_fraction` was declared for. **Two consequences a reader of this section needs.**
+First, what the fix deliberately leaves uncovered: a step that raises part-way through its units on
+*every* execution trips no threshold and runs the plan to its end — core cannot tell that from an
+outage. Second, the guard firing produces **`partial`, not `failed`** — `reference.md` said
+otherwise in two places until 2026-09-14 and the code never agreed — and that distinction is now
+the difference between a recoverable run and a dead one, because a truncated plan is continuable:
+`resume` allocates a fresh `run_<id>/` beside the first, copies everything but `run.yaml` and
+`lock`, and stamps `continues` in `identity.json`. **E3 is therefore the arm most changed by the
+fifth pass, and it is changed in its recovery story rather than in its design.**
 
 ### E3b — the tokenization stress test
 
@@ -2051,6 +2089,18 @@ The pattern across that table is worth naming, because it decides how the paper 
 
 ---
 
+**Added 2026-09-17 — a refusal that was absolute and is now conditional.** `resume` on a directory
+holding a `run.yaml` is still refused (`E-RESUME-RUN-ENDED`), because a run record is never modified
+once written. But a plan that *stopped early* no longer has to be re-run from zero: the record now
+carries a `truncated` block — the `reason`, the `planned` and `attempted` counts, and the
+`outstanding` triples never tried, absent rather than null when the plan reached its end — and
+`resume` continues such a directory into a fresh `run_<id>/`. **Two stop reasons are continuable and
+one is not**, and the discriminator is whether the state can change: `max_failed_fraction` fired on
+executions that may succeed on a retry, and an unreachable apparatus is waiting to be brought back,
+but a **changed** apparatus fact cannot move back — a continuation would meet the same gate and
+leave a second dead record, so `E-RESUME-RUN-ENDED` refuses it by name. For this study the route
+matters most on the metered arms, where the alternative is re-billing a run that was 73% done.
+
 ## Gaps this analysis found in the specification
 
 These are the deliverable's second output: places where a real plan pressed on the schema and something gave. Each was measured; the measurements are in [§ Executability on this build](#executability-on-this-build).
@@ -2168,6 +2218,31 @@ prompted by the study implementing something and finding the tooling had been de
 `templates/**` only, so a run at any of them computes the same one, and every core-side result below
 is carried forward *on that ground* rather than on the assumption that eleven doc commits were
 harmless.
+
+> **Fifth pass, 2026-09-17 at `publishable@af0d3d5`: the paragraph above no longer holds, and it is
+> the argument rather than the number that expired.** `git diff 549dcb3..af0d3d5 -- src templates`
+> is **3 files changed, 194 insertions(+), 6 deletions(-)** —
+> `src/publishable/{cli,run_record,runner}.py`. **Core's hashed trees have moved for the first time
+> since this document began measuring them**, so a `code_hash` computed now differs from one at
+> `9a7844c`, and no core-side figure below may be carried on the ground this paragraph states. The
+> fourteen-commits observation was true and is kept; what changed is that the streak ended.
+>
+> **And it ended because of this study.** Both commits exist to repair a defect E3 hit: see
+> § A note the fifth pass adds to E3, and
+> [the scoping](superpowers/2026-09-17-feasibility-gcl-fifth-pass-SCOPING.md) that measured all of
+> it. The four gates at `af0d3d5`, quoted as printed: `uv run pytest` **3622 passed, 1 skipped,
+> 2 xfailed** in 121.96s; `ruff check .` `All checks passed!`; `ruff format --check .` `102 files
+> already formatted`; `mypy` `Success: no issues found in 56 source files`.
+>
+> **What the fifth pass did NOT re-measure, named rather than carried silently.** The
+> **62/450/106,260** triple and the sixteen byte-identical blocks were not re-run: reproducing them
+> needs the fourteen-config scaffold this pass does not have (a git repo, `publishable new`, a
+> `src/growth_chart` package with both template classes and the step classes, the plugin, a
+> `uv.lock`). The evidence that the triple cannot have moved — offered *as an argument, not a
+> measurement* — is that the only `runner.py` change in the interval sits inside the
+> failure-fraction accounting, gated on `if r.status != "completed": continue`, leaving plan
+> enumeration untouched, with the suite covering it green. Re-running it is the first item in that
+> scoping's next steps.
 
 **What was re-run anyway, because carrying a claim is not the same as checking it.** `validate` on
 all fourteen configs, `dry-run` on all fourteen, all three suites, and a byte comparison of all
@@ -3748,6 +3823,18 @@ class GrowthLabelTemplate(BaseTemplate):
 ---
 
 ## Cost and execution summary
+
+**A budget line the fifth pass adds, 2026-09-17: the table below is what a run costs when it
+finishes, and one of these arms has already been billed for a run that did not.** E3's rebuild
+raised one execution of 45 on a dropped socket **19,800 calls into its 27,000**, and the
+`max_failed_fraction: 0.2` this analysis recommends stopped the plan with 11 executions never
+attempted and no resume possible — **19 hours of metered work, paid for and unusable**. Core has
+since made that class of loss recoverable (see [the note on E3](#a-note-the-fifth-pass-adds-to-e3)),
+so the figures below are again the right budget. But the general point survives the fix and belongs
+in any budget read off this table: **a metered total is a floor, not an expectation**, because the
+partial run that precedes a completed one is billed at the provider and appears nowhere in a plan's
+arithmetic. Two arms carry most of that exposure — E3 at 27,000 requests and E10 at its twelve-hour
+sweep.
 
 | Run | Units | Conditions | Repeats | Executions | Metered requests |
 |---|---|---|---|---|---|
