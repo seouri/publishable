@@ -569,6 +569,75 @@ the difference between a recoverable run and a dead one, because a truncated pla
 `lock`, and stamps `continues` in `identity.json`. **E3 is therefore the arm most changed by the
 fifth pass, and it is changed in its recovery story rather than in its design.**
 
+**The recovery is forward-only, and the 19 hours are still gone. Measured 2026-09-17, not
+inferred.** `resume` was run against the truncated record itself and refused:
+
+    E-RESUME-RUN-ENDED  .../e03-serialization/run_2026-09-13T20-04-32Z_c1a577a
+    run.yaml exists and this run ended; a run record is never modified.
+
+The reason is that the record **predates the feature meant to save it**. `456a3db` added the
+`truncated` block, and that block is *absent* in this record — `stop` is an empty mapping and
+`executions.jsonl` holds 53 rows, 52 completed and 1 failed, with 34 of the 45 screening executions
+recorded. An absent block means "the plan reached its end", which is exactly what this plan did not
+do, so the record is indistinguishable from a completed one and `run.yaml`'s presence ends it. **A
+fix that requires a field the broken record does not carry cannot rescue that record**, and no
+resume of it bills a call or writes a directory — both checked.
+
+So the route this section describes applies to runs recorded at `456a3db` or later. Recovering E3's
+outstanding 11 executions means **a fresh run**, and at 600 requests per execution that is 6,600
+metered calls to finish, or 27,000 to start over.
+
+**And now that `0.2` means attrition, it is too loose for a metered arm — measured, not argued.**
+Across all 45 screening executions of E3's *completed* run, the apparatus returned **13,500 of
+13,500 parsed, with `n_refused`, `n_malformed`, `n_empty` and `n_retried` all zero and
+`unusable_fraction` 0.0**. Observed attrition in this study's only finished metered arm is
+**exactly zero of 600 units**, against a threshold that permits 121.
+
+That gap is not an argument for the guard being wrong — with `min_units_per_cell: 20` and 300 units
+an execution, losing a fifth still leaves 240 and a complete-case result that is interpretable,
+which is the question `max_failed_fraction` exists to answer. It is an argument that **the threshold
+should be priced, and this document set one number for arms whose unit-executions differ in cost by
+an order of magnitude.** A systematic fault — a serializer emitting curves the parser cannot read,
+say — would have to consume 121 units of a 600-unit roster before the guard stopped it, and on this
+arm those units are billed. Tightening the metered arms to **`0.05`** (30 of 600) stops such a fault
+roughly four times sooner while still leaving a very wide margin over an observed zero; the two
+arms with no LLM in them, E2 and E6, have no reason to move, because re-running them is free.
+
+**This is a recommendation, not a correction to the configs above**, which are quoted as
+`validate` accepted them. It is also **not** a registered quantity — preregistration item 8 covers
+the generator's parameters and tolerances, not `limits` — so it can be changed without a
+registration consequence, which is exactly why it is worth getting right rather than inheriting.
+
+**The case core leaves uncovered is already covered here, and by the better party.** `af0d3d5`
+states plainly what its fix does not reach: *a step that raises part-way through its units on every
+execution trips no threshold at all and runs the plan to its end* — core cannot tell that from an
+outage, and inventing an execution-level threshold would be a second knob with no declared home.
+Read against this study, that gap is closed in `src/`, which is where it belongs: the line between
+the plugin and `src/` is that the plugin holds transport and `src/` holds everything that decides an
+answer, and *how many answers is too few* is the second kind.
+
+`step03_screen` carries `UNUSABLE_THRESHOLD = 0.05` and raises on any unit that produced **no usable
+result after retries** — and it raises *after* the unit loop and after `io.write`, so every unit it
+did settle is recorded and both artifacts are on disk before the execution fails. The study's
+position is therefore **enforce on total failure, report on degradation**, which is stronger than
+core's default and correctly placed: core cannot see a step's own notion of usable, and the step can.
+
+**One live decision remains, and it is the mirror of the threshold argument above.**
+`unusable_over_threshold` is *reported and not enforced*: a run in which 10% of responses came back
+refused, malformed or empty — each skippable, none a total failure — completes, with the boolean
+sitting in `per_repeat` for whoever reads it. That is a defensible monitoring design and it should be
+chosen rather than inherited, because on a 27,000-request arm the difference between reporting and
+gating is the price of the requests issued after the signal was available. **The convergence worth
+noting: the step's own threshold is already `0.05`, the number § the threshold argument above
+arrives at from the opposite direction** — one from what the parser tolerates, one from what a
+metered budget tolerates. Two independent routes to the same figure is an argument for adopting it in
+both places.
+
+**And the second uncovered case needs no decision, only a statement.** A truncated record written
+before `456a3db` carries no `truncated` block, so it is indistinguishable from a plan that reached
+its end and can never be continued — measured above on E3's own record. There is nothing to choose:
+those 19 hours are written off, and the route exists for the next one.
+
 ### E3b — the tokenization stress test
 
 **The problem.** Standard decimal encoding and a place-annotated or delimiter-modified encoding carry identical information, so a difference between them is tokenization rather than reasoning. Scoring arithmetic correctness separately from classification correctness is what distinguishes *cannot compute* from *does not understand growth*.
@@ -2234,15 +2303,34 @@ harmless.
 > 2 xfailed** in 121.96s; `ruff check .` `All checks passed!`; `ruff format --check .` `102 files
 > already formatted`; `mypy` `Success: no issues found in 56 source files`.
 >
-> **What the fifth pass did NOT re-measure, named rather than carried silently.** The
-> **62/450/106,260** triple and the sixteen byte-identical blocks were not re-run: reproducing them
-> needs the fourteen-config scaffold this pass does not have (a git repo, `publishable new`, a
-> `src/growth_chart` package with both template classes and the step classes, the plugin, a
-> `uv.lock`). The evidence that the triple cannot have moved — offered *as an argument, not a
-> measurement* — is that the only `runner.py` change in the interval sits inside the
-> failure-fraction accounting, gated on `if r.status != "completed": continue`, leaving plan
-> enumeration untouched, with the suite covering it green. Re-running it is the first item in that
-> scoping's next steps.
+> **The triple was re-measured after all, and the first draft of this block was wrong about why it
+> could not be.** That draft said the fourteen-config scaffold "this pass does not have" would need
+> rebuilding — a git repo, `publishable new`, a package, the plugin, a `uv.lock` — and offered the
+> `runner.py` diff as *an argument, not a measurement*. **The scaffold was never missing.** It is
+> the study's own implementation at `2026-08-28-gcl-measurement`, which carries all fourteen
+> configs, `src/growth_chart/`, both templates, and `publishable` as an **editable path install**
+> pointing at this very checkout — so it runs whatever core is checked out, and needed nothing
+> built. Naming a dependency is the right move when one exists; this one did not, and the honest
+> correction is that the fourth pass' own apparatus was one directory away.
+>
+> Measured 2026-09-17 at `af0d3d5`, against the study's real implementation rather than a
+> reconstruction: **`validate` accepts 14 of 14**, and `dry-run` sums to **62 conditions, 450
+> executions, 106,260 unit-executions** — every one of the three reproducing exactly.
+>
+> | | measured at `af0d3d5` | the fourth pass' claim | |
+> |---|---|---|---|
+> | conditions | 62 | 62 | match |
+> | executions | 450 | 450 | match |
+> | unit-executions | 106,260 | 106,260 | match |
+>
+> Per config: `e02` 2/12/3,000 · `e03` 9/65/19,500 · `e03b` 2/16/2,400 · `e04a` 2/16/5,400 ·
+> `e04b` 2/16/4,000 · `e05a` 3/23/4,600 · `e05b` 2/16/3,200 · `e05c` 1/9/2,700 · `e05d` 2/16/4,800 ·
+> `e06` 4/22/3,000 · `e07` 4/30/6,000 · `e08` 7/51/15,300 · `e09` 2/16/3,960 · `e10` 20/142/28,400.
+> **The sixteen byte-identical blocks were still not re-checked**, and that one is a real
+> dependency: it is a text diff of this document's quoted blocks against the files.
+>
+> **A fourth pin also moved and the fifth pass' own table omitted it**: the plugin, pinned by this
+> document at `publishable-growth-chart@368e520`, is at `f06bfbb`.
 
 **What was re-run anyway, because carrying a claim is not the same as checking it.** `validate` on
 all fourteen configs, `dry-run` on all fourteen, all three suites, and a byte comparison of all
@@ -3829,8 +3917,10 @@ finishes, and one of these arms has already been billed for a run that did not.*
 raised one execution of 45 on a dropped socket **19,800 calls into its 27,000**, and the
 `max_failed_fraction: 0.2` this analysis recommends stopped the plan with 11 executions never
 attempted and no resume possible — **19 hours of metered work, paid for and unusable**. Core has
-since made that class of loss recoverable (see [the note on E3](#a-note-the-fifth-pass-adds-to-e3)),
-so the figures below are again the right budget. But the general point survives the fix and belongs
+since made that class of loss recoverable **for runs recorded at `456a3db` or later** — not for that
+one, which predates the `truncated` block the fix reads and still refuses `resume`
+(see [the note on E3](#a-note-the-fifth-pass-adds-to-e3)) — so the figures below are the right
+budget for a *new* run and understate the bill already paid. But the general point survives the fix and belongs
 in any budget read off this table: **a metered total is a floor, not an expectation**, because the
 partial run that precedes a completed one is billed at the provider and appears nowhere in a plan's
 arithmetic. Two arms carry most of that exposure — E3 at 27,000 requests and E10 at its twelve-hour
