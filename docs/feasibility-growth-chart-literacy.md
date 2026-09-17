@@ -300,7 +300,7 @@ Three readings of that table are worth stating, because each is easy to get back
 
 ## The fourteen configs
 
-Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in one way that is entirely presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. (The house style's `×` is not applied to a config's own text, so E10's `description` reads `2x2` here as it does in the file.) What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
+Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in one way that is entirely presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. **Re-quoted from the live files on 2026-09-17 at `gcl-measurements@2ff922a`, and verified: 14 of 14 byte-identical apart from those two path lines.** The claim had gone two passes unverified, and what had drifted was not only comments — see § What the re-quote found. (The house style's `×` is not applied to a config's own text, so E10's `description` reads `2x2` here as it does in the file.) What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
 
 Three conventions run through all fourteen. Every arithmetic figure is stated **before** the YAML, in the four quantities that matter: conditions, repeats, the execution count `validate` checks against `limits.max_executions`, and the **metered requests** — conditions × repeats × units, which is the only figure a deployment bills for. That last one is not what `dry-run` prints: `dry-run`'s `unit-executions` counts every step's handling of every unit, including the `run`-scoped roster summary and the `condition`-scoped serializer, neither of which issues a request. Both numbers are given, and they are different numbers on purpose.
 
@@ -482,9 +482,22 @@ parameters:
     visit_cap: null
     state_visit_count: false
   stimulus:
-    source: synthetic_physiology
-    physiology: concerning
-    schedule: typical
+    # **`observed`, not `synthetic_physiology`, and that is the whole repair.**
+    # A single-valued `physiology` re-constructs every unit as concerning, so
+    # truth does not vary within a condition -- and a metric is computed per
+    # condition. E3's first run returned nine flag rates wearing the name
+    # `accuracy`: sensitivity, specificity and kappa all collapse on an
+    # all-positive set. Sweeping physiology as a third axis does not fix it
+    # either; it returns eighteen degenerate conditions instead of nine.
+    #
+    # Physiology has to be a property of the UNIT. It already is: the roster is
+    # built at a registered 40% concerning, by the same constructor, one
+    # trajectory per unit. Passing it through is what lets each condition see
+    # one mixed set. See the plan's `decisions/2026-09-13-e03-stimulus-
+    # composition.md` and `-e03-prevalence.md`.
+    source: observed
+    physiology: as_recorded
+    schedule: as_recorded
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
@@ -519,6 +532,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -774,6 +795,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -896,6 +925,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1012,6 +1049,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1136,6 +1181,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1254,6 +1307,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1364,6 +1425,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1476,6 +1545,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1707,6 +1784,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1861,6 +1946,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -1984,6 +2077,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -2121,6 +2222,14 @@ statistics:
 
 limits:
   max_executions: 500
+  # 0.2 stays, and the arithmetic is why: this counts DISTINCT UNITS that
+  # failed in at least one execution over the roster, not requests, so a unit
+  # screened once per screening execution amplifies a small per-request
+  # failure rate by the number of exposures. At E3's 45 executions, 0.05 trips
+  # at a 0.11% per-request failure rate -- ordinary metered-API noise -- and
+  # 0.2 trips at 0.49%, a genuinely degraded deployment. Tightening this was
+  # recommended on 2026-09-17 from the observed zero attrition and withdrawn
+  # once the denominator was worked out.
   max_failed_fraction: 0.2
   max_ineligible_fraction: 0.5
   min_units_per_cell: 20
@@ -2387,12 +2496,44 @@ harmless.
 > one — not a defect in core, which cannot know a step ignores most of what it is handed, but a
 > caution for budgeting any plan containing a sampling step.
 >
-> **And the byte-identical claim is now KNOWN stale rather than merely unverified.** Twelve of the
-> fourteen configs gained a comment on `max_failed_fraction` at `gcl-measurements@82e75ab`, so the
-> claim that each quoted config is "byte-identical to a file `publishable validate` accepted" is
-> false for those twelve as written. Both remain true of the *declarations*: 15 of 15 configs
-> validate at that commit, plan 62 / 462 / 109,700. Re-quoting them, or restating the claim as
-> accepted-as-quoted-apart-from-comments, is the remaining work.
+> **The byte-identical claim was re-checked and the blocks re-quoted, 2026-09-17 at
+> `gcl-measurements@2ff922a`: 14 of 14 are byte-identical apart from the two path lines.** It had
+> gone two passes unverified, and the drift was **not only comments** — see § What the re-quote
+> found. 15 of 15 configs validate; plan 62 / 462 / 109,700.
+
+## What the re-quote found
+
+Re-checking the fourteen quoted configs against the live files closed the one dependency the fifth
+and sixth passes both left open, and it was not the mechanical job both of them called it.
+
+**Eleven configs had drifted by comment only** — the eight-line note on `max_failed_fraction` added
+at `gcl-measurements@82e75ab`. **Two had not drifted at all**: `e02` and `e06`, the arms with no
+deployment, which that commit deliberately left alone. That part was mechanical.
+
+**E3 had drifted substantively, and the document was quoting a design its own subject had
+abandoned.** The block read:
+
+    source: synthetic_physiology
+    physiology: concerning
+    schedule: typical
+
+and the live config reads `source: observed`, `physiology: as_recorded`, `schedule: as_recorded`,
+changed at `gcl-measurements@d8d7899` — *"Rebuild E3's roster: truth varies within a condition, and
+the schedule is drawn."* The config's own comment gives the reason, and it is a measurement rather
+than a preference: **a single-valued `physiology` re-constructs every unit as concerning, so truth
+does not vary within a condition — and a metric is computed per condition.** E3's first run returned
+nine flag rates wearing the name `accuracy`, with sensitivity, specificity and kappa all collapsing
+on an all-positive set. Sweeping physiology as a third axis does not repair it either: that returns
+eighteen degenerate conditions instead of nine. Physiology has to be a property of the **unit**, and
+it already is — the roster is built at a registered 40% concerning, one trajectory per unit, so
+passing it through is what lets each condition see one mixed set.
+
+**Why the prose above survived and the block did not.** § E3's text says its items are *constructed*
+and its answer known by construction, which is still true: what moved is **where** the construction
+happens — per unit at roster build, rather than per condition through a single-valued parameter. A
+document that quotes a config verbatim can therefore be right in every sentence and wrong in the
+block, which is the argument for the byte-identical claim existing at all, and the reason leaving it
+unchecked for two passes was the wrong call twice.
 >
 > **A fourth pin also moved and the fifth pass' own table omitted it**: the plugin, pinned by this
 > document at `publishable-growth-chart@368e520`, is at `f06bfbb`.
