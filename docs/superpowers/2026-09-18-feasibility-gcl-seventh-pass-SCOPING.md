@@ -176,3 +176,68 @@ completion and is `None` by design.
 - **`e05e` has never executed**, in this tree or anywhere. It validates and dry-runs.
 - **The plan repository was read, not run.** Every figure attributed to it above is quoted from its
   own text at `15a7f7a`, including the two verification numbers in finding 5.
+
+---
+
+## Appended 2026-09-18: finding 5 was acted on, and the criterion is closed
+
+The author's ruling on finding 5 was **fix the CV row first**, so this pass did, in the plan
+repository. Recorded here because the finding is above and a filing that says "carried" is not a
+filing.
+
+**`cv_under_02` +52.18% → −2.44%; the generator goes 34/36 → 35/36**, at n = 20,000 over all 36
+seeds, where the control reproduces the manuscript's published figures to the digit. `over3` is
+unmoved at −19.30% against −19.02% and remains the single miss.
+`growth-chart-literacy@d4f2e5c`, with `decisions/2026-09-18-late-visit.md` carrying the derivation.
+
+**The preceding refit's conclusion was right and its scope line is what made the fix findable.** It
+measured 48 cells and concluded the row could not be closed — *a frontier in `SCHED_SLIP_MU` ×
+`SCHED_SLIP_SD`*, explicitly not a claim that the criteria are irreconcilable. `cv_under_02` and
+`near` are both consequences of one per-child slip, so their gradients sit 3.8° apart and no setting
+of that mechanism separates them. **A second mechanism does.** The model had one interval-level
+irregularity — `SCHED_SKIP`, which doubles an interval — and a missed visit is not the only way a
+schedule goes irregular. A visit attended *late*, at 1.26× the period (15.7 months), leaves `near`'s
+0.8–1.2y denominator instead of degrading its numerator, and sits under `over18`'s 18-month
+threshold, which a doubled interval does not. Measured rate **0.047** against the ≤0.097 needed.
+
+**The check that is not a fit.** The peripubertal band is unfitted, unscored by `verify`, and its
+targets entered no objective here — and it improves anyway, 17 rows outside to 14, its own
+`cv_under_02` going +111% to +34%. A parameter set tuned to one band's row has no reason to move
+another band's version of it by 77 points.
+
+### Three things this half of the pass is worth reading for
+
+**1. A branch written the obvious way destroyed its own control, and only looking at it caught that.**
+The first implementation read `elif rng.random() < SCHED_LATE`, which costs a second draw whenever
+the skip does not fire and re-randomises every later interval of that child. At `SCHED_LATE = 0` the
+control then differed from shipped by a whole fresh sample: `over3` moved **5.8pp** and two rows
+crossed the band, on a change that does nothing. Rewritten as one uniform against two thresholds it
+reproduces the stream bit for bit and the control comes back at 34/36 with `over3` −21.55% exactly.
+This is *a control asserting only absences* from `CLAUDE.md` § Writing checks that can fail, in its
+other form: **a control that cannot reproduce is not a control**, and nothing would have failed —
+the scan would simply have compared every candidate against a baseline that was already a different
+sample.
+
+**2. The acceptance rule's condition 5 is unsatisfiable by the status quo.** Conditions 1–4 are to
+hold on both held-out pools, and their `DRIFT` baselines and `over3` floor are **fit-pool** figures.
+Measured: the shipped parameters fail there — `over3` −22.85% on held-out A against a −22.44% floor,
+and on held-out B `f_long` reads 13.89% against the fit pool's 8.75%, past the 9.5% cap.
+`slip_scan.check_rule_satisfiable` asserts the rule against the status quo **on the fit pool only**,
+which is the same fault that assertion exists to catch, one instrument along. Nothing here rests on
+condition 5; the decision rests on Phase 3, where control and candidate share 36 seeds. Recorded and
+not repaired — the rule belongs to the refit that wrote it.
+
+**3. The fix does not reach an E3 run out of the measurement tree.** Those rosters take their visit
+ages from `tools/example_inputs.py`, which draws its own gaps; the plan's whole `SCHED_` family is
+`NOT_PORTED` there for the stated reason that the tree draws no schedule. So the corrected generator
+reaches the *manuscript's* E3 stimuli and not that tree's, and an E3 run there would exercise the
+pipeline rather than the fix. **This is the fact that should decide whether 27,000 requests are worth
+issuing**, and it is not one the earlier authorization could have accounted for.
+
+### What this does not settle
+
+- **`over3` stands**, on its existing disposition as a registered, reported limitation.
+- **Two parameters are new and one moved**, so preregistration item 8 makes this a registration
+  event. That is the study's to record and is named in the decision record rather than done here.
+- **Findings 3 and 4 above are untouched.** The E1-gates-E3 disagreement and the placeholder
+  serialization are decisions, not defects, and neither is this pass' to make.

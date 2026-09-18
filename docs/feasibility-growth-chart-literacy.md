@@ -8,6 +8,20 @@
 
 **Sixth pass, same day.** The study acted on the fifth pass' two open recommendations — it built the pre-sweep canary and settled the gate-vs-report question — and doing so found **four of the fifth pass' claims wrong, three of them written there rather than inherited**: a withdrawn `0.05` threshold, an argument about the value of a guard that could not fire, a false claim that raising preserves recorded work, and a convergence argument whose two routes were never the same question. The plan triple moved with it, to **62 / 462 / 109,700**. [The sixth-pass scoping](superpowers/2026-09-17-feasibility-gcl-sixth-pass-SCOPING.md) carries all of it. Two passes in one day, each correcting the one before, is the *under-counted and missing surface* pattern turned inward — and the reason this document's sections carry dates rather than a single revision number.
 
+**Seventh pass, 2026-09-18, against `publishable@d9b3b60`.** Asked to leave E1 the only blocker, and
+the first command run answered no: **thirteen of fifteen configs did not validate**, on a parameter
+added to the code and to every screening config and to the template's spec in neither. 275 study
+tests passed over it, because nothing in that suite had ever run `validate` on a config. The sixth
+pass could not have caught it — it re-quoted config *text*, and a block can be byte-identical to a
+document and still be refused by the tool the document describes. Fixed, with a test and a mutation;
+15 of 15 now validate and the triple is **64 / 479 / 113,100**. Two findings this pass cannot close
+and one it did: five passages disagree about whether E1's panel gates E3 and therefore all of Layer
+A; eleven configs pin a serialization E3 is supposed to *select*; and the generator's second unmet
+criterion — added 2026-09-17, unregistered, on the schedule channel E3's own stimuli are drawn from —
+**was closed on 2026-09-18** by giving the model a *late* visit as distinct from a missed one.
+[The seventh-pass scoping](superpowers/2026-09-18-feasibility-gcl-seventh-pass-SCOPING.md) carries
+the measurement.
+
 This document does not reproduce that plan. It asks a narrower question: **which of its ten experiments `publishable`'s vocabulary expresses, what each config actually is, how fourteen runs share one directory, where the machinery every run needs lives, what it costs to execute, and which parts core refuses.** The refusals are the load-bearing half — a feasibility analysis that only lists what fits is an advertisement.
 
 This document is non-normative and carries its own examples. It is **not** part of the shared worked example (`cohort-pilot`); see `CLAUDE.md` § Feasibility analyses. It is the second such analysis; the first, [`feasibility-llm-growth-studies.md`](feasibility-llm-growth-studies.md), read two adjacent repositories, and where a conclusion here differs from one there, the difference is re-derived rather than inherited.
@@ -302,7 +316,14 @@ Three readings of that table are worth stating, because each is easy to get back
 
 Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in one way that is entirely presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. **Re-quoted from the live files on 2026-09-17 at `gcl-measurements@2ff922a`, and verified: 14 of 14 byte-identical apart from those two path lines.** The claim had gone two passes unverified, and what had drifted was not only comments — see § What the re-quote found. (The house style's `×` is not applied to a config's own text, so E10's `description` reads `2x2` here as it does in the file.) What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
 
-Three conventions run through all fourteen. Every arithmetic figure is stated **before** the YAML, in the four quantities that matter: conditions, repeats, the execution count `validate` checks against `limits.max_executions`, and the **metered requests** — conditions × repeats × units, which is the only figure a deployment bills for. That last one is not what `dry-run` prints: `dry-run`'s `unit-executions` counts every step's handling of every unit, including the `run`-scoped roster summary and the `condition`-scoped serializer, neither of which issues a request. Both numbers are given, and they are different numbers on purpose.
+**There are fifteen, and fourteen are quoted.** `e05e-missingness-swap` gained the roster it had
+never had on 2026-09-18 and validates; it is not written out below, because quoting a config is a
+re-quote against the live file and this section's last one was 2026-09-17. Its arithmetic is in
+[§ Cost and execution summary](#cost-and-execution-summary), which does carry its row, and what it
+is for is under [§ What core refuses](#what-core-refuses-and-the-route-for-each). Reading this
+section as the whole set is the one mistake it invites.
+
+Three conventions run through all fourteen quoted here. Every arithmetic figure is stated **before** the YAML, in the four quantities that matter: conditions, repeats, the execution count `validate` checks against `limits.max_executions`, and the **metered requests** — conditions × repeats × units, which is the only figure a deployment bills for. That last one is not what `dry-run` prints: `dry-run`'s `unit-executions` counts every step's handling of every unit, including the `run`-scoped roster summary and the `condition`-scoped serializer, neither of which issues a request. Both numbers are given, and they are different numbers on purpose.
 
 
 ### E2 — the utilization baseline
@@ -2416,90 +2437,176 @@ not a log: every number below was produced by running the command named beside i
 named here. Earlier measurements against earlier commits are in this file's git history, which is
 where a superseded reading belongs.
 
-### Measured on 2026-09-13 against `publishable` commit `549dcb3`
+### Measured on 2026-09-18 against `publishable` commit `d9b3b60`
 
-Also pinned: the plan at `growth-chart-literacy@e69489b`, and the two sibling repositories at
-`2026-08-28-gcl-measurement@087e071` and `publishable-growth-chart@368e520`. **This is the fourth
-pass of this revision and the study trees moved between each**: the weight channel was ported and
-gap 19 closed, then the generator's AR(1) was re-indexed and both channels refitted, then the height
-recording grid was replaced and two of its registered targets corrected. The pins advance each time
-rather than a finding being left reading as open — every figure below that names a sibling commit
-names the one it was measured at. **The date has moved for
-the first time in six measurements**, which is worth one sentence rather than none: the previous five
-all read *2026-09-12*, and a reader could not have ordered them from the dates alone. That is the
-argument for the commit pins beside the date, made by the case that actually happened.
+Also pinned: the plan at `growth-chart-literacy@15a7f7a`, the study implementation at
+`gcl-measurements@e94a5cf` and the plugin at `publishable-growth-chart@368e520`. The
+[seventh-pass scoping](superpowers/2026-09-18-feasibility-gcl-seventh-pass-SCOPING.md) carries the
+whole measurement; this section carries what a reader of this document needs.
 
-**Only the plan and one sibling moved.** Core's hashed trees are byte-identical to `9a7844c` across
-**fourteen** commits: `git diff 9a7844c..549dcb3 -- src templates` is **empty**, and all fourteen are
-re-measurements of this very document or repairs to its own guards. **Four re-measurements in one
-day is itself the observation**: not one of them was prompted by core moving, and every one was
-prompted by the study implementing something and finding the tooling had been describing it wrong. `code_hash` covers `src/**` and
-`templates/**` only, so a run at any of them computes the same one, and every core-side result below
-is carried forward *on that ground* rather than on the assumption that eleven doc commits were
-harmless.
+**This pass was asked a different question from the six before it** — not what the schema expresses
+but what stands between this study and execution — and the first command run answered it:
 
-> **Fifth pass, 2026-09-17 at `publishable@af0d3d5`: the paragraph above no longer holds, and it is
-> the argument rather than the number that expired.** `git diff 549dcb3..af0d3d5 -- src templates`
-> is **3 files changed, 194 insertions(+), 6 deletions(-)** —
-> `src/publishable/{cli,run_record,runner}.py`. **Core's hashed trees have moved for the first time
-> since this document began measuring them**, so a `code_hash` computed now differs from one at
-> `9a7844c`, and no core-side figure below may be carried on the ground this paragraph states. The
-> fourteen-commits observation was true and is kept; what changed is that the streak ended.
->
-> **And it ended because of this study.** Both commits exist to repair a defect E3 hit: see
-> § A note the fifth pass adds to E3, and
-> [the scoping](superpowers/2026-09-17-feasibility-gcl-fifth-pass-SCOPING.md) that measured all of
-> it. The four gates at `af0d3d5`, quoted as printed: `uv run pytest` **3622 passed, 1 skipped,
-> 2 xfailed** in 121.96s; `ruff check .` `All checks passed!`; `ruff format --check .` `102 files
-> already formatted`; `mypy` `Success: no issues found in 56 source files`.
->
-> **The triple was re-measured after all, and the first draft of this block was wrong about why it
-> could not be.** That draft said the fourteen-config scaffold "this pass does not have" would need
-> rebuilding — a git repo, `publishable new`, a package, the plugin, a `uv.lock` — and offered the
-> `runner.py` diff as *an argument, not a measurement*. **The scaffold was never missing.** It is
-> the study's own implementation at `2026-08-28-gcl-measurement`, which carries all fourteen
-> configs, `src/growth_chart/`, both templates, and `publishable` as an **editable path install**
-> pointing at this very checkout — so it runs whatever core is checked out, and needed nothing
-> built. Naming a dependency is the right move when one exists; this one did not, and the honest
-> correction is that the fourth pass' own apparatus was one directory away.
->
-> Measured 2026-09-17 at `af0d3d5`, against the study's real implementation rather than a
-> reconstruction: **`validate` accepts 14 of 14**, and `dry-run` sums to **62 conditions, 450
-> executions, 106,260 unit-executions** — every one of the three reproducing exactly.
->
-> | | measured at `af0d3d5` | the fourth pass' claim | |
-> |---|---|---|---|
-> | conditions | 62 | 62 | match |
-> | executions | 450 | 450 | match |
-> | unit-executions | 106,260 | 106,260 | match |
->
-> Per config: `e02` 2/12/3,000 · `e03` 9/65/19,500 · `e03b` 2/16/2,400 · `e04a` 2/16/5,400 ·
-> `e04b` 2/16/4,000 · `e05a` 3/23/4,600 · `e05b` 2/16/3,200 · `e05c` 1/9/2,700 · `e05d` 2/16/4,800 ·
-> `e06` 4/22/3,000 · `e07` 4/30/6,000 · `e08` 7/51/15,300 · `e09` 2/16/3,960 · `e10` 20/142/28,400.
-> **The sixteen byte-identical blocks were still not re-checked**, and that one is a real
-> dependency: it is a text diff of this document's quoted blocks against the files.
->
-> **Sixth pass, 2026-09-17 — the triple has moved again, and this document's own recommendations
-> moved it.** The study added `step01b_canary` (`gcl-measurements@577a416`), a `run`-scoped step, in
-> answer to § the note on E3. Re-measured over all fourteen configs at `af0d3d5`:
->
-> | | fifth pass | sixth pass | delta |
-> |---|---|---|---|
-> | conditions | 62 | **62** | none — a `run`-scoped step adds no condition |
-> | executions | 450 | **462** | +12, one per screening arm |
-> | unit-executions | 106,260 | **109,700** | +3,440 |
->
-> **The unit-execution figure overstates the canary by about 14×**, and the reason generalises: a
-> `run`-scoped step is handed the whole roster, so `dry-run` counts ~287 unit-executions for a step
-> that issues **twenty** requests. Real added cost is 12 × 20 = **240 requests**, 0.07% of E3's
-> 27,000 alone. `dry-run`'s unit-executions is the documented billing proxy and here it is a poor
-> one — not a defect in core, which cannot know a step ignores most of what it is handed, but a
-> caution for budgeting any plan containing a sampling step.
->
-> **The byte-identical claim was re-checked and the blocks re-quoted, 2026-09-17 at
-> `gcl-measurements@2ff922a`: 14 of 14 are byte-identical apart from the two path lines.** It had
-> gone two passes unverified, and the drift was **not only comments** — see § What the re-quote
-> found. 15 of 15 configs validate; plan 62 / 462 / 109,700.
+    $ for c in configs/*/config.yaml; do uv run publishable validate "$c"; done
+    error E-PARAM-UNKNOWN parameters.stimulus.availability_mode
+      is not a parameter of this template — did you mean `stimulus.height_availability`?
+
+**Thirteen of fifteen configs did not validate**, once per arm that declares a deployment.
+`stimulus.availability_mode` was added to `construct.py`, to `step02_construct` and to all thirteen
+configs at `gcl-measurements@e94a5cf`, and to `growth_screen.parameter_spec` in none of them. Only
+`e02` and `e06`, the two arms on the other template, still validated — and **275 study tests passed
+over it**, because that suite exercises the constructor through its own Python signature and nothing
+in it had ever run `validate` over a config.
+
+**The sixth pass could not have caught this and it is worth saying why.** It re-quoted fourteen
+config blocks against the live files — a text diff, the right instrument for the question it asked.
+A block can be byte-identical to a document and still be refused by the tool the document describes.
+*Quoting a config is not validating one.*
+
+Fixed at `gcl-measurements@60b14b4`: the `Param` is registered, `tools/example_inputs.py` learned the
+fifteenth arm whose roster did not exist, and `tests/test_configs.py` now validates every config with
+a can-fail control beside it — verified by mutation rather than by reading, since unregistering the
+`Param` again turns 13 of its cases red.
+
+**After the fix, measured at `d9b3b60` / `60b14b4`:**
+
+| | measured | what it was |
+|---|---|---|
+| `validate` | **15 of 15**, 0 errors | 2 of 15 before the fix |
+| warnings | 6 × `W-STATS-FAMILY`, 3 × `W-DATA-CLUSTER-UNDECLARED` | on nine configs; six are clean |
+| conditions | **64** | 62 |
+| executions | **479** | 462 |
+| unit-executions | **113,100** | 109,700 |
+| study suite | **292 passed** | 275 |
+
+Per config, conditions / executions / unit-executions: `e02` 2/12/3,000 · `e03` 9/66/19,800 ·
+`e03b` 2/17/2,550 · `e04a` 2/17/6,000 · `e04b` 2/17/4,250 · `e05a` 3/24/4,800 · `e05b` 2/17/3,400 ·
+`e05c` 1/10/3,000 · `e05d` 2/17/5,100 · `e05e` 2/17/3,400 · `e06` 4/22/3,000 · `e07` 4/31/6,200 ·
+`e08` 7/52/15,600 · `e09` 2/17/4,400 · `e10` 20/143/28,600.
+
+**The other fourteen reproduce the sixth pass exactly** — 62 / 462 / 109,700 — so the whole delta is
+`e05e`'s row, and that agreement is the check that this is a re-measurement of the same thing rather
+than a new number.
+
+### The fifteenth arm, and the fourteen this document still counts
+
+`e05e-missingness-swap` is real: [§ E5e in the plan](#what-core-refuses-and-the-route-for-each)
+declares it, `construct.py` implements its `availability_mode: fixed_count`, and its tests pin both
+of the wrong implementations that preceded it. What it did not have was a roster —
+`tools/example_inputs.py` knew fourteen arms — so it earned `E-DATA-UNREADABLE` on top of the
+parameter error. **§ Cost and execution summary now carries its row and its totals; § The fourteen configs does
+not quote it**, and that split is deliberate rather than half-done: a cost row is arithmetic this
+section measured, and a quoted config block is a byte comparison against a live file, which is a
+re-quote and belongs to a pass that does one.
+
+The arm prints **SHORT by 38** against the study's own sizing tool — 200 planned, 238 needed — and
+clears the *uncorrected* margin at 197, so the shortfall is core's Holm family of 2 and nothing else.
+The plan puts E5e in a {E5a–e} family of five, and [a family cannot span runs](#gaps-this-analysis-found-in-the-specification).
+
+### What executed
+
+**E2 and E6**, the two arms needing no deployment, both on rosters extracted from the real cohort on
+2026-09-12, both `status: completed`:
+
+| | verdict | quantity |
+|---|---|---|
+| `e02` | `supported: true`, `verdict_rests_on: reported` | AUROC **0.5786**, ci95 [0.5436, 0.6153], n = 1,000 units, 0 failed |
+| `e06` | `supported: true`, `verdict_rests_on: computed` | visit count's contribution to AUROC **+0.0636**, ci95 [0.0251, 0.1018], `paired_percentile_over_units_clustered`, n_paired 562 over 286 clusters |
+
+Both carry a populated `findings:` block holding the `W-STATS-FAMILY` the run raised; `e06` reports
+38 of 600 units `ineligible` and none failed.
+
+**No metered arm ran**, and the reason is not cost. See the two sections below.
+
+### The deployment answers, and one fact it cannot
+
+`dry-run` on every screening arm reports `W-APPARATUS-UNANSWERED` for `system_fingerprint` and for
+nothing else, once per condition. The plugin's probe leaves a fact unanswered rather than raising
+when a metadata read fails, so **`model_version` answering is core's own report that the Azure
+deployment resolved and the credentials are live**. `system_fingerprint` is returned only on a
+completion, so no metadata read can produce it; that is by design and not a fault.
+
+### E3's completed run is of a design its own subject abandoned
+
+`run_2026-09-12T23-51-56Z_d50131d` says `completed`. Its embedded `config.yaml` carries
+`source: synthetic_physiology` / `physiology: concerning` / `schedule: typical`; the live config
+reads `observed` / `as_recorded` / `as_recorded`, with a different `parameters_hash`. **E3 has not
+executed as currently specified**, so its 27,000 metered requests are unpaid rather than paid, and
+any reading of "E3 has run" has to name which E3.
+
+The reason the design moved is worth carrying because core is what made it visible: a single-valued
+`physiology` leaves truth with no variation *in the only place a metric is computed*, so the first
+run returned nine flag rates wearing the name `accuracy` — sensitivity, specificity and kappa all
+collapse on an all-positive set. Physiology is a property of the unit, and the roster already
+carries it.
+
+### Is E1 the only blocker? No, and the question is not settled anywhere
+
+This pass was commissioned to leave the clinician panel as the only thing outstanding. It cannot,
+and the obstacle is a disagreement rather than a defect:
+
+| says | where |
+|---|---|
+| "**Depends on:** Nothing — it is the root of the core" | plan §E3 header |
+| "600 constructed trajectories … **validated by the E1 panel** under that section's decision rule" | plan §E3 Sample |
+| "E3 and E8 draw from them and **inherit**"; the panel "sits on the critical path to *every* Layer A arm" | plan § Dependency Structure |
+| "the generator is corrected **before any arm using synthetic stimuli is run**" | plan §E1 realism failure |
+| "**Blocks:** The *interpretation* of E4b, E5b and E9. Nothing else." | plan §E1 header |
+
+**This document inherits the split rather than resolving it**: [§ E3](#e3--serialization-selection)
+says E3 "inherits that validation and waits on it", and § What is still not measured says E3
+"depends on nothing … and can be run". Both sentences are in this file.
+
+Which reading holds decides the schedule of everything. Under the Sample-and-Dependency reading the
+panel is upstream of E3 and therefore of all of Layer A, and the only arms runnable before clinicians
+read anything are E2, E4a and E6 — Layer C, real patients, no constructed stimulus. Under the header
+reading, E3 runs now and E4a, E5c and E5d follow it. **A feasibility analysis states the
+contradiction; it does not pick the tidier side.**
+
+**And a second thing stands between the metered arms and a run.** `e04a`, `e05c`, `e05d` and eight
+others pin `serialize: {features: derived, format: markdown_table}` as literals, and the plan's §E3
+decision rule says the winner *on the selection half* becomes the standard serialization for E4–E10.
+So `markdown_table` in those files today is a placeholder wearing the shape of a result. `features:
+derived` is different and correctly so: fixed a priori, registered 2026-09-12, not a selection axis.
+
+### The generator shipped with two unmet criteria; one was closed on 2026-09-18
+
+Checked because an authorization to run E3 was conditioned on the generator being final. The
+companion manuscript states it plainly — "**Two criteria fail, and the second was added the same day
+the count rose**" — and they are not of one kind:
+
+| criterion | read | registered? | disposition |
+|---|---|---|---|
+| share of recorded falls > 3 cm | −19.02% (se 0.89%) | **yes**, item 8 | reported as a limitation with a mechanism |
+| share of curves with per-curve gap CV < 0.02 | **+52.18%** (se 0.29%) | no — added 2026-09-17 | none recorded — **closed 2026-09-18** |
+
+The second was a **schedule** row, and §Cross-Cutting has E3's items drawing their visit ages from
+the generator's schedule model — only E4b and E7 use real scaffolds. So it reached E3's own stimuli,
+it sat on E5c's H1 by name ("spacing regularity"), and it was the artifact class **E1's realism check
+is powered to detect**: the generator made 2.2× as many effectively-perfect metronomes as the cohort,
+0.175 against 0.080 at CV < 0.01. A panel that separates synthetic from real on spacing alone fails
+that check, whose pass condition is failure to reject.
+
+**It is closed at `growth-chart-literacy@d4f2e5c`, and the shape of the fix is worth one paragraph
+here because it is the same shape this analysis keeps meeting.** A 48-cell search had concluded the
+row could not be closed, and had scoped that conclusion correctly — *a frontier in `SCHED_SLIP_MU` ×
+`SCHED_SLIP_SD`*. The row and the one blocking it were both consequences of a single per-child slip,
+so no setting of that mechanism separated them; a **second** mechanism did. A visit can now be
+attended *late* (1.26× the period, 15.7 months) as distinct from missed (2×, 24 months), which
+leaves the blocking row's denominator rather than degrading its numerator. `cv_under_02` moves
+**+52.18% → −2.44%**, the generator goes **34/36 → 35/36**, and the unfitted peripubertal band
+improves independently. `over3` stands as the single miss on its existing disposition.
+
+**What that does NOT change is what an E3 run out of the measurement tree would screen.** Those
+rosters take their visit ages from `tools/example_inputs.py`, which draws its own gaps — the plan's
+schedule model is `NOT_PORTED` there, for the stated reason that the tree draws no schedule. So the
+fix reaches the *manuscript's* E3 stimuli and not that tree's, and an E3 run there would exercise the
+pipeline rather than the corrected generator.
+
+**Two sentences elsewhere said "the single miss"** when there were two; both were corrected on
+2026-09-18 along with the fix, in the plan's `CLAUDE.md` and the companion manuscript's abstract.
+They are recorded here because a build claim inherited from a stale sentence is how this analysis has
+been wrong before.
 
 ## What the re-quote found
 
@@ -3072,7 +3179,7 @@ unit-executions (65 executions × **300** units handed to each)* against a 600-u
 executes.
 
 **Three configs have now executed, and all three reach a verdict.** E3's is
-[above](#measured-on-2026-09-13-against-publishable-commit-549dcb3) and is correctly computed on a
+[above](#e3s-completed-run-is-of-a-design-its-own-subject-abandoned) and is correctly computed on a
 quantity its own stimulus set made uninterpretable. The other two are the older pair. E2 and E6 are the
 [`growth_label`](#two-templates-because-there-are-two-experiment-types) arms — no LLM, so they run
 without a deployment — and both were run with `publishable run` against a clean tree, so both records
@@ -4135,33 +4242,34 @@ sweep.
 | Run | Units | Conditions | Repeats | Executions | Metered requests |
 |---|---|---|---|---|---|
 | E2 `e02-utilization-baseline` | 1,000 | 2 | 5 folds | 12 | 0 |
-| E3 `e03-serialization` | 600 (300 held out) | 9 | 5 | 65 | 27,000 |
-| E3b `e03b-tokenization` | 150 | 2 | 5 | 16 | 1,500 |
-| E4a `e04a-matched-pairs` | 600 | 2 | 5 | 16 | 3,000 |
-| E4b `e04b-physiology-swap` | 250 | 2 | 5 | 16 | 2,500 |
-| E5a `e05a-schedule-density` | 200 | 3 | 5 | 23 | 3,000 |
-| E5b `e05b-graded-negative` | 200 | 2 | 5 | 16 | 2,000 |
-| E5c `e05c-fixed-n` | 300 | 1 | 5 | 9 | 1,500 |
-| E5d `e05d-framing` | 300 | 2 | 5 | 16 | 3,000 |
+| E3 `e03-serialization` | 600 (300 held out) | 9 | 5 | 66 | 27,000 |
+| E3b `e03b-tokenization` | 150 | 2 | 5 | 17 | 1,500 |
+| E4a `e04a-matched-pairs` | 600 | 2 | 5 | 17 | 3,000 |
+| E4b `e04b-physiology-swap` | 250 | 2 | 5 | 17 | 2,500 |
+| E5a `e05a-schedule-density` | 200 | 3 | 5 | 24 | 3,000 |
+| E5b `e05b-graded-negative` | 200 | 2 | 5 | 17 | 2,000 |
+| E5c `e05c-fixed-n` | 300 | 1 | 5 | 10 | 1,500 |
+| E5d `e05d-framing` | 300 | 2 | 5 | 17 | 3,000 |
+| E5e `e05e-missingness-swap` | 200 | 2 | 5 | 17 | 2,000 |
 | E6 `e06-comparator` | 600 | 4 | 5 folds | 22 | 0 |
-| E7 `e07-two-by-two` | 200 | 4 | 5 | 30 | 4,000 |
-| E8 `e08-ordering` | 300 | 7 | 5 | 51 | 10,500 |
-| E9 `e09-age-norm` | 440 | 2 | 5 | 16 | 2,200 |
-| E10 `e10-cross-model-2x2` | 200 | 20 | 5 | 142 | 20,000 |
-| **Total** | | **62** | | **450** | **80,200** |
+| E7 `e07-two-by-two` | 200 | 4 | 5 | 31 | 4,000 |
+| E8 `e08-ordering` | 300 | 7 | 5 | 52 | 10,500 |
+| E9 `e09-age-norm` | 440 | 2 | 5 | 17 | 2,200 |
+| E10 `e10-cross-model-2x2` | 200 | 20 | 5 | 143 | 20,000 |
+| **Total** | | **64** | | **479** | **82,200** |
 
-**Executions** are what `dry-run` printed — a build claim, so the run of it that produced these numbers is dated in [§ Executability on this build](#executability-on-this-build) — counting every step's executions including the `run`-scoped roster summary and the `summary`-scoped comparison. **Metered requests** are conditions × repeats × units at the one `scope = "repeat"` step that issues a request, with **E3 the exception that proves the rule**: its roster is 600 and its unit-executions are counted over the 300-unit test partition, but the step screens the selection half as well, so the meter sees all 600. A holdout is free in the record and not on the meter.
+**Executions** are what `dry-run` printed — a build claim, so the run of it that produced these numbers is dated in [§ Executability on this build](#executability-on-this-build) — counting every step's executions including the `run`-scoped roster summary and the `summary`-scoped comparison. **Two things moved this column on 2026-09-18 and neither is a design change.** Every arm that issues a request gained one execution for `step01b_canary`, the twenty-case pre-sweep probe the study added in answer to [the note on E3](#a-note-the-fifth-pass-adds-to-e3) — thirteen arms, thirteen executions, and **260 requests** the *Metered* column does not carry because the table is a floor in any case. And **E5e is a fifteenth row**: it existed as a config, a constructor and a test suite from `gcl-measurements@e94a5cf` and had no roster until 2026-09-18, which is why no earlier version of this table counted it. **Metered requests** are conditions × repeats × units at the one `scope = "repeat"` step that issues a request, with **E3 the exception that proves the rule**: its roster is 600 and its unit-executions are counted over the 300-unit test partition, but the step screens the selection half as well, so the meter sees all 600. A holdout is free in the record and not on the meter.
 
 **Every metered figure here is a floor rather than an exact count, and the reason is a clause of the plan rather than a slippage.** The [output contract](#prompt-templates-and-why-they-are-code) retries a malformed answer **once** with the identical prompt — a refusal is not retried, since a retry on an identical prompt tests nothing — so a run costs one extra request per case that came back unreadable and was read on the second ask. The overshoot is bounded and observable: it cannot exceed one request per case, and each run reports `n_retried` beside the unusable rate the same clause requires. **A budget set against the table below should carry that headroom**, and a run whose `unusable_fraction` crosses 5% has a bigger problem than its bill — at that point the cases that remain are a selected subset, which is what the threshold is for.
 
 **Where these figures agree with the plan's own, and where they cannot.** E3's 27,000, E4b's 2,500, E5a's 3,000, E5d's 3,000, E7's 4,000, E8's 10,500 and E9's 2,200 are the plan's own evaluation counts reproduced exactly, which is the arithmetic check that the translation preserved each design's structure rather than its description. E10's is not comparable: the plan replicates five arms across the roster where budget allows and prioritizes two where it does not, and this config is the prioritized E7 replication.
 
-**The full E10 is several times what the table shows.** Replicating E4b, E5b, E8 and E9 across the same five-deployment axis adds 12,500 + 10,000 + 52,500 + 11,000 = 86,000 requests, for **166,200** in total. The plan's own budget rule — prioritize E7 and E5b — is therefore a choice between roughly 80,000 and 166,000, which is the number that decision should be made against.
+**The full E10 is several times what the table shows.** Replicating E4b, E5b, E8 and E9 across the same five-deployment axis adds 12,500 + 10,000 + 52,500 + 11,000 = 86,000 requests, for **168,200** in total. The plan's own budget rule — prioritize E7 and E5b — is therefore a choice between roughly 82,000 and 168,000, which is the number that decision should be made against.
 
-**The restructure moved this total, and mostly in one direction.** Against the fifteen-config reading of the earlier plan the total was 62,000; it is 80,200 now. Three changes account for nearly all of it and each is a design decision rather than an overhead: **E3 doubled** because the plan added a 300/300 split and both halves have to be screened, **E10 grew by a quarter** because the roster went from four deployments to five, and **E9 shrank** because its magnitude sweep collapsed into one matched contrast. The reference-standard gate's removal costs nothing here — it never issued a request — and saves several thousand clinician-adjudicated curves elsewhere, which is the trade the plan actually made.
+**The restructure moved this total, and mostly in one direction.** Against the fifteen-config reading of the earlier plan the total was 62,000; it is 82,200 now, of which E5e's 2,000 arrived on 2026-09-18 with its roster. Three changes account for nearly all of it and each is a design decision rather than an overhead: **E3 doubled** because the plan added a 300/300 split and both halves have to be screened, **E10 grew by a quarter** because the roster went from four deployments to five, and **E9 shrank** because its magnitude sweep collapsed into one matched contrast. The reference-standard gate's removal costs nothing here — it never issued a request — and saves several thousand clinician-adjudicated curves elsewhere, which is the trade the plan actually made.
 
-**No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 20 × 5 = 100 repeat-scoped executions come to 142 once every scope is counted — and it is the 100 that the check compares against the budget, not the 142. No config drew [`W-EXEC-BUDGET`](reference.md#warnings-core-reports), which is the warning that comparison raises and the only one this paragraph claims: ten of the fourteen carry a warning of another kind, as [§ Executability on this build](#executability-on-this-build) records. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
+**No condition set comes near `limits.max_executions: 500`.** The largest is E10, whose 20 × 5 = 100 repeat-scoped executions come to 143 once every scope is counted — and it is the 100 that the check compares against the budget, not the 142. No config drew [`W-EXEC-BUDGET`](reference.md#warnings-core-reports), which is the warning that comparison raises and the only one this paragraph claims: nine of the fifteen carry a warning of another kind — six `W-STATS-FAMILY` and three `W-DATA-CLUSTER-UNDECLARED`, leaving six clean — as [§ Executability on this build](#executability-on-this-build) records. That is worth noting because it inverts the usual worry: what constrains this plan is the request count inside each execution, not the number of executions, and core's execution-count guard is not the limit that will bind.
 
-**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈206 s per request on an idle machine, against a budget large enough for the answers to finish, which puts E10's 8,000 local requests at roughly **20 days** of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement, the small samples it rests on, and the one factor that divides rather than multiplies. An earlier reading of ≈88 s and 8 days is superseded: it was taken from calls that were truncated before answering, and it is what re-taking a cost figure after a configuration fix is for. **A metered anchor now exists and it is one arm's, measured 2026-09-13**: E3 sent `gpt-5.6-sol` 13,500 requests — half its roster, screened before the selection half was wired in and its record carries per-condition medians of 212–415 prompt and 95–215 completion tokens. That converts E3's own row and nothing else, because both counts move with the serialization format — which is exactly what E3 manipulates — so carrying its medians across to the other arms would be reading one arm's manipulation as a constant. **The 80,200 remains a request count.** The sentence this replaces said no Azure deployment had been sent a prompt, which was true when written and stopped being true the moment E3 ran.
+**What none of this says is what it costs in money, and what it now says about time is partial.** The plan specifies its roster and its prompt, so what is missing is no longer a specification. **One anchor exists as of 2026-09-10** and it is a local one: four units screened on `gemma4:12b` at ≈206 s per request on an idle machine, against a budget large enough for the answers to finish, which puts E10's 8,000 local requests at roughly **20 days** of sequential compute — [§ The first real completions](#the-first-real-completions-and-what-they-cost) has the measurement, the small samples it rests on, and the one factor that divides rather than multiplies. An earlier reading of ≈88 s and 8 days is superseded: it was taken from calls that were truncated before answering, and it is what re-taking a cost figure after a configuration fix is for. **A metered anchor now exists and it is one arm's, measured 2026-09-13**: E3 sent `gpt-5.6-sol` 13,500 requests — half its roster, screened before the selection half was wired in and its record carries per-condition medians of 212–415 prompt and 95–215 completion tokens. That converts E3's own row and nothing else, because both counts move with the serialization format — which is exactly what E3 manipulates — so carrying its medians across to the other arms would be reading one arm's manipulation as a constant. **The 82,200 remains a request count.** The sentence this replaces said no Azure deployment had been sent a prompt, which was true when written and stopped being true the moment E3 ran.
 
 **The token counts are now real, and the first set was degenerate in a way worth recording.** In the run against a 512-token budget, six of seven calls stopped at the cap, so `completion_tokens` read 512 — the budget, not the answer's length. **A column pinned to its own limit is evidence about the configuration and not about the model**, which makes it exactly useful for debugging and useless for costing. Against a raised budget the same four units report 487, 557, 634 and 2,393, all stopping on their own, and the spread is the finding: one call in four needed nearly four times the median. What remains structural is the shape a hosted run would fill in — a request per patient per condition per repeat, each landing in the unit table with its own `prompt_tokens`, `completion_tokens` and `latency_ms`.
