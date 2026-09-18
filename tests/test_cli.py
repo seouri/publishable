@@ -6193,6 +6193,67 @@ def test_an_unpaired_derived_key_collision_end_to_end(tmp_path, capsys):
         assert pred["ci95"] is not None
 
 
+def test_a_hypothesis_on_a_suppressed_contrast_is_reported_unevaluable(tmp_path, capsys):
+    """The end-to-end pin for `value_absent`, on the run shape that produced it.
+
+    The scenario above publishes a contrast whose `delta` is `null` beside two
+    healthy side counts. Point a pre-registered hypothesis at that metric and,
+    until 2026-09-18, **nothing said the hypothesis had not been tested**: the
+    block existed, so `resolve` read it as a number found, the entry carried no
+    `unevaluable`, and `W-HYPOTHESIS-UNEVALUABLE` never fired. `observed` was a
+    dict of nulls, which reads as a result rather than as its absence. A real
+    arm spent 3,000 metered requests reaching that state.
+
+    The message is asserted as well as the field, and the negative assertion is
+    the load-bearing one: the branch this exercises used to fall through to the
+    `metric_absent` text, which tells the reader the run produced no metric of
+    that name while the metric is sitting in the record. Directing someone at a
+    name that is already correct is worse than silence.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="pred",
+        roster_csv=_unpaired_run_roster_csv(),
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={
+            "contrasts": [{"id": "across_arms", "of": "arm=treatment", "against": "arm=control"}]
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "exploratory",
+                "statement": "The treatment arm scores higher.",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"contrast": "across_arms"},
+                "direction": "greater",
+                "threshold": 0.0,
+                "evaluate_on": "ci95_lower",
+            }
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    across = next(c for c in run["results"]["contrasts"] if c["id"] == "across_arms")
+    assert across["step01_summarize_units"]["pred"]["delta"] is None
+
+    entry = next(h for h in run["results"]["hypotheses"] if h["id"] == "h1")
+    assert entry["supported"] is None
+    assert entry["unevaluable"] == "value_absent"
+
+    out = doc["stdout"] + doc["stderr"]
+    assert "W-HYPOTHESIS-UNEVALUABLE" in out
+    assert "carries no number" in out
+    # The lie the `else` branch would tell. Asserted on the same stream the
+    # warning is written to, and on a phrase only that branch produces.
+    assert "produced no metric" not in out
+
+
 def _declared_contrast_run(tmp_path, capsys, monkeypatch, **kwargs):
     """A run declaring one `statistics.contrasts` entry that is field-for-field
     indistinguishable from the auto-generated baseline comparison — same `of`,

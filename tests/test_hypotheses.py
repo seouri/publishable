@@ -1609,6 +1609,109 @@ def test_the_same_hypothesis_resolves_when_the_run_has_one_condition():
     assert "unevaluable" not in entry
 
 
+def test_a_contrast_block_that_carries_no_delta_says_value_absent():
+    """The third route, and it shipped silent because the block IS there.
+
+    A real arm swept a group axis (`sweep.groups`) and named a metric its
+    template derived. The two sides share no units and core will not recompute
+    an `aggregate` on each side's own resampled table, so the contrast records
+    `delta: null` beside two healthy side counts. `isinstance(found, dict)` is
+    True for that block, so the old resolver read it as *a number was found*:
+    the entry carried no `unevaluable`, `W-HYPOTHESIS-UNEVALUABLE` never fired,
+    and a pre-registered hypothesis reached no verdict in total silence. Three
+    thousand metered requests found it; no test did.
+    """
+    entry = _unevaluable(
+        {
+            "id": "h1",
+            "kind": "exploratory",
+            "metric": "step03_screen.flag_rate",
+            "compare": {"contrast": "referred_vs_unlabelled"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
+        contrasts=[
+            {
+                "id": "referred_vs_unlabelled",
+                "step03_screen": {
+                    # As `cli` writes a suppressed unpaired-derived contrast:
+                    # the block is present and complete, and every number in it
+                    # that a verdict could rest on is null.
+                    "flag_rate": {
+                        "delta": None,
+                        "ci95": None,
+                        "method": None,
+                        "paired": False,
+                        "n_of": 300,
+                        "n_against": 300,
+                    }
+                },
+            }
+        ],
+    )
+    # `observed` is the block's own shape with nulls in it, not `None` — the
+    # other two reasons produce `observed: null` because there is no block at
+    # all, and this one has one. That difference is why the field is needed:
+    # a reader sees a populated `observed` and has to be told there is no
+    # verdict under it.
+    assert entry["observed"] == {"delta": None, "ci95": None, "method": None}
+    assert entry["supported"] is None
+    assert entry["unevaluable"] == "value_absent"
+
+
+def test_a_metric_core_computed_as_null_says_value_absent_too():
+    """The second way to reach it, and it is not a contrast at all.
+
+    `sensitivity` on a condition whose units are all negative is `None` — core
+    computed the metric and there is no number in it. Included because one
+    fixture would leave `value_absent` looking like a property of contrasts.
+    """
+    entry = _unevaluable(
+        {
+            "id": "h1",
+            "kind": "confirmatory",
+            "metric": "step02_score.sensitivity",
+            "compare": {"to": "constant", "value": 0.5},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
+        aggregated={0: {"step02_score": {"sensitivity": {"value": None, "ci95": None}}}},
+    )
+    assert entry["observed"]["value"] is None
+    assert entry["supported"] is None
+    assert entry["unevaluable"] == "value_absent"
+
+
+def test_a_delta_of_exactly_zero_is_a_number_and_gets_a_verdict():
+    """The can-fail control for `_why`'s `is None`, and the mutation it guards.
+
+    Written as `if not any(block.get(k) for k in _POINT_KEYS)` the helper reads
+    a delta of 0.0 as no number at all, and a hypothesis testing one against a
+    threshold — the ordinary case — would be reported unevaluable while its
+    number sits in the record. This test is what separates the two spellings;
+    without it both pass.
+    """
+    entry = _unevaluable(
+        {
+            "id": "h1",
+            "kind": "exploratory",
+            "metric": "step03_screen.flag_rate",
+            "compare": {"contrast": "c1"},
+            "direction": "greater",
+            "threshold": -0.5,
+            "evaluate_on": "ci95_lower",
+        },
+        contrasts=[
+            {"id": "c1", "step03_screen": {"flag_rate": {"delta": 0.0, "ci95": [-0.1, 0.1]}}}
+        ],
+    )
+    assert "unevaluable" not in entry
+    assert entry["observed"]["delta"] == 0.0
+    assert entry["supported"] is True
+
+
 def test_a_hypothesis_with_a_verdict_carries_no_unevaluable_key_at_all():
     """**Absent, not null** — the rule `weighted_by` follows. A key present and
     empty reads as "considered, came back nothing", which is what it is not."""
