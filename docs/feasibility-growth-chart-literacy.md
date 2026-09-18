@@ -314,7 +314,7 @@ Three readings of that table are worth stating, because each is easy to get back
 
 ## The fourteen configs
 
-Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in one way that is entirely presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. **Re-quoted from the live files on 2026-09-17 at `gcl-measurements@2ff922a`, and verified: 14 of 14 byte-identical apart from those two path lines.** The claim had gone two passes unverified, and what had drifted was not only comments — see § What the re-quote found. (The house style's `×` is not applied to a config's own text, so E10's `description` reads `2x2` here as it does in the file.) What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
+Every config below is **byte-identical to a file `publishable validate` accepted** in its declarations, and differs in one way that is entirely presentation: `data.input_dir` and `data.output_dir` are shown as `/secure/...` paths rather than the scratch paths the measurement used. **Re-quoted from the live files on 2026-09-18 at `gcl-measurements@1a90c81`, and verified: 14 of 14 byte-identical apart from those two path lines.** The 2026-09-17 re-quote at `2ff922a` had said the same, and **it was already stale when it was written**: `availability_mode` had been added to all twelve screening configs in the very commit whose parameter this document later found unregistered, and not one quoted block carried it. That is the re-quote's own lesson arriving one level up — a verification is only as fresh as the pass that ran it, and this one is re-run rather than cited. What had drifted before that was not only comments — see § What the re-quote found. (The house style's `×` is not applied to a config's own text, so E10's `description` reads `2x2` here as it does in the file.) What was run, and against which commit, is in [Executability on this build](#executability-on-this-build).
 
 **There are fifteen, and fourteen are quoted.** `e05e-missingness-swap` gained the roster it had
 never had on 2026-09-18 and validates; it is not written out below, because quoting a config is a
@@ -522,6 +522,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -541,7 +542,19 @@ replication:
 
 statistics:
   correction: holm
-  resample: {method: bootstrap, n: 2000}
+  # **10,000, not 2,000, and the number is derived rather than chosen.** A
+  # corrected interval at level alpha/m is read off `min_honest_draws(1 -
+  # alpha/m)` draws from the same pool a raw one uses -- `ceil(4m/alpha)`, which
+  # is 80m at alpha 0.05. This arm's family is comparisons x metrics =
+  # 11 x 10 = 110, so it wants 8,800 draws and 2,000 was about a
+  # 4x shortfall. Measured on this arm's own completed run of 2026-09-12: at 2,000 it
+  # reported `W-STATS-CORRECTED-THIN` 47 times and 47 of its 72 corrected
+  # intervals came back null -- two thirds of what the correction is for.
+  #
+  # Sized at 11 x 11 rather than 11 x 10 -- ONE SPARE METRIC -- because a
+  # recorded column is one `io.record` key away, and the last one that appeared
+  # cost this study a re-run. Draws are CPU at aggregation, not metered calls.
+  resample: {method: bootstrap, n: 10000}
   contrasts:
     - {id: digits_vs_table, of: "format=digit_string__baseline",
        against: "format=markdown_table__baseline"}
@@ -790,6 +803,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -918,6 +932,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: referral
   scoring:
@@ -964,7 +979,7 @@ hypotheses:
   - id: h1
     kind: exploratory
     statement: "The screen flags referred children more often than their matched comparators, whose absence of a referral is unlabelled rather than negative."
-    metric: step03_screen.flag_rate
+    metric: step03_screen.flagged
     compare: {contrast: referred_vs_unlabelled}
     direction: greater
     threshold: 0.0
@@ -1043,6 +1058,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -1174,6 +1190,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     # Nothing. E5a asks whether the model's own answer MOVES when only the
     # schedule changes, which is a within-subject question with no correct
@@ -1195,6 +1212,11 @@ replication:
 
 statistics:
   correction: holm
+  # **2,000 stays, and it was checked rather than inherited.** A corrected
+  # interval at alpha/m needs 80m draws; this arm's family is 3 x 6 = 18,
+  # so it wants 1,440 and already has margin -- 1,680 even with one spare
+  # metric. Three holm arms here did NOT clear their bound and were raised on
+  # 2026-09-18; this is not one of them.
   resample: {method: bootstrap, n: 2000}
   contrasts:
     - {id: dense_vs_sparse, of: "schedule=dense", against: "schedule=sparse"}
@@ -1299,6 +1321,7 @@ parameters:
     crossing_z: 0.0
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -1317,6 +1340,11 @@ replication:
 
 statistics:
   correction: holm
+  # **2,000 stays, and it was checked rather than inherited.** A corrected
+  # interval at alpha/m needs 80m draws; this arm's family is 2 x 10 = 20,
+  # so it wants 1,600 and already has margin -- 1,760 even with one spare
+  # metric. Three holm arms here did NOT clear their bound and were raised on
+  # 2026-09-18; this is not one of them.
   resample: {method: bootstrap, n: 2000}
   contrasts:
     - {id: excess_fpr, of: "schedule=dense", against: "baseline"}
@@ -1425,6 +1453,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     # Nothing: the outcome is the POSITIVE RATE against the concealed total,
     # not accuracy. Asking whether the rate tracks a total the model cannot see
@@ -1542,6 +1571,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: none
   scoring:
@@ -1560,6 +1590,11 @@ replication:
 
 statistics:
   correction: holm
+  # **2,000 stays, and it was checked rather than inherited.** A corrected
+  # interval at alpha/m needs 80m draws; this arm's family is 2 x 6 = 12,
+  # so it wants 960 and already has margin -- 1,120 even with one spare
+  # metric. Three holm arms here did NOT clear their bound and were raised on
+  # 2026-09-18; this is not one of them.
   resample: {method: bootstrap, n: 2000}
   contrasts:
     - {id: framing, of: "state_visit_count=true", against: "baseline"}
@@ -1766,6 +1801,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     # The headline 2x2 reads no label at all: both main effects are response
     # differences on synthetic scaffolds, so the arm is unaffected if Layer C's
@@ -1932,6 +1968,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -1955,7 +1992,18 @@ replication:
 
 statistics:
   correction: holm
-  resample: {method: bootstrap, n: 2000}
+  # **8,000, not 2,000, and the number is derived rather than chosen.** A
+  # corrected interval at level alpha/m is read off `min_honest_draws(1 -
+  # alpha/m)` draws from the same pool a raw one uses -- `ceil(4m/alpha)`, which
+  # is 80m at alpha 0.05. This arm's family is comparisons x metrics =
+  # 9 x 10 = 90, so it wants 7,200 draws and 2,000 was about a
+  # 4x shortfall. Not measured on this arm -- it has never run -- but it is E3's shape at
+  # nine comparisons instead of eleven, and E3 measured the failure.
+  #
+  # Sized at 9 x 11 rather than 9 x 10 -- ONE SPARE METRIC -- because a
+  # recorded column is one `io.record` key away, and the last one that appeared
+  # cost this study a re-run. Draws are CPU at aggregation, not metered calls.
+  resample: {method: bootstrap, n: 8000}
   contrasts:
     - {id: reverse_vs_chronological, of: "order=reverse__permutation=0",
        against: "baseline"}
@@ -2066,6 +2114,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: by_construction
   scoring:
@@ -2116,7 +2165,7 @@ hypotheses:
   - id: h1
     kind: confirmatory
     statement: "At a matched two-channel crossing the screen flags mid-childhood trajectories more often than peripubertal ones, where the same geometry is ordinary tempo variation."
-    metric: step03_screen.flag_rate
+    metric: step03_screen.flagged
     compare: {contrast: band_difference}
     direction: greater
     threshold: 0.15
@@ -2204,6 +2253,7 @@ parameters:
     crossing_z: 0.67
     resample_noise: matched
     height_availability: 0.538
+    availability_mode: rate
   truth:
     label_source: none
   scoring:
@@ -2236,7 +2286,18 @@ replication:
 
 statistics:
   correction: holm
-  resample: {method: bootstrap, n: 2000}
+  # **12,000, not 2,000, and the number is derived rather than chosen.** A
+  # corrected interval at level alpha/m is read off `min_honest_draws(1 -
+  # alpha/m)` draws from the same pool a raw one uses -- `ceil(4m/alpha)`, which
+  # is 80m at alpha 0.05. This arm's family is comparisons x metrics =
+  # 20 x 6 = 120, so it wants 9,600 draws and 2,000 was about a
+  # 5x shortfall. The largest family here and the smallest metric count: twenty comparisons
+  # over an arm that carries no truth, so six metrics rather than ten.
+  #
+  # Sized at 20 x 7 rather than 20 x 6 -- ONE SPARE METRIC -- because a
+  # recorded column is one `io.record` key away, and the last one that appeared
+  # cost this study a re-run. Draws are CPU at aggregation, not metered calls.
+  resample: {method: bootstrap, n: 12000}
   contrasts:
     - {id: utilization_gpt41, of: "schedule=dense__provider=azure_openai__deployment=gpt-5__baseline",
        against: "schedule=sparse__provider=azure_openai__deployment=gpt-5__baseline"}
@@ -2552,6 +2613,45 @@ The reason the design moved is worth carrying because core is what made it visib
 run returned nine flag rates wearing the name `accuracy` — sensitivity, specificity and kappa all
 collapse on an all-positive set. Physiology is a property of the unit, and the roster already
 carries it.
+
+### `resample.n` was one number for fourteen families, and E3 measured the cost
+
+Every config declared `resample: {method: bootstrap, n: 2000}` regardless of how large its
+correction family was. [§ Sweeps and repeats](reference.md#sweeps-and-repeats) gives the rule: a
+corrected interval at level α/m is read off `min_honest_draws(1 − α/m)` draws from the same pool a
+raw one uses, which is `ceil(4m/α)` — **80m at α = 0.05**. E3's family is comparisons × metrics =
+11 × 10 = 110, so it wants 8,800.
+
+**The consequence is measured on E3's own completed run rather than argued.** Of its **72** corrected
+members, **47 came back `ci95_corrected: null`** and `W-STATS-CORRECTED-THIN` fired 47 times. Two
+thirds of what the correction exists for was discarded, silently enough that six passes of this
+document never looked.
+
+| arm | comparisons × metrics | wants | was | now |
+|---|---|---|---|---|
+| E3 | 11 × 10 = 110 | 8,800 | 2,000 | **10,000** |
+| E8 | 9 × 10 = 90 | 7,200 | 2,000 | **8,000** |
+| E10 | 20 × 6 = 120 | 9,600 | 2,000 | **12,000** |
+| E5a | 3 × 6 = 18 | 1,440 | 2,000 | 2,000 — clears |
+| E5b | 2 × 10 = 20 | 1,600 | 2,000 | 2,000 — clears |
+| E5d | 2 × 6 = 12 | 960 | 2,000 | 2,000 — clears |
+| E5e | 2 × 6 = 12 | 960 | 2,000 | 2,000 — clears |
+
+**Only three of the seven holm arms were short, and that is the finding rather than a detail.** A
+blanket raise would have read as diligence and taught nobody which quantity governs; the four that
+clear now carry a comment saying they were checked. Each raised arm is sized at one *spare* metric —
+comparisons × (metrics + 1) — because a recorded column is one `io.record` key away, and the one
+that appeared on 2026-09-18 cost this study a re-run.
+
+**Two of the ten metrics are the science and four are telemetry.** `attempts`, `prompt_tokens`,
+`completion_tokens` and `latency_ms` are per-unit measurements this analysis correctly says to
+record, and each becomes a corrected metric competing with the arm's own quantity. That is
+[the warning about a chatty template](#gaps-this-analysis-found-in-the-specification) arriving
+through recorded columns instead, and it is not fixable from a config:
+[a config cannot say which comparisons are its family](#gaps-this-analysis-found-in-the-specification).
+Raising the draws buys the correction honesty; it does not make the family smaller.
+
+**Draws are CPU at aggregation, not metered calls**, so none of this moves the cost table.
 
 ### Is E1 the only blocker? No, and the question is not settled anywhere
 
