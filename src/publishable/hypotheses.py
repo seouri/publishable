@@ -38,10 +38,10 @@ class Observation:
     metric: str
     block: dict[str, Any] | None
     rests_on: str
-    #: Why there is no block, or `None` when there is one. Two values, and they
-    #: are what is left after `validate` has refused everything the declarations
-    #: alone can show — an unknown step (`E-HYPOTHESIS-METRIC`), an unknown
-    #: contrast (`E-HYPOTHESIS-CONTRAST`) and an unknown condition label
+    #: Why this yields no number, or `None` when it yields one. Three values,
+    #: and they are what is left after `validate` has refused everything the
+    #: declarations alone can show — an unknown step (`E-HYPOTHESIS-METRIC`), an
+    #: unknown contrast (`E-HYPOTHESIS-CONTRAST`) and an unknown condition label
     #: (`E-HYPOTHESIS-CONDITION`) never reach a run:
     #:
     #: - `metric_absent` — the observation site resolved and the named metric is
@@ -51,7 +51,49 @@ class Observation:
     #: - `condition_unresolved` — `to: constant` with no `compare.condition` on a
     #:   run whose sweep resolved several, so there is no single condition whose
     #:   value the constant would be compared against.
+    #: - `value_absent` — the block **is** there and carries no number: its
+    #:   point key is `None`. Added 2026-09-18, and found by a run rather than
+    #:   by reading. A real arm swept a group axis and named a metric its
+    #:   template derived, so the contrast could not be computed
+    #:   (`W-STATS-CONTRAST-UNPAIRED-DERIVED`) and its `delta` was `null` — and
+    #:   because the block existed, `reason` stayed `None`, the entry carried no
+    #:   `unevaluable`, and `W-HYPOTHESIS-UNEVALUABLE` never fired. A
+    #:   pre-registered hypothesis reached no verdict in total silence, which is
+    #:   the precise failure the other two values exist to end, reached by a
+    #:   third route nobody had enumerated. The arm had spent 3,000 metered
+    #:   requests getting there.
+    #:
+    #: **Why this one does not say WHAT nulled the number.** Whatever did is
+    #: already a finding in the same record, and `cli` renders the warning FROM
+    #: this field rather than re-deriving it. A second authority on one question
+    #: is how two answers eventually disagree.
     reason: str | None = None
+
+
+#: The keys a point estimate can sit under: `delta` for a comparison, `value`
+#: for a metric or a reported `Estimate`. Read by `_why` and by
+#: `_observed_block`, which is why it is defined once and up here.
+_POINT_KEYS = ("delta", "value")
+
+
+def _why(block: object) -> str | None:
+    """Why this block yields no number, or `None` when it yields one.
+
+    **One place, five call sites.** Each of `resolve`'s returns used to spell
+    this as `None if isinstance(found, dict) else "metric_absent"`, which asks
+    *is there a block* and calls the answer *is there a number*. Those come
+    apart exactly when a block is present and its point is `null` — the case
+    that shipped silent. Asking the direct question once is what keeps the five
+    sites from drifting apart, and what makes the third value reachable from
+    all of them rather than from whichever one someone remembered.
+    """
+    if not isinstance(block, dict):
+        return "metric_absent"
+    # `is None`, never falsy: a delta of exactly 0.0 is a number, and a
+    # hypothesis testing one against a threshold is the ordinary case.
+    if all(block.get(key) is None for key in _POINT_KEYS):
+        return "value_absent"
+    return None
 
 
 def resolve(
@@ -113,7 +155,7 @@ def resolve(
             metric=metric,
             block=block if isinstance(block, dict) else None,
             rests_on="reported",
-            reason=None if isinstance(block, dict) else "metric_absent",
+            reason=_why(block),
         )
 
     # `to: constant` is checked before `contrast`: `validate` refuses the two
@@ -148,7 +190,7 @@ def resolve(
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
-            reason=None if isinstance(found, dict) else "metric_absent",
+            reason=_why(found),
             rests_on="computed",
         )
 
@@ -165,7 +207,7 @@ def resolve(
             step=step,
             metric=metric,
             block=found if isinstance(found, dict) else None,
-            reason=None if isinstance(found, dict) else "metric_absent",
+            reason=_why(found),
             rests_on="computed",
         )
 
@@ -185,12 +227,9 @@ def resolve(
         step=step,
         metric=metric,
         block=found if isinstance(found, dict) else None,
-        reason=None if isinstance(found, dict) else "metric_absent",
+        reason=_why(found),
         rests_on="computed",
     )
-
-
-_POINT_KEYS = ("delta", "value")
 
 
 def _observed_block(

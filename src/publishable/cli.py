@@ -5214,6 +5214,22 @@ def _execute_prepared(prepared: Prepared, *, draft: bool, resumed: Resumed | Non
                     "several, so there is no single condition whose value the constant "
                     "would be compared against — name one in `compare.condition`"
                 )
+            elif reason == "value_absent":
+                # **A branch of its own, because the `else` below would lie.**
+                # It says the run produced no metric of that name, and here the
+                # metric is right there — with `null` where its number goes.
+                # Telling someone to fix a name that is already correct is
+                # worse than saying nothing, which is what this case used to
+                # do.
+                detail = (
+                    f"the run produced metric {metric_key!r} from step {step_name!r} and it "
+                    "carries no number — its point estimate is `null`, so there is nothing "
+                    "to test against the threshold. What nulled it is among this run's own "
+                    "findings; the commonest is a contrast whose two sides share no units "
+                    "on a metric a template derived (`W-STATS-CONTRAST-UNPAIRED-DERIVED`), "
+                    "which is fixed by recording the quantity as a column or carrying the "
+                    "comparison as a `summary`-step `Estimate`"
+                )
             else:
                 produced = sorted(_recorded_metric_names(step_name, aggregated, results))
                 detail = (
