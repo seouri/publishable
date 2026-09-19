@@ -908,6 +908,27 @@ def execute_plan(
             rows=rows,
         )
         results.append(result)
+        # **A `run`-scoped step that raises takes every condition with it**, and
+        # `reference.md` § What `status` means has said so since before this
+        # build while the code did the opposite: the plan ran on. Measured on
+        # 2026-09-18, when a study's pre-sweep apparatus probe raised in 0.007
+        # seconds and every one of its executions ran anyway, unguarded.
+        #
+        # Scope is the whole distinction and it is why this needs no knob. A
+        # `run`-scoped step executes once, outside the conditions, for the whole
+        # run's sake, so its failure is an outage of the run's premise. A
+        # repeat-scoped raise is one execution of many — the dropped socket
+        # `af0d3d5` deliberately stopped counting — and must keep not stopping
+        # the plan. `summary` is excluded because it runs last: stopping after
+        # it saves nothing.
+        stop_here = status == "failed" and execution.scope == "run"
+        if stop_here and stop is not None:
+            stop.reason = "run_scope_failed"
+            stop.code = "E-RUN-SCOPE-FAILED"
+            stop.message = (
+                f"{execution.step_name!r} runs at `run` scope and raised, so every "
+                f"condition after it would execute on a premise that is missing: {error}"
+            )
         with ledger.open("a", encoding="utf-8") as fh:
             fh.write(
                 json.dumps(
@@ -966,6 +987,13 @@ def execute_plan(
                 )
                 + "\n"
             )
+
+        # Before `max_failed_fraction`, because the two answer different
+        # questions and this one is already settled: a missing premise is not
+        # attrition, and there is no fraction to compute when no condition has
+        # run. The `break` is the same one the guard below uses.
+        if stop_here:
+            break
 
         if max_failed_fraction is not None and units is not None:
             resolved = len(units)

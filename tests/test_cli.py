@@ -16897,9 +16897,6 @@ def test_fixture_p_reuse_from_legal_at_all_four_scopes_with_direction_control(
     condition_name = _write_step("condition_reuser", "condition", _reuse("out2.json"))
     repeat_name = _write_step("repeat_reuser", "repeat", _reuse("out3.json"))
     summary_name = _write_step("summary_reuser", "summary", _reuse("out4.json"))
-    control_body = f'        io.read_upstream({condition_name!r}, "out2.json")\n        return {{}}'
-    control_name = _write_step("direction_control", "run", control_body)
-
     doc = yaml.safe_load(cfg.read_text())
     doc["metadata"]["description"] = "Fixture P: all four scopes, plus the direction control"
     doc["metadata"]["authors"] = ["Kyungjoon Lee"]
@@ -16912,7 +16909,13 @@ def test_fixture_p_reuse_from_legal_at_all_four_scopes_with_direction_control(
     ):
         subprocess.run(["git", *args], cwd=root, check=True)
 
-    assert main(["run", str(cfg)]) == EXIT_PARTIAL
+    # **Two runs, because a `run`-scoped raise now stops the plan.** The control
+    # below is run-scoped by necessity — reading a `condition`-scoped step from
+    # `run` scope IS the direction violation — so with it in the tree the four
+    # reusers never execute and the subject of this test could not be observed.
+    # `reference.md` § What `status` means has always said a run-scoped raise
+    # takes every condition with it; the code began agreeing on 2026-09-19.
+    assert main(["run", str(cfg)]) == EXIT_OK
 
     run_dir = next(results_dir.glob("run_*"))
     lines = [json.loads(line) for line in (run_dir / "executions.jsonl").read_text().splitlines()]
@@ -16921,12 +16924,6 @@ def test_fixture_p_reuse_from_legal_at_all_four_scopes_with_direction_control(
     for name in (run_name, condition_name, repeat_name, summary_name):
         assert by_step[name]["status"] == "completed", by_step[name]
 
-    # the control: same-run direction checking still fires for
-    # `read_upstream`, reported from the execution's own ledger line rather
-    # than inferred from an absence
-    assert by_step[control_name]["status"] == "failed"
-    assert "E-STEP-READ-DIRECTION" in by_step[control_name]["error"]
-
     record = yaml.safe_load((run_dir / "run.yaml").read_text())
     upstream_record = yaml.safe_load((upstream_run_dir / "run.yaml").read_text())
     entries = record["provenance"]["upstream"]
@@ -16934,6 +16931,27 @@ def test_fixture_p_reuse_from_legal_at_all_four_scopes_with_direction_control(
     entry = entries[0]
     assert entry["run_id"] == upstream_record["run_id"]
     assert entry["used"] == sorted(f"{upstream_step}/out{n}.json" for n in (1, 2, 3, 4))
+
+    # The control, in its own run — "a control asserting only absences passes
+    # identically if nothing ran", so it asserts a refusal that must be
+    # reported, from the execution's own ledger line rather than from a gap.
+    control_body = f'        io.read_upstream({condition_name!r}, "out2.json")\n        return {{}}'
+    control_name = _write_step("direction_control", "run", control_body)
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "direction control"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+    assert main(["run", str(cfg)]) == EXIT_FAILED
+    control_dir = max(results_dir.glob("run_*"), key=lambda p: p.stat().st_mtime)
+    assert control_dir != run_dir
+    control_lines = [
+        json.loads(line) for line in (control_dir / "executions.jsonl").read_text().splitlines()
+    ]
+    control = {line["step"]: line for line in control_lines}[control_name]
+    assert control["status"] == "failed"
+    assert "E-STEP-READ-DIRECTION" in control["error"]
 
 
 def test_resolver_io_has_no_reuse_from_and_step_io_does(tmp_path: Path):

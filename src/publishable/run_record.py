@@ -22,6 +22,13 @@ SCHEMA_VERSION = "1.0"
 _STOP_REASON_TO_STATUS: dict[str, str] = {
     "apparatus_unreachable": "partial",
     "apparatus_changed": "failed",
+    # § What `status` means: "A `scope: "run"` step that raises takes every
+    # condition with it — there is no shared cohort for them to condition on."
+    # `failed` rather than `partial` because run-scoped executions come first,
+    # so when one raises no condition has produced anything and "there is
+    # nothing to report" is literally true. Documented since before this build
+    # and implemented 2026-09-19.
+    "run_scope_failed": "failed",
 }
 
 
