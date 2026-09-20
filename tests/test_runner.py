@@ -771,15 +771,22 @@ def test_execute_plan_withholds_units_at_condition_and_run_scope_under_a_fold(
             _ = io.units
             return {}
 
-    _, results, _ = harness(
-        tmp_path,
-        [TouchesUnitsAtRun, TouchesUnitsAtCondition],
-        units=roster,
-        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
-        fold_members=members,
-    )
-    statuses = {r.execution.step_name: r.status for r in results}
-    errors = {r.execution.step_name: r.error or "" for r in results}
+    # **One plan per scope, because a `run`-scoped raise now stops the plan.**
+    # Run them together and the condition-scoped step never executes, so the
+    # half of this property about `condition` scope would be asserted against an
+    # absence. `reference.md` § What `status` means specifies that stop; the code
+    # began honouring it on 2026-09-19.
+    statuses, errors = {}, {}
+    for i, step in enumerate([TouchesUnitsAtRun, TouchesUnitsAtCondition]):
+        _, results, _ = harness(
+            tmp_path / f"scope{i}",
+            [step],
+            units=roster,
+            repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+            fold_members=members,
+        )
+        statuses.update({r.execution.step_name: r.status for r in results})
+        errors.update({r.execution.step_name: r.error or "" for r in results})
     assert statuses["touches_units_at_run"] == "failed"
     assert statuses["touches_units_at_condition"] == "failed"
     assert "E-STEP-UNITS-UNAVAILABLE" in errors["touches_units_at_run"]
@@ -2344,3 +2351,88 @@ def test_h3c3_units_failed_anywhere_narrows_by_arm_then_by_fold():
     arm_members = {0: arms["treatment"]}
     assert _units_failed_anywhere(results, roster, per_cell, arm_members) == set()
     assert _units_failed_anywhere(results, roster, whole, arm_members) == {"t0", "t1"}
+
+
+# --- a `run`-scoped raise stops the plan (reference.md § What `status` means) --
+
+
+class RaisesAtRun(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        raise RuntimeError("the premise is missing")
+
+
+class RaisesAtRepeat(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise RuntimeError("one execution of many")
+
+
+class Later(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {"ran": 1}
+
+
+def test_a_run_scoped_raise_stops_the_plan(tmp_path: Path):
+    """`reference.md` § What `status` means: "A `scope: "run"` step that raises
+    takes every condition with it — there is no shared cohort for them to
+    condition on, so continuing would mean executing a plan whose first premise
+    is missing."
+
+    **Specified before this build and implemented on 2026-09-19.** Until then a
+    run-scoped raise marked its own execution `failed` and the plan ran on —
+    measured in a real study on 2026-09-18, where a pre-sweep apparatus probe
+    raised in 0.007 seconds and every execution after it ran unguarded.
+    """
+    stop = StopSignal()
+    _, results, _ = harness(
+        tmp_path,
+        [RaisesAtRun, Later],
+        repeats=[Repeat("seed", "seed01", 0), Repeat("seed", "seed02", 1)],
+        stop=stop,
+    )
+    by_step = {r.execution.step_name: r.status for r in results}
+    assert by_step["raises_at_run"] == "failed"
+    # The plan stopped: the repeat-scoped step never executed at all.
+    assert "later" not in by_step, by_step
+    assert stop.reason == "run_scope_failed"
+    assert run_status(results, stop=stop.reason) == "failed"
+
+
+def test_a_repeat_scoped_raise_does_not_stop_the_plan(tmp_path: Path):
+    """**The control, and the one that keeps this narrow.** `af0d3d5` made a
+    raised execution contribute no unit failures precisely so that one dropped
+    socket could not kill a 27,000-request plan, and that stays true: without
+    this, "a raise stops the plan" is satisfiable by an implementation that
+    stops on any failure at all, which re-breaks the 19-hour case the whole line
+    of work started from.
+    """
+    stop = StopSignal()
+    _, results, _ = harness(
+        tmp_path,
+        [RaisesAtRepeat, Later],
+        repeats=[Repeat("seed", "seed01", 0), Repeat("seed", "seed02", 1)],
+        stop=stop,
+    )
+    statuses = [(r.execution.step_name, r.status) for r in results]
+    assert ("raises_at_repeat", "failed") in statuses
+    # Every later execution still ran — both repeats of it.
+    assert sum(1 for n, s in statuses if n == "later" and s == "completed") == 2
+    assert stop.reason is None
+
+
+def test_a_run_scoped_step_that_completes_does_not_stop_the_plan(tmp_path: Path):
+    """Guards the trivially-wrong implementation that keys on scope alone."""
+    stop = StopSignal()
+    _, results, _ = harness(
+        tmp_path,
+        [Later],
+        repeats=[Repeat("seed", "seed01", 0)],
+        stop=stop,
+    )
+    assert all(r.status == "completed" for r in results)
+    assert stop.reason is None

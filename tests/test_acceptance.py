@@ -770,9 +770,15 @@ def test_a_run_scoped_step_reading_a_baseline_only_path_is_refused(tmp_path: Pat
     cfg.write_text(yaml.safe_dump(doc))
     commit(root, "add a run-scoped step reading a baseline-only path")
 
-    assert main(["run", str(cfg)]) == EXIT_PARTIAL
+    # **`failed`, not `partial`, and this test pinned the wrong one.**
+    # `reference.md` § What `status` means has always said a `scope: "run"` step
+    # that raises "takes every condition with it — there is no shared cohort for
+    # them to condition on". The code continued the plan instead, and this
+    # assertion held that in place until 2026-09-19. The refusal this test is
+    # actually about is unchanged and still asserted below.
+    assert main(["run", str(cfg)]) == EXIT_FAILED
     run_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
-    assert run_doc["status"] == "partial"
+    assert run_doc["status"] == "failed"
     error = run_doc["execution"]["shared"]["step02_read_baseline_only"]["error"]
     assert "E-STEP-SWEPT-PARAM" in error
 
