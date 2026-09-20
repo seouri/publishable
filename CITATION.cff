@@ -14,8 +14,8 @@ authors:
 repository-code: "https://github.com/seouri/publishable"
 url: "https://github.com/seouri/publishable"
 license: MIT
-version: 0.2.6
-date-released: "2026-09-18"
+version: 0.2.7
+date-released: "2026-09-20"
 keywords:
   - reproducibility
   - research-software

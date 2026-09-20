@@ -20935,7 +20935,7 @@ def test_h9a_arm_a_a_completed_runs_whole_run_yaml_leaf_by_leaf(tmp_path: Path):
         ("provenance.git.repo_root", "<normalized>"),
         ("provenance.input_manifest", "manifest/input.json"),
         ("provenance.input_manifest_hash", "<normalized>"),
-        ("provenance.publishable_version", "0.2.6"),
+        ("provenance.publishable_version", "0.2.7"),
         ("provenance.units.key", "patient_id"),
         ("provenance.units.n", 20),
         (
@@ -23633,7 +23633,7 @@ _H9B_ARM_A_GOLDEN = [
     ("provenance.git.repo_root", "<normalized>"),
     ("provenance.input_manifest", "manifest/input.json"),
     ("provenance.input_manifest_hash", "<normalized>"),
-    ("provenance.publishable_version", "0.2.6"),
+    ("provenance.publishable_version", "0.2.7"),
     ("provenance.units.key", "patient_id"),
     ("provenance.units.n", 20),
     (
@@ -29301,7 +29301,7 @@ _TASK1_ORACLE_GOLDEN = [
     ("provenance.git.repo_root", "<normalized>"),
     ("provenance.input_manifest", "manifest/input.json"),
     ("provenance.input_manifest_hash", "<normalized>"),
-    ("provenance.publishable_version", "0.2.6"),
+    ("provenance.publishable_version", "0.2.7"),
     ("provenance.units.key", "patient_id"),
     ("provenance.units.n", 40),
     (
