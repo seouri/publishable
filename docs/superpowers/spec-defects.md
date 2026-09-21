@@ -62,6 +62,51 @@ because every charter re-scoped in this project was stale in the same direction.
 ---
 
 
+## OPEN — a completed run is re-analysable only through what a `summary` step happened to republish, and nothing says so
+
+**Filed 2026-09-20**, from `feasibility-growth-chart-literacy.md`'s subject project, which hit it
+in the field rather than by reading.
+
+**The shape.** An analysis defect was found in a study's `summary`-scope step after a 27,000-request
+run completed: it had been reading one repeat of five. The code was fixed. The recorded figure could
+not be, and the reason is worth stating precisely rather than as "records are immutable":
+
+- Editing `run.yaml` is correctly impossible — it would destroy the evidence the record exists to hold.
+- The sanctioned remedy is therefore a **second run declaring the first as its upstream**.
+  `provenance.upstream` exists for exactly this, and a re-analysis costs no metered work.
+- `io.reuse_from` addresses an artifact **by name** and refuses a condition- or repeat-scoped step
+  (`E-UPSTREAM-STEP-SCOPED`). That refusal is right and § `reuse_from` addresses an artifact, not the
+  design that produced it argues it well: a condition selector would couple a downstream config to an
+  upstream's layout, which renumbers whenever a level is added.
+- So the material a re-analysis needs is reachable **only if the upstream's `summary` step republished
+  it under a name**. That study's summary step returned metrics and called `io.write` nowhere, so its
+  `summary/<step>/` directory is empty and no name exists to read.
+
+**Why this is a specification gap and not that project's mistake.** `reference.md` does say
+*"republish it from a `summary` step instead"* — once, inside an error-table cell for
+`E-UPSTREAM-STEP-SCOPED`, and again in § Lineage between runs framed as how a **produce-then-consume
+design** is built. Both read as *how to build a two-run design on purpose*. Neither says the thing that
+bites: **whether a run can ever be re-analysed is decided before it runs, by whether its summary step
+republished, and the failure is silent until the day a number needs correcting.** A reader following
+the documents faithfully writes a summary step that returns metrics — which is what the return contract
+is for — and discovers years later that the run is a dead end.
+
+**Core cannot check it, and that is load-bearing for the fix.** *Greenfield only* means core never
+inspects the body of user Python, so nothing can warn that a summary step writes nothing; and a summary
+step that legitimately has nothing to republish is ordinary. The remedy is therefore documentation, not
+a diagnostic:
+
+- § Lineage between runs gains the durability reading beside the design reading — that republishing is
+  what makes a run's own conclusions recomputable later, and that the decision is taken before the run.
+- § Steps and artifacts, where the flat-mapping return contract is specified, gains a pointer: a return
+  is what a record reports, and an `io.write` is what a later run can read.
+
+**What it is not.** Not a request for a condition selector on `reuse_from` — that is refused with a
+good argument and this entry does not reopen it. Not a request for a mutable record. Not `reproduce`,
+which re-executes and so re-pays for every metered call.
+
+**Owner: unassigned** — so, per this file's preamble, this is what the project ships with.
+
 ## The specification's error registry does not cover step-name collisions
 
 `reference.md` § Errors core raises enumerates identifiers like `E-STEP-SCOPE-UNKNOWN` and
