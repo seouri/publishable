@@ -101,11 +101,45 @@ a diagnostic:
 - § Steps and artifacts, where the flat-mapping return contract is specified, gains a pointer: a return
   is what a record reports, and an `io.write` is what a later run can read.
 
-**What it is not.** Not a request for a condition selector on `reuse_from` — that is refused with a
-good argument and this entry does not reopen it. Not a request for a mutable record. Not `reproduce`,
-which re-executes and so re-pays for every metered call.
+**A second instance, 2026-09-22, in which this entry's own remedy is unreachable.** The same study's
+E4b arm — 2 conditions × 5 repeats, 2,520 metered requests — raised `E-STEP-SWEPT-PARAM` from its
+`summary` step, at the top of the step, after every condition had run. So the remedy above (*republish
+it from a `summary` step*) is unavailable **by construction**: the step that would have republished is
+the one that raised, and `summary/step04_compare/` is empty.
 
-**Owner: unassigned** — so, per this file's preamble, this is what the project ships with.
+This sharpens the entry in two ways rather than restating it:
+
+- **The window is narrower than "decided before the run".** It is decided by whether the summary step
+  *reaches* its `io.write`. A step that republishes on its last line and raises on its first is, for
+  this purpose, a step that republished nothing.
+- **The loss is now measurable and the material is on disk.** E4b's `selection_half.json` and
+  `units.parquet` survive for both conditions and all five repeats; the record carries 16 `completed`
+  executions and one `failed`, the failure being the summary step itself, so
+  `E-UPSTREAM-STEP-INCOMPLETE` would not refuse those reads. The only barrier is
+  `E-UPSTREAM-STEP-SCOPED`. A second run that could name a condition would recompute that summary for
+  **zero metered requests**.
+
+**This does now reopen the condition-selector question, narrowly, and the paragraph below is corrected
+rather than left standing.** Measured against `3650820`: core already parses a condition **label's
+body** back into axes in three places — a hypothesis's `compare.condition`, a contrast's `of`/`against`,
+and a `report` filter — and `E-SWEEP-VALUE-UNNAMEABLE` refuses a swept value containing `__` precisely
+to keep those bodies parseable. An **index** selector walks into the renumbering hazard
+`lineage.py:210` names, and reachably so, since `io.reuse_from`'s absolute locator form admits
+`latest`, under which `code_hash` is identical across two downstream runs while the upstream relocates.
+A **label-body** selector fails the other way: when an axis is added the old body names nothing and the
+read refuses, loudly. That distinction is the charter, and it is scoped at
+[2026-09-22-upstream-condition-reads-SCOPING.md](2026-09-22-upstream-condition-reads-SCOPING.md),
+including the case it does not reach — an unswept upstream, whose conditions carry no label at all.
+
+**What it is not.** Not a request for an *index* selector on `reuse_from` — that remains refused with a
+good argument, and § `reuse_from` addresses an artifact's reasoning against it survives the paragraph
+above intact. Not a request for a mutable record, nor for a `resume` that accepts a terminal run: both
+would let one record carry two `code_hash` values, and `resume` pins the hash (`E-RESUME-CODE-MOVED`)
+for that reason. Not `reproduce`, which re-executes and so re-pays for every metered call. Not a core
+check that a summary step reads a swept parameter — *Greenfield only* forecloses it.
+
+**Owner: unassigned** — so, per this file's preamble, this is what the project ships with. The scoping
+is a measured charter waiting for whoever picks it up, not work anyone currently holds.
 
 ## The specification's error registry does not cover step-name collisions
 
